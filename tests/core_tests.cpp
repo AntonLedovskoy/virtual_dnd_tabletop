@@ -1,0 +1,961 @@
+#include <cstdio>
+#include <exception>
+#include <filesystem>
+#include <fstream>
+#include <variant>
+#include <vector>
+
+#include "core/client_view.h"
+#include "core/game_server.h"
+#include "core/game_state.h"
+#include "core/grid_map.h"
+#include "core/local_transport.h"
+#include "core/scene_io.h"
+#include "core/serialization.h"
+#include "core/utf8.h"
+#include "core/visibility.h"
+
+namespace {
+
+auto g_failures = 0;
+
+auto Expect(bool condition, const char* name) -> void {
+  if (!condition) {
+    std::fprintf(stderr, "FAILED: %s\n", name);
+    ++g_failures;
+  }
+}
+
+auto CellAt(int x, int y) -> dnd::Cell { return dnd::Cell{.x = x, .y = y}; }
+
+auto FogVisibleAt(const dnd::FogSnapshot& fog, int x, int y) -> bool {
+  return fog.visible[static_cast<std::size_t>(y) *
+                         static_cast<std::size_t>(fog.width) +
+                     static_cast<std::size_t>(x)] != 0;
+}
+
+auto TestGridMap() -> void {
+  dnd::GridMap map(4, 3);
+  Expect(map.Contains(CellAt(0, 0)), "map contains origin");
+  Expect(map.Contains(CellAt(3, 2)), "map contains last cell");
+  Expect(!map.Contains(CellAt(4, 0)), "map rejects x overflow");
+  Expect(!map.Contains(CellAt(-1, 0)), "map rejects negative x");
+  Expect(!map.IsBlocked(CellAt(1, 1)), "cell starts free");
+  map.SetBlocked(CellAt(1, 1), true);
+  Expect(map.IsBlocked(CellAt(1, 1)), "cell becomes blocked");
+  Expect(!map.IsBlocked(CellAt(9, 9)), "outside cell is not blocked");
+}
+
+auto TestMoveRules() -> void {
+  dnd::GridMap map(5, 5);
+  map.SetBlocked(CellAt(2, 2), true);
+  dnd::GameState state(map);
+  const dnd::TokenId id = state.AddToken("hero", CellAt(0, 0));
+
+  Expect(state.Tokens().front().cell == CellAt(0, 0), "token starts placed");
+  Expect(!state.ApplyCommand(dnd::MoveToken{.id = id, .target = CellAt(2, 2)})
+              .has_value(),
+         "move into wall is rejected");
+  Expect(!state.ApplyCommand(dnd::MoveToken{.id = id, .target = CellAt(7, 7)})
+              .has_value(),
+         "move outside map is rejected");
+  Expect(!state.ApplyCommand(dnd::MoveToken{.id = 999, .target = CellAt(1, 1)})
+              .has_value(),
+         "move of unknown token is rejected");
+
+  const auto moved =
+      state.ApplyCommand(dnd::MoveToken{.id = id, .target = CellAt(1, 1)});
+  Expect(moved.has_value(), "valid move produces an event");
+  if (moved.has_value()) {
+    state.ApplyEvent(*moved);
+  }
+  Expect(state.Tokens().front().cell == CellAt(1, 1), "event moves the token");
+}
+
+auto TestFogLineOfSight() -> void {
+  dnd::GridMap map(5, 1);
+  map.SetBlocked(CellAt(3, 0), true);
+
+  dnd::FogOfWar fog(5, 1);
+  fog.Recompute(map, {CellAt(0, 0)}, 4);
+
+  Expect(fog.IsVisible(CellAt(0, 0)), "observer cell is visible");
+  Expect(fog.IsVisible(CellAt(2, 0)), "open cell before wall is visible");
+  Expect(fog.IsVisible(CellAt(3, 0)), "wall tile itself is visible");
+  Expect(!fog.IsVisible(CellAt(4, 0)), "cell behind wall is hidden");
+  Expect(fog.IsExplored(CellAt(2, 0)), "visible cell becomes explored");
+  Expect(!fog.IsExplored(CellAt(4, 0)), "hidden cell is not explored");
+}
+
+auto TestFogDiagonalSeal() -> void {
+  dnd::GridMap sealed(4, 4);
+  sealed.SetBlocked(CellAt(1, 0), true);
+  sealed.SetBlocked(CellAt(0, 1), true);
+  dnd::FogOfWar fog(4, 4);
+  fog.Recompute(sealed, {CellAt(0, 0)}, 4);
+  Expect(fog.IsVisible(CellAt(0, 0)), "observer cell is visible");
+  Expect(!fog.IsVisible(CellAt(1, 1)),
+         "walls touching by a corner seal diagonal sight");
+  Expect(!fog.IsVisible(CellAt(2, 2)),
+         "nothing behind a sealed diagonal corner is visible");
+
+  dnd::GridMap open(4, 4);
+  open.SetBlocked(CellAt(1, 0), true);
+  dnd::FogOfWar open_fog(4, 4);
+  open_fog.Recompute(open, {CellAt(0, 0)}, 4);
+  Expect(open_fog.IsVisible(CellAt(1, 1)),
+         "a single corner wall still lets sight around it");
+}
+
+auto TestFogExploredMemory() -> void {
+  const dnd::GridMap map(6, 1);
+  dnd::FogOfWar fog(6, 1);
+
+  fog.Recompute(map, {CellAt(0, 0)}, 2);
+  Expect(fog.IsVisible(CellAt(1, 0)), "cell visible from first position");
+
+  fog.Recompute(map, {CellAt(5, 0)}, 1);
+  Expect(!fog.IsVisible(CellAt(1, 0)), "old cell is no longer visible");
+  Expect(fog.IsExplored(CellAt(1, 0)), "old cell stays explored");
+  Expect(fog.IsVisible(CellAt(5, 0)), "new observer cell is visible");
+
+  fog.Recompute(map, {CellAt(99, 99)}, 5);
+  Expect(!fog.IsVisible(CellAt(5, 0)), "out-of-map observers reveal nothing");
+}
+
+auto TestServerVisibility() -> void {
+  dnd::GridMap map(10, 1);
+  map.SetBlocked(CellAt(5, 0), true);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)},
+                 dnd::Token{.id = 2,
+                            .name = "goblin",
+                            .kind = dnd::TokenKind::kMonster,
+                            .cell = CellAt(8, 0)}},
+      .next_token_id = 3,
+  };
+
+  dnd::GameServer server(snapshot, 10);
+
+  const dnd::GameSnapshot client = server.ClientSnapshot();
+  Expect(client.tokens.size() == 1, "hidden token is not in client snapshot");
+  Expect(client.tokens.front().id == 1, "visible token is in client snapshot");
+  Expect(server.DmSnapshot().tokens.size() == 2, "DM snapshot sees everything");
+
+  dnd::ClientView view;
+  view.Reset(server.ClientSnapshot(), server.FogState());
+  Expect(view.Fog().IsVisible(CellAt(0, 0)), "view receives server fog");
+  Expect(!view.Fog().IsVisible(CellAt(8, 0)), "goblin cell is hidden");
+
+  const dnd::CommandOutcome hidden = server.HandleCommand(
+      dnd::MoveToken{.id = 2, .target = CellAt(9, 0)}, "alice", false);
+  Expect(hidden.accepted, "free token move is accepted");
+  bool hidden_move_visible = false;
+  for (const dnd::Event& event : hidden.events) {
+    if (std::holds_alternative<dnd::TokenMoved>(event)) {
+      hidden_move_visible = server.EventVisibleToPlayers(event);
+    }
+    view.Apply(event);
+  }
+  Expect(!hidden_move_visible, "hidden move is not visible to players");
+  Expect(view.Tokens().size() == 1, "client view still hides the goblin");
+
+  const dnd::CommandOutcome own = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(1, 0)}, "alice", false);
+  Expect(own.accepted, "visible move is accepted");
+  bool own_move_visible = false;
+  for (const dnd::Event& event : own.events) {
+    if (std::holds_alternative<dnd::TokenMoved>(event)) {
+      own_move_visible = server.EventVisibleToPlayers(event);
+    }
+    view.Apply(event);
+  }
+  Expect(own_move_visible, "visible move is visible to players");
+  Expect(view.Tokens().front().cell == CellAt(1, 0), "client view moves token");
+
+  // A token that was hidden when the client joined must show up once it
+  // enters the party's line of sight.
+  const dnd::CommandOutcome reveal = server.HandleCommand(
+      dnd::MoveToken{.id = 2, .target = CellAt(4, 0)}, "alice", false);
+  Expect(reveal.accepted, "goblin move into sight is accepted");
+  bool view_refreshed = false;
+  for (const dnd::Event& event : reveal.events) {
+    if (std::holds_alternative<dnd::ViewUpdated>(event)) {
+      view_refreshed = true;
+    }
+    view.Apply(event);
+  }
+  Expect(view_refreshed, "moves carry a full view refresh");
+  Expect(view.Tokens().size() == 2,
+         "revealed token appears in the client view");
+}
+
+auto TestOwnership() -> void {
+  const dnd::GridMap map(20, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(15, 0)},
+              dnd::Token{.id = 3,
+                         .name = "ally",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(4, 0)},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameServer server(snapshot, 3);
+
+  Expect(server.ClientSnapshot().tokens.size() == 2,
+         "far goblin is hidden from players");
+  Expect(server.DmSnapshot().tokens.size() == 3, "DM sees the goblin");
+
+  const dnd::CommandOutcome owner_move = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(1, 0)}, "alice", false);
+  Expect(owner_move.accepted, "owner may move their token");
+
+  const dnd::CommandOutcome foreign_move = server.HandleCommand(
+      dnd::MoveToken{.id = 2, .target = CellAt(16, 0)}, "alice", false);
+  Expect(!foreign_move.accepted, "player cannot move a DM token");
+  Expect(!foreign_move.reject_reason.empty(), "rejection carries a reason");
+
+  const dnd::CommandOutcome dm_move = server.HandleCommand(
+      dnd::MoveToken{.id = 2, .target = CellAt(16, 0)}, "", true);
+  Expect(dm_move.accepted, "DM may move any token");
+
+  const dnd::CommandOutcome locked_move = server.HandleCommand(
+      dnd::MoveToken{.id = 3, .target = CellAt(5, 0)}, "bob", false);
+  Expect(!locked_move.accepted, "unclaimed characters cannot be moved");
+
+  Expect(server.HandleCommand(dnd::ClaimToken{.id = 3}, "bob", false).accepted,
+         "a free character can be claimed before moving");
+  const dnd::CommandOutcome free_move = server.HandleCommand(
+      dnd::MoveToken{.id = 3, .target = CellAt(5, 0)}, "bob", false);
+  Expect(free_move.accepted, "the claimed character can be moved by its owner");
+
+  const dnd::CommandOutcome other_move = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(2, 0)}, "bob", false);
+  Expect(!other_move.accepted, "players cannot move somebody else's token");
+}
+
+auto TestClaimAndTokenAdmin() -> void {
+  const dnd::GridMap map(12, 12);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(2, 2)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 8, 5);
+
+  const dnd::CommandOutcome monster_claim =
+      server.HandleCommand(dnd::ClaimToken{.id = 2}, "alice", false);
+  Expect(!monster_claim.accepted, "monsters cannot be claimed");
+
+  const dnd::CommandOutcome locked_move = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(2, 1)}, "alice", false);
+  Expect(!locked_move.accepted, "unclaimed character is locked");
+  Expect(locked_move.reject_reason.find("заберите") != std::string::npos,
+         "locked character rejection explains the claim");
+
+  const dnd::CommandOutcome claim =
+      server.HandleCommand(dnd::ClaimToken{.id = 1}, "alice", false);
+  Expect(claim.accepted, "a player claims a free character");
+  Expect(!claim.events.empty() &&
+             std::holds_alternative<dnd::TokenUpdated>(claim.events.front()),
+         "claim broadcasts a token update");
+  Expect(server.State().TokenCopy(1)->owner == "alice",
+         "claim stores the player name");
+
+  Expect(!server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 1)},
+                             "bob", false)
+              .accepted,
+         "another player cannot move the claimed token");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 1)},
+                            "alice", false)
+             .accepted,
+         "the owner can move the claimed token");
+  Expect(!server.HandleCommand(dnd::ClaimToken{.id = 1}, "bob", false).accepted,
+         "a claimed token cannot be stolen");
+
+  const dnd::CommandOutcome assign = server.HandleCommand(
+      dnd::SetTokenOwner{.id = 1, .owner = "bob"}, "", true);
+  Expect(assign.accepted, "the DM can reassign a character");
+  Expect(
+      !server.HandleCommand(dnd::ClaimToken{.id = 1}, "alice", false).accepted,
+      "the previous owner loses the token after reassignment");
+  Expect(server.HandleCommand(dnd::ClaimToken{.id = 1}, "bob", false).accepted,
+         "the new owner can claim the reassigned token");
+
+  Expect(!server
+              .HandleCommand(dnd::SetTokenOwner{.id = 1, .owner = "alice"},
+                             "alice", false)
+              .accepted,
+         "players cannot assign owners");
+  Expect(
+      server.HandleCommand(dnd::SetTokenOwner{.id = 1, .owner = ""}, "", true)
+          .accepted,
+      "the DM can release a character");
+  Expect(
+      server.HandleCommand(dnd::ClaimToken{.id = 1}, "alice", false).accepted,
+      "a released character can be claimed again");
+
+  const dnd::CommandOutcome rename = server.HandleCommand(
+      dnd::RenameToken{.id = 1, .name = "Алиса"}, "alice", false);
+  Expect(rename.accepted, "the owner can rename the token");
+  Expect(server.State().TokenCopy(1)->name == "Алиса",
+         "the renamed value is stored");
+  Expect(!server
+              .HandleCommand(dnd::RenameToken{.id = 1, .name = "Боб"}, "bob",
+                             false)
+              .accepted,
+         "other players cannot rename the token");
+  Expect(
+      !server
+           .HandleCommand(dnd::RenameToken{.id = 1, .name = ""}, "alice", false)
+           .accepted,
+      "empty names are rejected");
+
+  Expect(
+      server.HandleCommand(dnd::SetTokenHp{.id = 1, .hp = 10}, "alice", false)
+          .accepted,
+      "the owner can set hp");
+  Expect(server
+             .HandleCommand(dnd::SetTokenMaxHp{.id = 1, .max_hp = 5}, "alice",
+                            false)
+             .accepted,
+         "the owner can set max hp");
+  Expect(server.State().TokenCopy(1)->hp == 5,
+         "hp is clamped to the new maximum");
+  Expect(!server
+              .HandleCommand(dnd::SetTokenMaxHp{.id = 1, .max_hp = 0}, "alice",
+                             false)
+              .accepted,
+         "a zero maximum is rejected");
+
+  const dnd::CommandOutcome color = server.HandleCommand(
+      dnd::SetTokenColor{.id = 1, .color = 0xC85046U}, "alice", false);
+  Expect(color.accepted, "the owner can set the colour");
+  Expect(server.State().TokenCopy(1)->color == 0xC85046U,
+         "the colour is stored");
+}
+
+auto TestDynamicFogObservers() -> void {
+  dnd::GridMap map(12, 1);
+  map.SetBlocked(CellAt(5, 0), true);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 2, 2);
+  Expect(!FogVisibleAt(server.FogState(), 10, 0),
+         "far cells start outside party vision");
+
+  const dnd::CommandOutcome added =
+      server.HandleCommand(dnd::AddToken{.name = "ally",
+                                         .cell = CellAt(10, 0),
+                                         .kind = dnd::TokenKind::kPlayer,
+                                         .max_hp = 10},
+                           "", true);
+  Expect(added.accepted, "the DM can add a player character");
+  Expect(added.events.size() == 2, "adding a player refreshes the party view");
+  Expect(FogVisibleAt(server.FogState(), 10, 0),
+         "a new player character expands the party vision");
+
+  const dnd::CommandOutcome removed =
+      server.HandleCommand(dnd::RemoveToken{.id = 2}, "", true);
+  Expect(removed.accepted, "the DM can remove the character");
+  Expect(removed.events.size() == 2,
+         "removing a player refreshes the party view");
+  Expect(!FogVisibleAt(server.FogState(), 10, 0),
+         "removing a player character removes its vision");
+}
+
+auto TestUtf8() -> void {
+  const std::string text = "Привет";
+  Expect(dnd::PreviousCodePointStart(text) == text.size() - 2,
+         "previous code point starts before the last Cyrillic letter");
+  std::string shortened = text;
+  shortened.resize(dnd::PreviousCodePointStart(shortened));
+  Expect(shortened == "Приве",
+         "removing the last code point keeps valid UTF-8");
+
+  std::string truncated = text;
+  dnd::TruncateUtf8(truncated, 5);
+  Expect(truncated == "Пр", "truncation never splits a UTF-8 sequence");
+  truncated = text;
+  dnd::TruncateUtf8(truncated, 6);
+  Expect(truncated == "При", "truncation keeps complete characters");
+  Expect(dnd::PreviousCodePointStart("") == 0, "empty text has no code point");
+}
+
+auto TestTokenManagement() -> void {
+  const dnd::GridMap map(20, 20);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 1)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 4, 3);
+
+  const dnd::CommandOutcome player_add = server.HandleCommand(
+      dnd::AddToken{.name = "orc", .cell = CellAt(2, 2)}, "alice", false);
+  Expect(!player_add.accepted, "players cannot spawn tokens");
+
+  const dnd::CommandOutcome dm_add = server.HandleCommand(
+      dnd::AddToken{.name = "orc", .cell = CellAt(1, 2)}, "", true);
+  Expect(dm_add.accepted, "DM can spawn tokens");
+  Expect(dm_add.events.size() == 1 &&
+             std::holds_alternative<dnd::TokenAdded>(dm_add.events.front()),
+         "spawn yields TokenAdded");
+  Expect(server.State().Tokens().size() == 2, "spawned token is in the world");
+  Expect(server.EventVisibleToPlayers(dm_add.events.front()),
+         "nearby spawn is visible to players");
+  dnd::TokenId spawned = 0;
+  if (!dm_add.events.empty() &&
+      std::holds_alternative<dnd::TokenAdded>(dm_add.events.front())) {
+    spawned = std::get<dnd::TokenAdded>(dm_add.events.front()).token.id;
+  }
+  if (spawned != 0) {
+    Expect(!server
+                .HandleCommand(
+                    dnd::MoveToken{.id = spawned, .target = CellAt(1, 3)},
+                    "alice", false)
+                .accepted,
+           "spawned monsters are DM-controlled");
+  }
+
+  const dnd::CommandOutcome hidden_add = server.HandleCommand(
+      dnd::AddToken{.name = "far", .cell = CellAt(15, 15)}, "", true);
+  Expect(hidden_add.accepted, "DM can spawn far away");
+  Expect(!hidden_add.events.empty() &&
+             !server.EventVisibleToPlayers(hidden_add.events.front()),
+         "far spawn is hidden from players");
+
+  const dnd::CommandOutcome off_map = server.HandleCommand(
+      dnd::AddToken{.name = "void", .cell = CellAt(2, 40)}, "", true);
+  Expect(!off_map.accepted, "spawn outside the map is rejected");
+
+  const dnd::CommandOutcome hp_owner =
+      server.HandleCommand(dnd::SetTokenHp{.id = 1, .hp = 5}, "alice", false);
+  Expect(hp_owner.accepted, "owner can change hp");
+  Expect(!server.HandleCommand(dnd::SetTokenHp{.id = 1, .hp = 3}, "bob", false)
+              .accepted,
+         "other players cannot change hp");
+
+  const dnd::CommandOutcome hp_clamp =
+      server.HandleCommand(dnd::SetTokenHp{.id = 1, .hp = 999}, "", true);
+  Expect(hp_clamp.accepted, "DM hp update is accepted");
+  for (const dnd::Token& token : server.State().Tokens()) {
+    if (token.id == 1) {
+      Expect(token.hp == token.max_hp, "hp is clamped to the maximum");
+    }
+  }
+
+  const dnd::CommandOutcome init = server.HandleCommand(
+      dnd::SetInitiative{.id = 1, .value = 18}, "alice", false);
+  Expect(init.accepted, "owner can change initiative");
+  for (const dnd::Token& token : server.State().Tokens()) {
+    if (token.id == 1) {
+      Expect(token.initiative == 18, "initiative is stored");
+    }
+  }
+
+  dnd::ClientView view;
+  view.Reset(server.ClientSnapshot(), server.FogState());
+  for (const dnd::Event& event : dm_add.events) {
+    view.Apply(event);
+  }
+  Expect(view.Tokens().size() == 2, "client view learns about the spawn");
+
+  for (const dnd::Event& event : hp_owner.events) {
+    view.Apply(event);
+  }
+  for (const dnd::Token& token : view.Tokens()) {
+    if (token.id == 1) {
+      Expect(token.hp == 5, "client view applies hp updates");
+    }
+  }
+
+  const dnd::CommandOutcome removed =
+      server.HandleCommand(dnd::RemoveToken{.id = spawned}, "", true);
+  Expect(removed.accepted, "DM can remove tokens");
+  for (const dnd::Event& event : removed.events) {
+    view.Apply(event);
+  }
+  Expect(view.Tokens().size() == 1, "client view drops removed tokens");
+  Expect(
+      !server.HandleCommand(dnd::RemoveToken{.id = 1}, "alice", false).accepted,
+      "players cannot remove tokens");
+}
+
+auto TestEncounter() -> void {
+  const dnd::GridMap map(10, 10);
+  dnd::GameState state(map);
+  const dnd::TokenId a = state.AddToken("a", CellAt(0, 0));
+  const dnd::TokenId b = state.AddToken("b", CellAt(1, 0));
+  const dnd::TokenId c = state.AddToken("c", CellAt(2, 0));
+  (void)state.SetInitiative(a, 5);
+  (void)state.SetInitiative(b, 15);
+  (void)state.SetInitiative(c, 10);
+
+  Expect(state.StartEncounter(), "encounter starts");
+  Expect(state.EncounterState().active && state.EncounterState().round == 1,
+         "encounter begins in round one");
+  Expect(state.EncounterState().order.size() == 3 &&
+             state.EncounterState().order[0] == b &&
+             state.EncounterState().order[1] == c &&
+             state.EncounterState().order[2] == a,
+         "order is sorted by initiative");
+  Expect(state.ActiveTokenId() == b, "first turn goes to the highest roll");
+
+  Expect(state.NextTurn() && state.ActiveTokenId() == c, "second turn");
+  Expect(state.NextTurn() && state.ActiveTokenId() == a, "third turn");
+  Expect(state.NextTurn() && state.EncounterState().round == 2 &&
+             state.ActiveTokenId() == b,
+         "wrap advances the round");
+
+  (void)state.SetInitiative(a, 99);
+  Expect(state.EncounterState().order[0] == a,
+         "changing initiative re-sorts the order");
+  Expect(state.ActiveTokenId() == b, "re-sorting keeps the current turn");
+
+  state.RemoveToken(c);
+  Expect(state.EncounterState().order.size() == 2,
+         "removed tokens leave the order");
+
+  state.EndEncounter();
+  Expect(!state.EncounterState().active, "encounter can be ended");
+  Expect(!state.NextTurn(), "next turn needs an active encounter");
+
+  dnd::GameState empty(map);
+  Expect(!empty.StartEncounter(), "empty encounter is rejected");
+}
+
+auto TestEncounterCommands() -> void {
+  const dnd::GridMap map(10, 10);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .initiative = 5,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .initiative = 15,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(2, 2)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 6, 1);
+
+  Expect(!server.HandleCommand(dnd::StartEncounter{}, "alice", false).accepted,
+         "players cannot start an encounter");
+  const dnd::CommandOutcome start =
+      server.HandleCommand(dnd::StartEncounter{}, "", true);
+  Expect(start.accepted, "DM starts the encounter");
+  Expect(!start.events.empty() && std::holds_alternative<dnd::EncounterUpdated>(
+                                      start.events.front()),
+         "start broadcasts EncounterUpdated");
+  if (!start.events.empty() &&
+      std::holds_alternative<dnd::EncounterUpdated>(start.events.front())) {
+    const auto& encounter =
+        std::get<dnd::EncounterUpdated>(start.events.front()).encounter;
+    Expect(encounter.active && encounter.order.front() == 2,
+           "goblin acts first by initiative");
+    Expect(server.EventVisibleToPlayers(start.events.front()),
+           "encounter updates reach players");
+  }
+
+  dnd::ClientView view;
+  for (const dnd::Event& event : start.events) {
+    view.Apply(event);
+  }
+  Expect(
+      view.EncounterState().active && view.EncounterState().order.front() == 2,
+      "client view tracks the encounter");
+
+  Expect(!server.HandleCommand(dnd::NextTurn{}, "alice", false).accepted,
+         "players cannot advance turns");
+  const dnd::CommandOutcome next =
+      server.HandleCommand(dnd::NextTurn{}, "", true);
+  Expect(next.accepted, "DM advances the turn");
+  Expect(server.State().EncounterState().turn_index == 1, "turn pointer moved");
+
+  const dnd::CommandOutcome end =
+      server.HandleCommand(dnd::EndEncounter{}, "", true);
+  Expect(end.accepted, "DM ends the encounter");
+  Expect(!server.State().EncounterState().active, "encounter is cleared");
+}
+
+auto TestSaveLoadRoundtrip() -> void {
+  dnd::GridMap map(6, 4);
+  map.SetBlocked(CellAt(2, 1), true);
+  const dnd::GameSnapshot original{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 4,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 7,
+                         .max_hp = 12,
+                         .initiative = 15,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .color = 0x507AC8U,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 6,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(3, 2)},
+          },
+      .next_token_id = 7,
+      .encounter =
+          dnd::Encounter{
+              .active = true,
+              .round = 3,
+              .order = {4, 6},
+              .turn_index = 1,
+          },
+  };
+
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_save.bin";
+
+  Expect(dnd::WriteSnapshot(original, path), "snapshot writes");
+  const std::optional<dnd::GameSnapshot> loaded = dnd::ReadSnapshot(path);
+  Expect(loaded.has_value(), "snapshot reads back");
+  if (loaded.has_value()) {
+    Expect(loaded->map.Width() == 6 && loaded->map.Height() == 4,
+           "dimensions survive the roundtrip");
+    Expect(loaded->map.IsBlocked(CellAt(2, 1)), "walls survive the roundtrip");
+    Expect(loaded->tokens.size() == 2, "token count survives the roundtrip");
+    Expect(loaded->tokens.front().name == "hero", "token name survives");
+    Expect(loaded->tokens.front().owner == "alice", "token owner survives");
+    Expect(loaded->tokens.front().hp == 7, "token hp survives");
+    Expect(loaded->tokens.front().max_hp == 12, "token max hp survives");
+    Expect(loaded->tokens.front().initiative == 15,
+           "token initiative survives");
+    Expect(loaded->tokens.front().kind == dnd::TokenKind::kPlayer,
+           "token kind survives");
+    Expect(loaded->tokens.front().color == 0x507AC8U, "token colour survives");
+    Expect(loaded->tokens.front().cell == CellAt(1, 1), "token cell survives");
+    Expect(loaded->next_token_id == 7, "next token id survives");
+    Expect(loaded->encounter.active && loaded->encounter.round == 3,
+           "encounter survives the roundtrip");
+    Expect(loaded->encounter.order == std::vector<dnd::TokenId>{4, 6} &&
+               loaded->encounter.turn_index == 1,
+           "turn order survives the roundtrip");
+  }
+
+  std::filesystem::remove(path);
+  Expect(!dnd::ReadSnapshot(path).has_value(), "missing file is rejected");
+
+  const std::filesystem::path bad_path =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_bad.bin";
+  {
+    std::ofstream out(bad_path, std::ios::binary | std::ios::trunc);
+    out.write("nope", 4);
+  }
+  Expect(!dnd::ReadSnapshot(bad_path).has_value(), "bad magic is rejected");
+  std::filesystem::remove(bad_path);
+}
+
+auto TestChatAndDice() -> void {
+  const dnd::GridMap map(10, 10);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 1)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 6, 7);
+
+  const dnd::CommandOutcome say =
+      server.HandleCommand(dnd::Say{.text = "hello"}, "alice", false);
+  Expect(say.accepted, "chat is accepted");
+  Expect(say.events.size() == 1 &&
+             std::holds_alternative<dnd::LogLineAdded>(say.events.front()),
+         "chat produces a log line");
+  if (!say.events.empty() &&
+      std::holds_alternative<dnd::LogLineAdded>(say.events.front())) {
+    const auto& line = std::get<dnd::LogLineAdded>(say.events.front()).line;
+    Expect(line.author == "alice", "chat keeps the author");
+    Expect(line.text == "hello", "chat keeps the text");
+    Expect(line.timestamp != 0, "chat carries a timestamp");
+  }
+
+  const dnd::CommandOutcome roll =
+      server.HandleCommand(dnd::RollDice{.count = 2, .sides = 6}, "", true);
+  Expect(roll.accepted, "dice roll is accepted");
+  if (!roll.events.empty() &&
+      std::holds_alternative<dnd::LogLineAdded>(roll.events.front())) {
+    const auto& line = std::get<dnd::LogLineAdded>(roll.events.front()).line;
+    Expect(line.author == "DM", "DM rolls are signed as DM");
+    Expect(line.text.find("2d6") != std::string::npos,
+           "dice line mentions the notation");
+    Expect(line.text.find('=') != std::string::npos,
+           "dice line contains the total");
+    Expect(line.timestamp != 0, "dice roll carries a timestamp");
+  }
+
+  Expect(
+      !server
+           .HandleCommand(dnd::RollDice{.count = 0, .sides = 6}, "alice", false)
+           .accepted,
+      "zero dice are rejected");
+  Expect(
+      !server
+           .HandleCommand(dnd::RollDice{.count = 1, .sides = 1}, "alice", false)
+           .accepted,
+      "one-sided dice are rejected");
+  Expect(!server.HandleCommand(dnd::Say{.text = ""}, "alice", false).accepted,
+         "empty chat is rejected");
+
+  dnd::ClientView view;
+  for (const dnd::Event& event : say.events) {
+    view.Apply(event);
+  }
+  Expect(view.Log().size() == 1, "client view stores log lines");
+  view.Apply(dnd::ViewUpdated{
+      .snapshot = server.ClientSnapshot(),
+      .fog = server.FogState(),
+  });
+  Expect(view.Log().size() == 1, "view refresh keeps the log history");
+
+  view.AddLocalLine("local only");
+  Expect(view.Log().size() == 2 && view.Log().back().text == "local only" &&
+             view.Log().back().author.empty() &&
+             view.Log().back().timestamp != 0,
+         "local feedback stays in the client log");
+}
+
+auto TestCommandEventSerialization() -> void {
+  const dnd::Command say{dnd::Say{.text = "hi there"}};
+  const std::vector<std::uint8_t> say_bytes = dnd::EncodeCommand(say);
+  const std::optional<dnd::Command> say_decoded =
+      dnd::DecodeCommand(say_bytes.data(), say_bytes.size());
+  Expect(say_decoded.has_value() &&
+             std::holds_alternative<dnd::Say>(*say_decoded) &&
+             std::get<dnd::Say>(*say_decoded).text == "hi there",
+         "say survives serialization");
+
+  const dnd::Command roll{dnd::RollDice{.count = 3, .sides = 8}};
+  const std::vector<std::uint8_t> roll_bytes = dnd::EncodeCommand(roll);
+  const std::optional<dnd::Command> roll_decoded =
+      dnd::DecodeCommand(roll_bytes.data(), roll_bytes.size());
+  Expect(roll_decoded.has_value() &&
+             std::holds_alternative<dnd::RollDice>(*roll_decoded) &&
+             std::get<dnd::RollDice>(*roll_decoded).count == 3 &&
+             std::get<dnd::RollDice>(*roll_decoded).sides == 8,
+         "roll survives serialization");
+
+  const dnd::Event line{dnd::LogLineAdded{
+      .line =
+          dnd::LogLine{.author = "bob", .text = "oops", .timestamp = 123456},
+  }};
+  const std::vector<std::uint8_t> line_bytes = dnd::EncodeEvent(line);
+  const std::optional<dnd::Event> line_decoded =
+      dnd::DecodeEvent(line_bytes.data(), line_bytes.size());
+  Expect(
+      line_decoded.has_value() &&
+          std::holds_alternative<dnd::LogLineAdded>(*line_decoded) &&
+          std::get<dnd::LogLineAdded>(*line_decoded).line.author == "bob" &&
+          std::get<dnd::LogLineAdded>(*line_decoded).line.timestamp == 123456,
+      "log line survives serialization");
+
+  const dnd::Command add{dnd::AddToken{
+      .name = "orc",
+      .cell = CellAt(5, 6),
+      .owner = "dm",
+      .kind = dnd::TokenKind::kMonster,
+      .max_hp = 13,
+  }};
+  const std::vector<std::uint8_t> add_bytes = dnd::EncodeCommand(add);
+  const std::optional<dnd::Command> add_decoded =
+      dnd::DecodeCommand(add_bytes.data(), add_bytes.size());
+  Expect(add_decoded.has_value() &&
+             std::holds_alternative<dnd::AddToken>(*add_decoded) &&
+             std::get<dnd::AddToken>(*add_decoded).name == "orc" &&
+             std::get<dnd::AddToken>(*add_decoded).cell == CellAt(5, 6) &&
+             std::get<dnd::AddToken>(*add_decoded).owner == "dm" &&
+             std::get<dnd::AddToken>(*add_decoded).kind ==
+                 dnd::TokenKind::kMonster &&
+             std::get<dnd::AddToken>(*add_decoded).max_hp == 13,
+         "spawn command survives serialization");
+
+  const dnd::Command claim{dnd::ClaimToken{.id = 4}};
+  const std::vector<std::uint8_t> claim_bytes = dnd::EncodeCommand(claim);
+  const std::optional<dnd::Command> claim_decoded =
+      dnd::DecodeCommand(claim_bytes.data(), claim_bytes.size());
+  Expect(claim_decoded.has_value() &&
+             std::holds_alternative<dnd::ClaimToken>(*claim_decoded) &&
+             std::get<dnd::ClaimToken>(*claim_decoded).id == 4,
+         "claim command survives serialization");
+
+  const dnd::Command owner{dnd::SetTokenOwner{.id = 4, .owner = "alice"}};
+  const std::vector<std::uint8_t> owner_bytes = dnd::EncodeCommand(owner);
+  const std::optional<dnd::Command> owner_decoded =
+      dnd::DecodeCommand(owner_bytes.data(), owner_bytes.size());
+  Expect(owner_decoded.has_value() &&
+             std::holds_alternative<dnd::SetTokenOwner>(*owner_decoded) &&
+             std::get<dnd::SetTokenOwner>(*owner_decoded).owner == "alice",
+         "owner command survives serialization");
+
+  const dnd::Command rename{dnd::RenameToken{.id = 4, .name = "Алиса"}};
+  const std::vector<std::uint8_t> rename_bytes = dnd::EncodeCommand(rename);
+  const std::optional<dnd::Command> rename_decoded =
+      dnd::DecodeCommand(rename_bytes.data(), rename_bytes.size());
+  Expect(rename_decoded.has_value() &&
+             std::holds_alternative<dnd::RenameToken>(*rename_decoded) &&
+             std::get<dnd::RenameToken>(*rename_decoded).name == "Алиса",
+         "rename command survives serialization");
+
+  const dnd::Command max_hp{dnd::SetTokenMaxHp{.id = 4, .max_hp = 22}};
+  const std::vector<std::uint8_t> max_hp_bytes = dnd::EncodeCommand(max_hp);
+  const std::optional<dnd::Command> max_hp_decoded =
+      dnd::DecodeCommand(max_hp_bytes.data(), max_hp_bytes.size());
+  Expect(max_hp_decoded.has_value() &&
+             std::holds_alternative<dnd::SetTokenMaxHp>(*max_hp_decoded) &&
+             std::get<dnd::SetTokenMaxHp>(*max_hp_decoded).max_hp == 22,
+         "max hp command survives serialization");
+
+  const dnd::Command color{dnd::SetTokenColor{.id = 4, .color = 0xC85046U}};
+  const std::vector<std::uint8_t> color_bytes = dnd::EncodeCommand(color);
+  const std::optional<dnd::Command> color_decoded =
+      dnd::DecodeCommand(color_bytes.data(), color_bytes.size());
+  Expect(color_decoded.has_value() &&
+             std::holds_alternative<dnd::SetTokenColor>(*color_decoded) &&
+             std::get<dnd::SetTokenColor>(*color_decoded).color == 0xC85046U,
+         "colour command survives serialization");
+
+  const dnd::Event updated{dnd::TokenUpdated{
+      .token = dnd::Token{.id = 3,
+                          .name = "orc",
+                          .owner = "dm",
+                          .hp = 2,
+                          .max_hp = 9,
+                          .initiative = 11,
+                          .kind = dnd::TokenKind::kMonster,
+                          .color = 0x46A864U,
+                          .cell = CellAt(1, 1)},
+  }};
+  const std::vector<std::uint8_t> updated_bytes = dnd::EncodeEvent(updated);
+  const std::optional<dnd::Event> updated_decoded =
+      dnd::DecodeEvent(updated_bytes.data(), updated_bytes.size());
+  Expect(updated_decoded.has_value() &&
+             std::holds_alternative<dnd::TokenUpdated>(*updated_decoded) &&
+             std::get<dnd::TokenUpdated>(*updated_decoded).token.hp == 2 &&
+             std::get<dnd::TokenUpdated>(*updated_decoded).token.initiative ==
+                 11 &&
+             std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
+                 dnd::TokenKind::kMonster &&
+             std::get<dnd::TokenUpdated>(*updated_decoded).token.color ==
+                 0x46A864U,
+         "token update survives serialization");
+
+  const dnd::Command start{dnd::StartEncounter{}};
+  const std::vector<std::uint8_t> start_bytes = dnd::EncodeCommand(start);
+  const std::optional<dnd::Command> start_decoded =
+      dnd::DecodeCommand(start_bytes.data(), start_bytes.size());
+  Expect(start_decoded.has_value() &&
+             std::holds_alternative<dnd::StartEncounter>(*start_decoded),
+         "encounter command survives serialization");
+
+  const dnd::Event encounter{dnd::EncounterUpdated{
+      .encounter =
+          dnd::Encounter{
+              .active = true,
+              .round = 2,
+              .order = {1, 2},
+              .turn_index = 1,
+          },
+  }};
+  const std::vector<std::uint8_t> encounter_bytes = dnd::EncodeEvent(encounter);
+  const std::optional<dnd::Event> encounter_decoded =
+      dnd::DecodeEvent(encounter_bytes.data(), encounter_bytes.size());
+  Expect(
+      encounter_decoded.has_value() &&
+          std::holds_alternative<dnd::EncounterUpdated>(*encounter_decoded) &&
+          std::get<dnd::EncounterUpdated>(*encounter_decoded).encounter.round ==
+              2 &&
+          std::get<dnd::EncounterUpdated>(*encounter_decoded)
+                  .encounter.turn_index == 1,
+      "encounter event survives serialization");
+}
+
+}  // namespace
+
+auto main() -> int {
+  try {
+    TestGridMap();
+    TestMoveRules();
+    TestFogLineOfSight();
+    TestFogDiagonalSeal();
+    TestFogExploredMemory();
+    TestServerVisibility();
+    TestOwnership();
+    TestClaimAndTokenAdmin();
+    TestDynamicFogObservers();
+    TestUtf8();
+    TestTokenManagement();
+    TestEncounter();
+    TestEncounterCommands();
+    TestChatAndDice();
+    TestCommandEventSerialization();
+    TestSaveLoadRoundtrip();
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "unexpected exception: %s\n", error.what());
+    return 1;
+  }
+
+  if (g_failures == 0) {
+    std::printf("all core checks passed\n");
+    return 0;
+  }
+  std::fprintf(stderr, "%d core check(s) failed\n", g_failures);
+  return 1;
+}

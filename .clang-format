@@ -1,0 +1,6 @@
+---
+# Google C++ style: https://google.github.io/styleguide/cppguide.html
+# clang-format's "Google" preset already sets pointer alignment to the type,
+# 80-column limit and case-sensitive include sorting.
+Language: Cpp
+BasedOnStyle: Google

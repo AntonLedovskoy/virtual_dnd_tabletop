@@ -1,0 +1,681 @@
+#include "core/serialization.h"
+
+#include <string>
+#include <type_traits>
+#include <utility>
+
+#include "core/byte_io.h"
+
+namespace dnd {
+namespace {
+
+constexpr std::uint32_t kMaxDimension = 4096;
+constexpr std::uint32_t kMaxTokens = 100000;
+constexpr std::uint32_t kMaxNameLength = 256;
+constexpr std::uint32_t kMaxChatText = 256;
+constexpr std::uint32_t kMaxLogText = 512;
+constexpr std::uint32_t kMaxLogAuthor = 64;
+
+constexpr std::uint8_t kCommandMoveToken = 1;
+constexpr std::uint8_t kCommandSay = 2;
+constexpr std::uint8_t kCommandRollDice = 3;
+constexpr std::uint8_t kCommandAddToken = 4;
+constexpr std::uint8_t kCommandRemoveToken = 5;
+constexpr std::uint8_t kCommandSetTokenHp = 6;
+constexpr std::uint8_t kCommandSetInitiative = 7;
+constexpr std::uint8_t kCommandStartEncounter = 8;
+constexpr std::uint8_t kCommandEndEncounter = 9;
+constexpr std::uint8_t kCommandNextTurn = 10;
+constexpr std::uint8_t kCommandClaimToken = 11;
+constexpr std::uint8_t kCommandSetTokenOwner = 12;
+constexpr std::uint8_t kCommandRenameToken = 13;
+constexpr std::uint8_t kCommandSetTokenMaxHp = 14;
+constexpr std::uint8_t kCommandSetTokenColor = 15;
+
+constexpr std::uint8_t kEventTokenMoved = 1;
+constexpr std::uint8_t kEventViewUpdated = 2;
+constexpr std::uint8_t kEventLogLineAdded = 3;
+constexpr std::uint8_t kEventTokenAdded = 4;
+constexpr std::uint8_t kEventTokenRemoved = 5;
+constexpr std::uint8_t kEventTokenUpdated = 6;
+constexpr std::uint8_t kEventEncounterUpdated = 7;
+
+auto WriteToken(ByteWriter& writer, const Token& token) -> void {
+  writer.U32(token.id);
+  writer.String(token.name);
+  writer.String(token.owner);
+  writer.I32(token.hp);
+  writer.I32(token.max_hp);
+  writer.I32(token.initiative);
+  writer.U8(static_cast<std::uint8_t>(token.kind));
+  writer.U32(token.color);
+  writer.I32(token.cell.x);
+  writer.I32(token.cell.y);
+}
+
+auto ReadToken(ByteReader& reader, Token& token) -> bool {
+  std::uint32_t id = 0;
+  std::string name;
+  std::string owner;
+  std::int32_t hp = 0;
+  std::int32_t max_hp = 0;
+  std::int32_t initiative = 0;
+  std::uint8_t kind = 0;
+  std::uint32_t color = 0;
+  std::int32_t x = 0;
+  std::int32_t y = 0;
+  if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
+      !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
+      !reader.I32(max_hp) || !reader.I32(initiative) || !reader.U8(kind) ||
+      !reader.U32(color) || !reader.I32(x) || !reader.I32(y)) {
+    return false;
+  }
+  if (max_hp < 0 || max_hp > 1000000 || initiative < -1000000 ||
+      initiative > 1000000 ||
+      kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
+      (color & 0xFF000000U) != 0) {
+    return false;
+  }
+  token = Token{
+      .id = id,
+      .name = std::move(name),
+      .owner = std::move(owner),
+      .hp = hp,
+      .max_hp = max_hp,
+      .initiative = initiative,
+      .kind = static_cast<TokenKind>(kind),
+      .color = color,
+      .cell = Cell{.x = x, .y = y},
+  };
+  return true;
+}
+
+auto ReadPosition(ByteReader& reader, Cell& cell) -> bool {
+  std::int32_t x = 0;
+  std::int32_t y = 0;
+  if (!reader.I32(x) || !reader.I32(y)) {
+    return false;
+  }
+  cell = Cell{.x = x, .y = y};
+  return true;
+}
+
+auto WriteEncounter(ByteWriter& writer, const Encounter& encounter) -> void {
+  writer.U8(encounter.active ? 1 : 0);
+  writer.I32(encounter.round);
+  writer.U32(static_cast<std::uint32_t>(encounter.order.size()));
+  for (const TokenId id : encounter.order) {
+    writer.U32(id);
+  }
+  writer.U32(static_cast<std::uint32_t>(encounter.turn_index));
+}
+
+auto ReadEncounter(ByteReader& reader, Encounter& encounter) -> bool {
+  std::uint8_t active = 0;
+  std::int32_t round = 0;
+  std::uint32_t count = 0;
+  if (!reader.U8(active) || !reader.I32(round) || !reader.U32(count) ||
+      count > kMaxTokens) {
+    return false;
+  }
+  std::vector<TokenId> order;
+  order.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    std::uint32_t id = 0;
+    if (!reader.U32(id)) {
+      return false;
+    }
+    order.push_back(id);
+  }
+  std::uint32_t turn_index = 0;
+  if (!reader.U32(turn_index)) {
+    return false;
+  }
+  if (round < 0 || turn_index > count) {
+    return false;
+  }
+  if (count == 0 && active != 0) {
+    return false;
+  }
+  if (count > 0 && turn_index >= count) {
+    return false;
+  }
+  encounter = Encounter{
+      .active = active != 0,
+      .round = round,
+      .order = std::move(order),
+      .turn_index = turn_index,
+  };
+  return true;
+}
+
+auto DecodeStartEncounterCommand(ByteReader& reader) -> std::optional<Command> {
+  if (!reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{StartEncounter{}};
+}
+
+auto DecodeEndEncounterCommand(ByteReader& reader) -> std::optional<Command> {
+  if (!reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{EndEncounter{}};
+}
+
+auto DecodeNextTurnCommand(ByteReader& reader) -> std::optional<Command> {
+  if (!reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{NextTurn{}};
+}
+
+auto DecodeMoveCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  Cell cell;
+  if (!reader.U32(id) || !ReadPosition(reader, cell) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{MoveToken{.id = id, .target = cell}};
+}
+
+auto DecodeSayCommand(ByteReader& reader) -> std::optional<Command> {
+  std::string text;
+  if (!reader.String(text, kMaxChatText) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{Say{.text = std::move(text)}};
+}
+
+auto DecodeRollCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t count = 0;
+  std::uint32_t sides = 0;
+  if (!reader.U32(count) || !reader.U32(sides) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{RollDice{
+      .count = static_cast<int>(count),
+      .sides = static_cast<int>(sides),
+  }};
+}
+
+auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
+  std::string name;
+  Cell cell;
+  std::string owner;
+  std::uint8_t kind = 0;
+  std::int32_t max_hp = 0;
+  if (!reader.String(name, kMaxNameLength) || !ReadPosition(reader, cell) ||
+      !reader.String(owner, kMaxNameLength) || !reader.U8(kind) ||
+      !reader.I32(max_hp) || !reader.Done()) {
+    return std::nullopt;
+  }
+  if (kind > static_cast<std::uint8_t>(TokenKind::kMonster) || max_hp <= 0 ||
+      max_hp > 1000000) {
+    return std::nullopt;
+  }
+  return Command{AddToken{
+      .name = std::move(name),
+      .cell = cell,
+      .owner = std::move(owner),
+      .kind = static_cast<TokenKind>(kind),
+      .max_hp = max_hp,
+  }};
+}
+
+auto DecodeRemoveCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  if (!reader.U32(id) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{RemoveToken{.id = id}};
+}
+
+auto DecodeSetHpCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::int32_t hp = 0;
+  if (!reader.U32(id) || !reader.I32(hp) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{SetTokenHp{.id = id, .hp = hp}};
+}
+
+auto DecodeSetInitiativeCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::int32_t value = 0;
+  if (!reader.U32(id) || !reader.I32(value) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{SetInitiative{.id = id, .value = value}};
+}
+
+auto DecodeClaimTokenCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  if (!reader.U32(id) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{ClaimToken{.id = id}};
+}
+
+auto DecodeSetTokenOwnerCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::string owner;
+  if (!reader.U32(id) || !reader.String(owner, kMaxNameLength) ||
+      !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{SetTokenOwner{.id = id, .owner = std::move(owner)}};
+}
+
+auto DecodeRenameTokenCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::string name;
+  if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
+      !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{RenameToken{.id = id, .name = std::move(name)}};
+}
+
+auto DecodeSetTokenMaxHpCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::int32_t max_hp = 0;
+  if (!reader.U32(id) || !reader.I32(max_hp) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{SetTokenMaxHp{.id = id, .max_hp = max_hp}};
+}
+
+auto DecodeSetTokenColorCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::uint32_t color = 0;
+  if (!reader.U32(id) || !reader.U32(color) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{SetTokenColor{.id = id, .color = color}};
+}
+
+auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
+  Encounter encounter;
+  if (!ReadEncounter(reader, encounter) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{EncounterUpdated{.encounter = std::move(encounter)}};
+}
+
+auto DecodeTokenMovedEvent(ByteReader& reader) -> std::optional<Event> {
+  std::uint32_t id = 0;
+  Cell from;
+  Cell to;
+  if (!reader.U32(id) || !ReadPosition(reader, from) ||
+      !ReadPosition(reader, to) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{TokenMoved{.id = id, .from = from, .to = to}};
+}
+
+auto DecodeViewUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
+  std::uint32_t snapshot_size = 0;
+  std::vector<std::uint8_t> snapshot_bytes;
+  if (!reader.U32(snapshot_size) ||
+      !reader.Bytes(snapshot_size, snapshot_bytes)) {
+    return std::nullopt;
+  }
+  std::optional<GameSnapshot> snapshot =
+      DecodeSnapshot(snapshot_bytes.data(), snapshot_bytes.size());
+  if (!snapshot.has_value()) {
+    return std::nullopt;
+  }
+
+  std::uint32_t fog_size = 0;
+  std::vector<std::uint8_t> fog_bytes;
+  if (!reader.U32(fog_size) || !reader.Bytes(fog_size, fog_bytes) ||
+      !reader.Done()) {
+    return std::nullopt;
+  }
+  std::optional<FogSnapshot> fog =
+      DecodeFog(fog_bytes.data(), fog_bytes.size());
+  if (!fog.has_value()) {
+    return std::nullopt;
+  }
+  return Event{ViewUpdated{
+      .snapshot = std::move(*snapshot),
+      .fog = std::move(*fog),
+  }};
+}
+
+auto DecodeLogLineEvent(ByteReader& reader) -> std::optional<Event> {
+  std::string author;
+  std::string text;
+  std::uint32_t timestamp = 0;
+  if (!reader.String(author, kMaxLogAuthor) ||
+      !reader.String(text, kMaxLogText) || !reader.U32(timestamp) ||
+      !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{LogLineAdded{
+      .line = LogLine{.author = std::move(author),
+                      .text = std::move(text),
+                      .timestamp = timestamp},
+  }};
+}
+
+auto DecodeTokenAddedEvent(ByteReader& reader) -> std::optional<Event> {
+  Token token;
+  if (!ReadToken(reader, token) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{TokenAdded{.token = std::move(token)}};
+}
+
+auto DecodeTokenRemovedEvent(ByteReader& reader) -> std::optional<Event> {
+  std::uint32_t id = 0;
+  if (!reader.U32(id) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{TokenRemoved{.id = id}};
+}
+
+auto DecodeTokenUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
+  Token token;
+  if (!ReadToken(reader, token) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{TokenUpdated{.token = std::move(token)}};
+}
+
+}  // namespace
+
+auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
+  ByteWriter writer;
+  writer.U32(static_cast<std::uint32_t>(snapshot.map.Width()));
+  writer.U32(static_cast<std::uint32_t>(snapshot.map.Height()));
+  for (int y = 0; y < snapshot.map.Height(); ++y) {
+    for (int x = 0; x < snapshot.map.Width(); ++x) {
+      writer.U8(snapshot.map.IsBlocked(Cell{.x = x, .y = y}) ? 1 : 0);
+    }
+  }
+  writer.U32(static_cast<std::uint32_t>(snapshot.tokens.size()));
+  for (const Token& token : snapshot.tokens) {
+    WriteToken(writer, token);
+  }
+  writer.U32(snapshot.next_token_id);
+  WriteEncounter(writer, snapshot.encounter);
+  return writer.Data();
+}
+
+auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
+    -> std::optional<GameSnapshot> {
+  ByteReader reader(data, size);
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  if (!reader.U32(width) || !reader.U32(height)) {
+    return std::nullopt;
+  }
+  if (width == 0 || height == 0 || width > kMaxDimension ||
+      height > kMaxDimension) {
+    return std::nullopt;
+  }
+
+  GridMap map(static_cast<int>(width), static_cast<int>(height));
+  for (int y = 0; y < map.Height(); ++y) {
+    for (int x = 0; x < map.Width(); ++x) {
+      std::uint8_t blocked = 0;
+      if (!reader.U8(blocked)) {
+        return std::nullopt;
+      }
+      if (blocked != 0) {
+        map.SetBlocked(Cell{.x = x, .y = y}, true);
+      }
+    }
+  }
+
+  std::uint32_t token_count = 0;
+  if (!reader.U32(token_count) || token_count > kMaxTokens) {
+    return std::nullopt;
+  }
+  std::vector<Token> tokens;
+  tokens.reserve(token_count);
+  for (std::uint32_t i = 0; i < token_count; ++i) {
+    Token token;
+    if (!ReadToken(reader, token) || !map.Contains(token.cell)) {
+      return std::nullopt;
+    }
+    tokens.push_back(std::move(token));
+  }
+
+  std::uint32_t next_token_id = 0;
+  if (!reader.U32(next_token_id) || next_token_id == 0) {
+    return std::nullopt;
+  }
+  Encounter encounter;
+  if (!ReadEncounter(reader, encounter) || !reader.Done()) {
+    return std::nullopt;
+  }
+
+  return GameSnapshot{
+      .map = std::move(map),
+      .tokens = std::move(tokens),
+      .next_token_id = next_token_id,
+      .encounter = std::move(encounter),
+  };
+}
+
+auto EncodeFog(const FogSnapshot& fog) -> std::vector<std::uint8_t> {
+  ByteWriter writer;
+  writer.U32(static_cast<std::uint32_t>(fog.width));
+  writer.U32(static_cast<std::uint32_t>(fog.height));
+  writer.Raw(fog.visible);
+  writer.Raw(fog.explored);
+  return writer.Data();
+}
+
+auto DecodeFog(const std::uint8_t* data, std::size_t size)
+    -> std::optional<FogSnapshot> {
+  ByteReader reader(data, size);
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  if (!reader.U32(width) || !reader.U32(height)) {
+    return std::nullopt;
+  }
+  if (width == 0 || height == 0 || width > kMaxDimension ||
+      height > kMaxDimension) {
+    return std::nullopt;
+  }
+  const auto cells = width * height;
+  if (reader.Remaining() != static_cast<std::size_t>(cells) * 2) {
+    return std::nullopt;
+  }
+
+  FogSnapshot fog;
+  fog.width = static_cast<int>(width);
+  fog.height = static_cast<int>(height);
+  if (!reader.Bytes(cells, fog.visible) || !reader.Bytes(cells, fog.explored) ||
+      !reader.Done()) {
+    return std::nullopt;
+  }
+  return fog;
+}
+
+auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
+  ByteWriter writer;
+  std::visit(
+      [&writer](const auto& cmd) -> void {
+        using T = std::decay_t<decltype(cmd)>;
+        if constexpr (std::is_same_v<T, MoveToken>) {
+          writer.U8(kCommandMoveToken);
+          writer.U32(cmd.id);
+          writer.I32(cmd.target.x);
+          writer.I32(cmd.target.y);
+        } else if constexpr (std::is_same_v<T, Say>) {
+          writer.U8(kCommandSay);
+          writer.String(cmd.text);
+        } else if constexpr (std::is_same_v<T, RollDice>) {
+          writer.U8(kCommandRollDice);
+          writer.U32(static_cast<std::uint32_t>(cmd.count));
+          writer.U32(static_cast<std::uint32_t>(cmd.sides));
+        } else if constexpr (std::is_same_v<T, AddToken>) {
+          writer.U8(kCommandAddToken);
+          writer.String(cmd.name);
+          writer.I32(cmd.cell.x);
+          writer.I32(cmd.cell.y);
+          writer.String(cmd.owner);
+          writer.U8(static_cast<std::uint8_t>(cmd.kind));
+          writer.I32(cmd.max_hp);
+        } else if constexpr (std::is_same_v<T, RemoveToken>) {
+          writer.U8(kCommandRemoveToken);
+          writer.U32(cmd.id);
+        } else if constexpr (std::is_same_v<T, SetTokenHp>) {
+          writer.U8(kCommandSetTokenHp);
+          writer.U32(cmd.id);
+          writer.I32(cmd.hp);
+        } else if constexpr (std::is_same_v<T, SetInitiative>) {
+          writer.U8(kCommandSetInitiative);
+          writer.U32(cmd.id);
+          writer.I32(cmd.value);
+        } else if constexpr (std::is_same_v<T, ClaimToken>) {
+          writer.U8(kCommandClaimToken);
+          writer.U32(cmd.id);
+        } else if constexpr (std::is_same_v<T, SetTokenOwner>) {
+          writer.U8(kCommandSetTokenOwner);
+          writer.U32(cmd.id);
+          writer.String(cmd.owner);
+        } else if constexpr (std::is_same_v<T, RenameToken>) {
+          writer.U8(kCommandRenameToken);
+          writer.U32(cmd.id);
+          writer.String(cmd.name);
+        } else if constexpr (std::is_same_v<T, SetTokenMaxHp>) {
+          writer.U8(kCommandSetTokenMaxHp);
+          writer.U32(cmd.id);
+          writer.I32(cmd.max_hp);
+        } else if constexpr (std::is_same_v<T, SetTokenColor>) {
+          writer.U8(kCommandSetTokenColor);
+          writer.U32(cmd.id);
+          writer.U32(cmd.color);
+        } else if constexpr (std::is_same_v<T, StartEncounter>) {
+          writer.U8(kCommandStartEncounter);
+        } else if constexpr (std::is_same_v<T, EndEncounter>) {
+          writer.U8(kCommandEndEncounter);
+        } else if constexpr (std::is_same_v<T, NextTurn>) {
+          writer.U8(kCommandNextTurn);
+        }
+      },
+      command);
+  return writer.Data();
+}
+
+auto DecodeCommand(const std::uint8_t* data, std::size_t size)
+    -> std::optional<Command> {
+  ByteReader reader(data, size);
+  std::uint8_t kind = 0;
+  if (!reader.U8(kind)) {
+    return std::nullopt;
+  }
+  switch (kind) {
+    case kCommandMoveToken:
+      return DecodeMoveCommand(reader);
+    case kCommandSay:
+      return DecodeSayCommand(reader);
+    case kCommandRollDice:
+      return DecodeRollCommand(reader);
+    case kCommandAddToken:
+      return DecodeAddCommand(reader);
+    case kCommandRemoveToken:
+      return DecodeRemoveCommand(reader);
+    case kCommandSetTokenHp:
+      return DecodeSetHpCommand(reader);
+    case kCommandSetInitiative:
+      return DecodeSetInitiativeCommand(reader);
+    case kCommandClaimToken:
+      return DecodeClaimTokenCommand(reader);
+    case kCommandSetTokenOwner:
+      return DecodeSetTokenOwnerCommand(reader);
+    case kCommandRenameToken:
+      return DecodeRenameTokenCommand(reader);
+    case kCommandSetTokenMaxHp:
+      return DecodeSetTokenMaxHpCommand(reader);
+    case kCommandSetTokenColor:
+      return DecodeSetTokenColorCommand(reader);
+    case kCommandStartEncounter:
+      return DecodeStartEncounterCommand(reader);
+    case kCommandEndEncounter:
+      return DecodeEndEncounterCommand(reader);
+    case kCommandNextTurn:
+      return DecodeNextTurnCommand(reader);
+    default:
+      return std::nullopt;
+  }
+}
+
+auto EncodeEvent(const Event& event) -> std::vector<std::uint8_t> {
+  ByteWriter writer;
+  std::visit(
+      [&writer](const auto& ev) -> void {
+        using T = std::decay_t<decltype(ev)>;
+        if constexpr (std::is_same_v<T, TokenMoved>) {
+          writer.U8(kEventTokenMoved);
+          writer.U32(ev.id);
+          writer.I32(ev.from.x);
+          writer.I32(ev.from.y);
+          writer.I32(ev.to.x);
+          writer.I32(ev.to.y);
+        } else if constexpr (std::is_same_v<T, ViewUpdated>) {
+          const std::vector<std::uint8_t> snapshot =
+              EncodeSnapshot(ev.snapshot);
+          const std::vector<std::uint8_t> fog = EncodeFog(ev.fog);
+          writer.U8(kEventViewUpdated);
+          writer.U32(static_cast<std::uint32_t>(snapshot.size()));
+          writer.Raw(snapshot);
+          writer.U32(static_cast<std::uint32_t>(fog.size()));
+          writer.Raw(fog);
+        } else if constexpr (std::is_same_v<T, LogLineAdded>) {
+          writer.U8(kEventLogLineAdded);
+          writer.String(ev.line.author);
+          writer.String(ev.line.text);
+          writer.U32(ev.line.timestamp);
+        } else if constexpr (std::is_same_v<T, TokenAdded>) {
+          writer.U8(kEventTokenAdded);
+          WriteToken(writer, ev.token);
+        } else if constexpr (std::is_same_v<T, TokenRemoved>) {
+          writer.U8(kEventTokenRemoved);
+          writer.U32(ev.id);
+        } else if constexpr (std::is_same_v<T, TokenUpdated>) {
+          writer.U8(kEventTokenUpdated);
+          WriteToken(writer, ev.token);
+        } else if constexpr (std::is_same_v<T, EncounterUpdated>) {
+          writer.U8(kEventEncounterUpdated);
+          WriteEncounter(writer, ev.encounter);
+        }
+      },
+      event);
+  return writer.Data();
+}
+
+auto DecodeEvent(const std::uint8_t* data, std::size_t size)
+    -> std::optional<Event> {
+  ByteReader reader(data, size);
+  std::uint8_t kind = 0;
+  if (!reader.U8(kind)) {
+    return std::nullopt;
+  }
+  switch (kind) {
+    case kEventTokenMoved:
+      return DecodeTokenMovedEvent(reader);
+    case kEventViewUpdated:
+      return DecodeViewUpdatedEvent(reader);
+    case kEventLogLineAdded:
+      return DecodeLogLineEvent(reader);
+    case kEventTokenAdded:
+      return DecodeTokenAddedEvent(reader);
+    case kEventTokenRemoved:
+      return DecodeTokenRemovedEvent(reader);
+    case kEventTokenUpdated:
+      return DecodeTokenUpdatedEvent(reader);
+    case kEventEncounterUpdated:
+      return DecodeEncounterUpdatedEvent(reader);
+    default:
+      return std::nullopt;
+  }
+}
+
+}  // namespace dnd
