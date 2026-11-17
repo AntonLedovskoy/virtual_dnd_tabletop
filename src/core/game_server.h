@@ -83,6 +83,9 @@ class GameServer {
   [[nodiscard]] auto HandleClaimToken(const ClaimToken& command,
                                       const std::string& actor)
       -> CommandOutcome;
+  [[nodiscard]] auto HandleReleaseToken(const ReleaseToken& command,
+                                        const std::string& actor)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleSetTokenOwner(const SetTokenOwner& command,
                                          bool can_control_all)
       -> CommandOutcome;

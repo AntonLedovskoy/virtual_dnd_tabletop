@@ -33,6 +33,7 @@ constexpr std::uint8_t kCommandRenameToken = 13;
 constexpr std::uint8_t kCommandSetTokenMaxHp = 14;
 constexpr std::uint8_t kCommandSetTokenColor = 15;
 constexpr std::uint8_t kCommandUpdateTokenSheet = 16;
+constexpr std::uint8_t kCommandReleaseToken = 17;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -274,6 +275,14 @@ auto DecodeClaimTokenCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{ClaimToken{.id = id}};
+}
+
+auto DecodeReleaseTokenCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  if (!reader.U32(id) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{ReleaseToken{.id = id}};
 }
 
 auto DecodeSetTokenOwnerCommand(ByteReader& reader) -> std::optional<Command> {
@@ -572,6 +581,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, ClaimToken>) {
           writer.U8(kCommandClaimToken);
           writer.U32(cmd.id);
+        } else if constexpr (std::is_same_v<T, ReleaseToken>) {
+          writer.U8(kCommandReleaseToken);
+          writer.U32(cmd.id);
         } else if constexpr (std::is_same_v<T, SetTokenOwner>) {
           writer.U8(kCommandSetTokenOwner);
           writer.U32(cmd.id);
@@ -630,6 +642,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeSetInitiativeCommand(reader);
     case kCommandClaimToken:
       return DecodeClaimTokenCommand(reader);
+    case kCommandReleaseToken:
+      return DecodeReleaseTokenCommand(reader);
     case kCommandSetTokenOwner:
       return DecodeSetTokenOwnerCommand(reader);
     case kCommandRenameToken:

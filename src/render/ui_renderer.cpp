@@ -70,7 +70,7 @@ auto FormatLogTime(std::uint32_t timestamp) -> std::string {
 
 auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                   const std::vector<LogLine>& lines, bool typing,
-                  const std::string& input) -> void {
+                  const std::string& input, bool is_dm) -> void {
   int window_width = 0;
   int window_height = 0;
   if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
@@ -84,7 +84,8 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
       static_cast<float>(window_width - (2 * kPadding)) - 160.0F;
   const int line_height =
       text != nullptr ? static_cast<int>(text->LineHeight()) : 16;
-  const std::string hint_text = std::string(strings::kChatHint);
+  const std::string hint_text =
+      std::string(is_dm ? strings::kChatHintDm : strings::kChatHintPlayer);
   int hint_line_count = 1;
   if (!typing && text != nullptr) {
     const float hint_height = text->Measure(hint_text, max_text_width).height;
@@ -231,7 +232,7 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
 
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
-                    bool is_client) -> float {
+                    bool is_client, bool can_claim, bool can_release) -> float {
   if (renderer == nullptr || text == nullptr || token == nullptr) {
     return 0.0F;
   }
@@ -262,8 +263,11 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                      std::to_string(token->speed));
 
   std::vector<std::string> hints;
-  if (is_client && token->kind == TokenKind::kPlayer && token->owner.empty()) {
+  if (is_client && can_claim) {
     hints.emplace_back(strings::kClaimHint);
+  }
+  if (is_client && can_release) {
+    hints.emplace_back(strings::kReleaseHint);
   }
   if (is_client && token->owner == player_name) {
     hints.emplace_back(strings::kYourToken);
@@ -466,7 +470,7 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
   for (int i = 0; i < rows; ++i) {
     const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(i)];
     const std::string line = std::to_string(i + 1) + ". " + monster.name +
-                             "   AC " + std::to_string(monster.ac) + "   HP " +
+                             "   КД " + std::to_string(monster.ac) + "   HP " +
                              std::to_string(monster.max_hp);
     text->Draw(line, left, cursor_y, kLogText, content_width);
     cursor_y += text->LineHeight() + 2.0F;

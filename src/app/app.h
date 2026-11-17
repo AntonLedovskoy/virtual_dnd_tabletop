@@ -97,6 +97,8 @@ class App {
   auto HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto SpawnBestiary(int index) -> void;
   auto ClaimSelectedToken() -> void;
+  auto ReleaseSelectedToken() -> void;
+  [[nodiscard]] auto PlayerHasCharacter() const -> bool;
   auto CycleSelectedColor() -> void;
   auto AdjustSelectedHp(int delta) -> void;
   auto AdjustSelectedInitiative(int delta) -> void;

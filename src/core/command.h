@@ -62,6 +62,11 @@ struct ClaimToken {
   TokenId id = 0;
 };
 
+// Владелец: освободить своего персонажа, чтобы можно было взять другого.
+struct ReleaseToken {
+  TokenId id = 0;
+};
+
 // Только DM: назначить или очистить (пустой owner) владельца токена.
 struct SetTokenOwner {
   TokenId id = 0;
@@ -101,8 +106,8 @@ struct NextTurn {};
 
 using Command =
     std::variant<MoveToken, Say, RollDice, AddToken, RemoveToken, SetTokenHp,
-                 SetInitiative, ClaimToken, SetTokenOwner, RenameToken,
-                 SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, StartEncounter,
-                 EndEncounter, NextTurn>;
+                 SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner,
+                 RenameToken, SetTokenMaxHp, SetTokenColor, UpdateTokenSheet,
+                 StartEncounter, EndEncounter, NextTurn>;
 
 }  // namespace dnd

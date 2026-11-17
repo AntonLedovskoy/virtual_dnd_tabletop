@@ -19,15 +19,19 @@ inline constexpr std::string_view kPlayer = "персонаж";
 inline constexpr std::string_view kNpc = "NPC";
 inline constexpr std::string_view kMonster = "монстр";
 inline constexpr std::string_view kClaimHint = "C — забрать персонажа";
+inline constexpr std::string_view kReleaseHint = "R — освободить персонажа";
 inline constexpr std::string_view kYourToken = "это ваш персонаж";
 inline constexpr std::string_view kDmSpawnHint =
-    "P — персонаж, N — монстр, Del — удалить";
+    "P — персонаж, N — монстр, B — бестиарий, Del — удалить";
 inline constexpr std::string_view kDmCommandHint =
     "/rename имя | /owner имя | /maxhp N | /kick имя";
 inline constexpr std::string_view kColorHint = "V — цвет";
-inline constexpr std::string_view kChatHint =
-    "Enter — чат | /roll 2d6 | C — забрать | V — цвет | "
-    "DM: N монстр, P персонаж, Del удалить, +/- HP, [ ] иниц., T бой, G ход";
+inline constexpr std::string_view kChatHintDm =
+    "Enter — чат | /roll 2d6 | B — бестиарий | L — лист | "
+    "P персонаж, N монстр, Del удалить, +/- HP, [ ] иниц., T бой, G ход";
+inline constexpr std::string_view kChatHintPlayer =
+    "Enter — чат | /roll 2d6 | C — забрать | R — освободить | "
+    "L — лист | V — цвет";
 inline constexpr std::string_view kRejected = "Отклонено: ";
 inline constexpr std::string_view kSelectToken = "Сначала выберите токен";
 inline constexpr std::string_view kSelectTokenForCommand =
@@ -79,7 +83,7 @@ inline constexpr std::string_view kEditorSceneMissing =
     "Файл сцены не найден или повреждён";
 
 inline constexpr std::string_view kSheetTitle = "Лист";
-inline constexpr std::string_view kSheetAc = "AC";
+inline constexpr std::string_view kSheetAc = "КД";
 inline constexpr std::string_view kSheetSpeed = "Скорость";
 inline constexpr std::string_view kSheetNotes = "Атаки и заметки";
 inline constexpr std::string_view kSheetHint =

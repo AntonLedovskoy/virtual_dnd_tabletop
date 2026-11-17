@@ -268,8 +268,12 @@ auto TestClaimAndTokenAdmin() -> void {
                          .owner = "dm",
                          .kind = dnd::TokenKind::kMonster,
                          .cell = CellAt(2, 2)},
+              dnd::Token{.id = 3,
+                         .name = "second",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(3, 3)},
           },
-      .next_token_id = 3,
+      .next_token_id = 4,
   };
   dnd::GameServer server(snapshot, 8, 5);
 
@@ -291,6 +295,9 @@ auto TestClaimAndTokenAdmin() -> void {
          "claim broadcasts a token update");
   Expect(server.State().TokenCopy(1)->owner == "alice",
          "claim stores the player name");
+  Expect(
+      !server.HandleCommand(dnd::ClaimToken{.id = 3}, "alice", false).accepted,
+      "a player cannot claim a second character");
 
   Expect(!server
               .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 1)},
@@ -371,7 +378,7 @@ auto TestClaimAndTokenAdmin() -> void {
           .id = 1, .ac = 16, .speed = 25, .notes = "Атака: +5, 1d8+3"},
       "alice", false);
   Expect(sheet.accepted, "the owner can edit the character sheet");
-  Expect(server.State().TokenCopy(1)->ac == 16, "AC is stored");
+  Expect(server.State().TokenCopy(1)->ac == 16, "КД сохраняется");
   Expect(server.State().TokenCopy(1)->speed == 25, "speed is stored");
   Expect(server.State().TokenCopy(1)->notes == "Атака: +5, 1d8+3",
          "notes are stored");
@@ -388,7 +395,19 @@ auto TestClaimAndTokenAdmin() -> void {
                       .id = 1, .ac = 0, .speed = 30, .notes = ""},
                   "alice", false)
               .accepted,
-         "invalid AC is rejected");
+         "некорректный КД отвергается");
+
+  Expect(
+      !server.HandleCommand(dnd::ReleaseToken{.id = 1}, "bob", false).accepted,
+      "another player cannot release the character");
+  Expect(
+      server.HandleCommand(dnd::ReleaseToken{.id = 1}, "alice", false).accepted,
+      "the owner can release the character");
+  Expect(server.State().TokenCopy(1)->owner.empty(),
+         "released character becomes free");
+  Expect(
+      server.HandleCommand(dnd::ClaimToken{.id = 3}, "alice", false).accepted,
+      "the player can claim another character after releasing");
 }
 
 auto TestBestiary() -> void {
@@ -396,7 +415,7 @@ auto TestBestiary() -> void {
   Expect(!bestiary.empty(), "bestiary is not empty");
   if (!bestiary.empty()) {
     Expect(!bestiary.front().name.empty(), "bestiary entries have names");
-    Expect(bestiary.front().ac > 0, "bestiary entries have AC");
+    Expect(bestiary.front().ac > 0, "у записей бестиария есть КД");
     Expect(bestiary.front().max_hp > 0, "bestiary entries have HP");
   }
 }
@@ -883,6 +902,15 @@ auto TestCommandEventSerialization() -> void {
              std::holds_alternative<dnd::ClaimToken>(*claim_decoded) &&
              std::get<dnd::ClaimToken>(*claim_decoded).id == 4,
          "claim command survives serialization");
+
+  const dnd::Command release{dnd::ReleaseToken{.id = 4}};
+  const std::vector<std::uint8_t> release_bytes = dnd::EncodeCommand(release);
+  const std::optional<dnd::Command> release_decoded =
+      dnd::DecodeCommand(release_bytes.data(), release_bytes.size());
+  Expect(release_decoded.has_value() &&
+             std::holds_alternative<dnd::ReleaseToken>(*release_decoded) &&
+             std::get<dnd::ReleaseToken>(*release_decoded).id == 4,
+         "release command survives serialization");
 
   const dnd::Command owner{dnd::SetTokenOwner{.id = 4, .owner = "alice"}};
   const std::vector<std::uint8_t> owner_bytes = dnd::EncodeCommand(owner);

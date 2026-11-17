@@ -75,6 +75,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleSetInitiative(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, ClaimToken>) {
           return HandleClaimToken(cmd, actor);
+        } else if constexpr (std::is_same_v<T, ReleaseToken>) {
+          return HandleReleaseToken(cmd, actor);
         } else if constexpr (std::is_same_v<T, SetTokenOwner>) {
           return HandleSetTokenOwner(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, RenameToken>) {
@@ -209,7 +211,7 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   }
   if (command.ac <= 0 || command.ac > kMaxAc || command.speed < 0 ||
       command.speed > kMaxSpeed) {
-    return CommandOutcome{.reject_reason = "некорректные AC или скорость"};
+    return CommandOutcome{.reject_reason = "некорректные КД или скорость"};
   }
   if (command.notes.size() > kMaxNotes) {
     return CommandOutcome{.reject_reason = "заметки слишком длинные"};
@@ -341,9 +343,38 @@ auto GameServer::HandleClaimToken(const ClaimToken& command,
   if (!token->owner.empty() && token->owner != actor) {
     return CommandOutcome{.reject_reason = "токен контролирует другой игрок"};
   }
+  for (const Token& other : state_.Tokens()) {
+    if (other.id != command.id && other.kind == TokenKind::kPlayer &&
+        other.owner == actor) {
+      return CommandOutcome{.reject_reason = "у игрока уже есть персонаж"};
+    }
+  }
   const std::optional<Token> updated = state_.SetTokenOwner(command.id, actor);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось забрать персонажа"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  return outcome;
+}
+
+auto GameServer::HandleReleaseToken(const ReleaseToken& command,
+                                    const std::string& actor)
+    -> CommandOutcome {
+  if (actor.empty()) {
+    return CommandOutcome{.reject_reason = "DM использует /owner"};
+  }
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (token->owner != actor) {
+    return CommandOutcome{.reject_reason = "это не ваш персонаж"};
+  }
+  const std::optional<Token> updated = state_.SetTokenOwner(command.id, "");
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "не удалось освободить персонажа"};
   }
   CommandOutcome outcome;
   outcome.accepted = true;
@@ -455,7 +486,7 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   }
   if (command.ac <= 0 || command.ac > kMaxAc || command.speed < 0 ||
       command.speed > kMaxSpeed) {
-    return CommandOutcome{.reject_reason = "некорректные AC или скорость"};
+    return CommandOutcome{.reject_reason = "некорректные КД или скорость"};
   }
   if (command.notes.size() > kMaxNotes) {
     return CommandOutcome{.reject_reason = "заметки слишком длинные"};

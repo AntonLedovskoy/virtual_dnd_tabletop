@@ -938,6 +938,9 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SDLK_B:
       OpenBestiary();
       break;
+    case SDLK_R:
+      ReleaseSelectedToken();
+      break;
     case SDLK_HOME:
       CenterCamera();
       break;
@@ -1099,6 +1102,16 @@ auto App::FindSelectedToken() const -> const Token* {
   return nullptr;
 }
 
+auto App::PlayerHasCharacter() const -> bool {
+  for (const Token& token : view_.Tokens()) {
+    if (token.kind == TokenKind::kPlayer &&
+        token.owner == options_.player_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
 auto App::ClaimSelectedToken() -> void {
   const Token* token = FindSelectedToken();
   if (token == nullptr) {
@@ -1117,7 +1130,28 @@ auto App::ClaimSelectedToken() -> void {
     view_.AddLocalLine("Этот персонаж уже занят другим игроком");
     return;
   }
+  if (token->owner != options_.player_name && PlayerHasCharacter()) {
+    view_.AddLocalLine("У вас уже есть персонаж. Сначала освободите его (R)");
+    return;
+  }
   SendCommand(ClaimToken{.id = token->id});
+}
+
+auto App::ReleaseSelectedToken() -> void {
+  const Token* token = FindSelectedToken();
+  if (token == nullptr) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  if (options_.mode == AppMode::kHost) {
+    view_.AddLocalLine("DM: используйте /owner имя");
+    return;
+  }
+  if (token->owner != options_.player_name) {
+    view_.AddLocalLine("Это не ваш персонаж");
+    return;
+  }
+  SendCommand(ReleaseToken{.id = token->id});
 }
 
 auto App::CanEditToken(const Token& token) const -> bool {
@@ -1601,16 +1635,24 @@ auto App::Iterate() -> void {
   DrawTokens(renderer_, shown, cell_size_, camera_x_, camera_y_, text_.get(),
              selected_id_, active_id);
   DrawInitiativePanel(renderer_, text_.get(), view_.Tokens(), encounter);
+  const bool is_client = options_.mode == AppMode::kClient;
+  const Token* selected = FindSelectedToken();
+  const bool can_claim = is_client && selected != nullptr &&
+                         selected->kind == TokenKind::kPlayer &&
+                         selected->owner.empty() && !PlayerHasCharacter();
+  const bool can_release = is_client && selected != nullptr &&
+                           selected->owner == options_.player_name;
   const float token_bottom =
-      DrawTokenPanel(renderer_, text_.get(), FindSelectedToken(),
-                     options_.player_name, options_.mode == AppMode::kClient);
+      DrawTokenPanel(renderer_, text_.get(), selected, options_.player_name,
+                     is_client, can_claim, can_release);
   const float players_y = token_bottom > 0.0F ? token_bottom + 12.0F : 280.0F;
   DrawPlayersPanel(renderer_, text_.get(), players_, players_y);
   if (dragging_ && drag_target_.has_value()) {
     DrawCellHighlight(renderer_, *drag_target_, cell_size_, camera_x_,
                       camera_y_);
   }
-  DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_active_, chat_input_);
+  DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_active_, chat_input_,
+               options_.mode == AppMode::kHost);
   if (sheet_active_) {
     const Token* sheet_token = nullptr;
     for (const Token& token : view_.Tokens()) {
