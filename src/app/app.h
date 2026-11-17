@@ -92,6 +92,9 @@ class App {
   auto SaveSheet() -> void;
   auto HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleSheetTextInput(const char* text) -> void;
+  auto RollAttack(bool advantage) -> void;
+  auto RollSave() -> void;
+  auto RollInitiative() -> void;
   [[nodiscard]] auto CanEditToken(const Token& token) const -> bool;
   auto OpenBestiary() -> void;
   auto HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void;
@@ -141,6 +144,9 @@ class App {
   SheetField sheet_field_ = SheetField::kAc;
   std::string sheet_ac_;
   std::string sheet_speed_;
+  std::string sheet_attack_;
+  std::string sheet_save_;
+  std::string sheet_damage_;
   std::string sheet_notes_;
 
   bool bestiary_active_ = false;

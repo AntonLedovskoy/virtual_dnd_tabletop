@@ -69,6 +69,9 @@ class GameServer {
       -> CommandOutcome;
   [[nodiscard]] auto HandleRoll(const RollDice& command,
                                 const std::string& actor) -> CommandOutcome;
+  [[nodiscard]] auto HandleRollExpression(const RollExpression& command,
+                                          const std::string& actor)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleAddToken(const AddToken& command,
                                     bool can_control_all) -> CommandOutcome;
   [[nodiscard]] auto HandleRemoveToken(const RemoveToken& command,

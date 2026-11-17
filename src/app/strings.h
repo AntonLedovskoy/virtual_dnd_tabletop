@@ -27,11 +27,12 @@ inline constexpr std::string_view kDmCommandHint =
     "/rename имя | /owner имя | /maxhp N | /kick имя";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
-    "Enter — чат | /roll 2d6 | B — бестиарий | L — лист | "
-    "P персонаж, N монстр, Del удалить, +/- HP, [ ] иниц., T бой, G ход";
+    "Enter — чат | /roll d20+5 | A атака | S спасбросок | B бестиарий | "
+    "L лист | P персонаж, N монстр, Del удалить, +/- HP, [ ] иниц., T бой, G "
+    "ход";
 inline constexpr std::string_view kChatHintPlayer =
-    "Enter — чат | /roll 2d6 | C — забрать | R — освободить | "
-    "L — лист | V — цвет";
+    "Enter — чат | /roll d20+5 | A атака | S спасбросок | C забрать | "
+    "R освободить | L лист | V цвет";
 inline constexpr std::string_view kRejected = "Отклонено: ";
 inline constexpr std::string_view kSelectToken = "Сначала выберите токен";
 inline constexpr std::string_view kSelectTokenForCommand =
@@ -85,7 +86,10 @@ inline constexpr std::string_view kEditorSceneMissing =
 inline constexpr std::string_view kSheetTitle = "Лист";
 inline constexpr std::string_view kSheetAc = "КД";
 inline constexpr std::string_view kSheetSpeed = "Скорость";
-inline constexpr std::string_view kSheetNotes = "Атаки и заметки";
+inline constexpr std::string_view kSheetAttack = "Бонус атаки";
+inline constexpr std::string_view kSheetSave = "Бонус спасброска";
+inline constexpr std::string_view kSheetDamage = "Урон";
+inline constexpr std::string_view kSheetNotes = "Заметки";
 inline constexpr std::string_view kSheetHint =
     "Tab — поле | Enter — сохранить | Esc — закрыть";
 inline constexpr std::string_view kSheetNoAccess =

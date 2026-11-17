@@ -18,6 +18,7 @@
 
 #include "app/strings.h"
 #include "core/bestiary.h"
+#include "core/dice.h"
 #include "core/scene_io.h"
 #include "core/utf8.h"
 #include "net/tcp_socket.h"
@@ -117,15 +118,28 @@ auto ParseNumber(std::string_view text, int& value) -> bool {
   return true;
 }
 
-// Полезная нагрузка "/roll 2d6" -> count = 2, sides = 6.
-auto ParseDice(std::string_view text, int& count, int& sides) -> bool {
-  const auto separator = text.find('d');
-  if (separator == std::string_view::npos || separator == 0 ||
-      separator + 1 >= text.size()) {
+auto ParseSignedNumber(std::string_view text, int& value) -> bool {
+  if (text.empty()) {
     return false;
   }
-  return ParseNumber(text.substr(0, separator), count) &&
-         ParseNumber(text.substr(separator + 1), sides);
+  int parsed = 0;
+  const auto result =
+      std::from_chars(text.data(), text.data() + text.size(), parsed);
+  if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) {
+    return false;
+  }
+  value = parsed;
+  return true;
+}
+
+auto FormatBonus(int bonus) -> std::string {
+  if (bonus > 0) {
+    return "+" + std::to_string(bonus);
+  }
+  if (bonus < 0) {
+    return std::to_string(bonus);
+  }
+  return {};
 }
 
 auto ParsePortText(std::string_view text, std::uint16_t& port) -> bool {
@@ -941,6 +955,15 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SDLK_R:
       ReleaseSelectedToken();
       break;
+    case SDLK_A:
+      RollAttack((key.mod & SDL_KMOD_SHIFT) != 0);
+      break;
+    case SDLK_S:
+      RollSave();
+      break;
+    case SDLK_I:
+      RollInitiative();
+      break;
     case SDLK_HOME:
       CenterCamera();
       break;
@@ -1179,6 +1202,9 @@ auto App::OpenSheet() -> void {
   sheet_field_ = SheetField::kAc;
   sheet_ac_ = std::to_string(token->ac);
   sheet_speed_ = std::to_string(token->speed);
+  sheet_attack_ = std::to_string(token->attack_bonus);
+  sheet_save_ = std::to_string(token->save_bonus);
+  sheet_damage_ = token->damage;
   sheet_notes_ = token->notes;
 }
 
@@ -1190,9 +1216,21 @@ auto App::CloseSheet() -> void {
 auto App::SaveSheet() -> void {
   int ac = 0;
   int speed = 0;
-  if (!ParseNumber(sheet_ac_, ac) || !ParseNumber(sheet_speed_, speed)) {
-    view_.AddLocalLine("AC и скорость должны быть положительными числами");
+  int attack = 0;
+  int save = 0;
+  if (!ParseNumber(sheet_ac_, ac) || !ParseNumber(sheet_speed_, speed) ||
+      !ParseSignedNumber(sheet_attack_, attack) ||
+      !ParseSignedNumber(sheet_save_, save)) {
+    view_.AddLocalLine(
+        "КД и скорость должны быть положительными, бонусы — целыми числами");
     return;
+  }
+  if (!sheet_damage_.empty()) {
+    DiceExpression damage;
+    if (!ParseDiceExpression(sheet_damage_, damage)) {
+      view_.AddLocalLine("Некорректное выражение урона");
+      return;
+    }
   }
   const Token* token = nullptr;
   for (const Token& candidate : view_.Tokens()) {
@@ -1205,24 +1243,95 @@ auto App::SaveSheet() -> void {
     CloseSheet();
     return;
   }
-  SendCommand(UpdateTokenSheet{
-      .id = token->id, .ac = ac, .speed = speed, .notes = sheet_notes_});
+  SendCommand(UpdateTokenSheet{.id = token->id,
+                               .ac = ac,
+                               .speed = speed,
+                               .notes = sheet_notes_,
+                               .attack_bonus = attack,
+                               .save_bonus = save,
+                               .damage = sheet_damage_});
   CloseSheet();
+}
+
+auto App::RollAttack(bool advantage) -> void {
+  const Token* token = FindSelectedToken();
+  if (token == nullptr) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  std::string expression = "d20" + FormatBonus(token->attack_bonus);
+  if (advantage) {
+    expression = "adv " + expression;
+  }
+  SendCommand(RollExpression{
+      .expression = expression,
+      .label = advantage ? "Атака с преимуществом" : "Атака",
+  });
+  if (!token->damage.empty()) {
+    SendCommand(RollExpression{.expression = token->damage, .label = "Урон"});
+  }
+}
+
+auto App::RollSave() -> void {
+  const Token* token = FindSelectedToken();
+  if (token == nullptr) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  SendCommand(RollExpression{
+      .expression = "d20" + FormatBonus(token->save_bonus),
+      .label = "Спасбросок",
+  });
+}
+
+auto App::RollInitiative() -> void {
+  if (FindSelectedToken() == nullptr) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  SendCommand(RollExpression{.expression = "d20", .label = "Инициатива"});
 }
 
 auto App::HandleSheetTextInput(const char* text) -> void {
   if (text == nullptr) {
     return;
   }
-  if (sheet_field_ == SheetField::kAc || sheet_field_ == SheetField::kSpeed) {
-    std::string* buffer =
-        sheet_field_ == SheetField::kAc ? &sheet_ac_ : &sheet_speed_;
+  if (sheet_field_ == SheetField::kAc || sheet_field_ == SheetField::kSpeed ||
+      sheet_field_ == SheetField::kAttack ||
+      sheet_field_ == SheetField::kSave) {
+    std::string* buffer = nullptr;
+    switch (sheet_field_) {
+      case SheetField::kAc:
+        buffer = &sheet_ac_;
+        break;
+      case SheetField::kSpeed:
+        buffer = &sheet_speed_;
+        break;
+      case SheetField::kAttack:
+        buffer = &sheet_attack_;
+        break;
+      case SheetField::kSave:
+        buffer = &sheet_save_;
+        break;
+      default:
+        break;
+    }
+    if (buffer == nullptr) {
+      return;
+    }
     for (const char* it = text; *it != '\0'; ++it) {
-      if (*it >= '0' && *it <= '9') {
+      if ((*it >= '0' && *it <= '9') || (*it == '-' && buffer->empty() &&
+                                         (sheet_field_ == SheetField::kAttack ||
+                                          sheet_field_ == SheetField::kSave))) {
         buffer->push_back(*it);
       }
     }
     TruncateUtf8(*buffer, 5);
+    return;
+  }
+  if (sheet_field_ == SheetField::kDamage) {
+    sheet_damage_ += text;
+    TruncateUtf8(sheet_damage_, 64);
     return;
   }
   sheet_notes_ += text;
@@ -1239,7 +1348,7 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
     return;
   }
   if (key.key == SDLK_TAB) {
-    const int next = (static_cast<int>(sheet_field_) + 1) % 3;
+    const int next = (static_cast<int>(sheet_field_) + 1) % 6;
     sheet_field_ = static_cast<SheetField>(next);
     return;
   }
@@ -1253,6 +1362,15 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SheetField::kSpeed:
       buffer = &sheet_speed_;
+      break;
+    case SheetField::kAttack:
+      buffer = &sheet_attack_;
+      break;
+    case SheetField::kSave:
+      buffer = &sheet_save_;
+      break;
+    case SheetField::kDamage:
+      buffer = &sheet_damage_;
       break;
     case SheetField::kNotes:
       buffer = &sheet_notes_;
@@ -1301,6 +1419,9 @@ auto App::SpawnBestiary(int index) -> void {
       .ac = monster.ac,
       .speed = monster.speed,
       .notes = monster.notes,
+      .attack_bonus = monster.attack_bonus,
+      .save_bonus = monster.save_bonus,
+      .damage = monster.damage,
   });
   bestiary_active_ = false;
 }
@@ -1328,12 +1449,14 @@ auto App::SubmitChat() -> void {
     return;
   }
   if (text.starts_with("/roll ")) {
-    int count = 0;
-    int sides = 0;
-    if (ParseDice(std::string_view(text).substr(6), count, sides)) {
-      SendCommand(RollDice{.count = count, .sides = sides});
+    const std::string expression = text.substr(6);
+    DiceExpression parsed;
+    if (!ParseDiceExpression(expression, parsed)) {
+      view_.AddLocalLine("Использование: /roll d20+5, 2d6+3, adv d20+5");
       return;
     }
+    SendCommand(RollExpression{.expression = expression});
+    return;
   }
   if (text == "/claim") {
     ClaimSelectedToken();
@@ -1665,7 +1788,8 @@ auto App::Iterate() -> void {
       CloseSheet();
     } else {
       DrawSheetPanel(renderer_, text_.get(), *sheet_token, sheet_field_,
-                     sheet_ac_, sheet_speed_, sheet_notes_);
+                     sheet_ac_, sheet_speed_, sheet_attack_, sheet_save_,
+                     sheet_damage_, sheet_notes_);
     }
   }
   if (bestiary_active_) {

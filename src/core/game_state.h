@@ -32,7 +32,9 @@ class GameState {
                               TokenKind kind = TokenKind::kPlayer,
                               int max_hp = 10, std::uint32_t color = 0,
                               int ac = 10, int speed = 30,
-                              std::string notes = {}) -> TokenId;
+                              std::string notes = {}, int attack_bonus = 0,
+                              int save_bonus = 0, std::string damage = {})
+      -> TokenId;
 
   // Применяет команду клиента; возвращает событие для рассылки, если команда
   // изменила мир.
@@ -55,7 +57,8 @@ class GameState {
   [[nodiscard]] auto SetTokenColor(TokenId id, std::uint32_t color)
       -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenSheet(TokenId id, int ac, int speed,
-                                      std::string notes)
+                                      std::string notes, int attack_bonus,
+                                      int save_bonus, std::string damage)
       -> std::optional<Token>;
 
   // Боевой порядок.

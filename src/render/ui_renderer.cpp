@@ -389,7 +389,9 @@ auto DrawModalField(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token& token, SheetField active,
                     const std::string& ac, const std::string& speed,
-                    const std::string& notes) -> void {
+                    const std::string& attack, const std::string& save,
+                    const std::string& damage, const std::string& notes)
+    -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -399,7 +401,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
     return;
   }
   constexpr float width = 640.0F;
-  constexpr float height = 360.0F;
+  constexpr float height = 480.0F;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -411,7 +413,6 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
   const auto left = x + 40.0F;
-  const auto right = x + 40.0F;
   const auto content_width = width - 80.0F;
   auto cursor_y = y + 18.0F;
   text->Draw(std::string(strings::kSheetTitle) + ": " + token.name, left,
@@ -421,16 +422,26 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                  std::to_string(token.hp) + "/" + std::to_string(token.max_hp) +
                  "  Иниц. " + std::to_string(token.initiative),
              left, cursor_y, kHintText, content_width);
-  cursor_y += text->LineHeight() + 20.0F;
 
-  const SDL_FRect ac_field{left, cursor_y + 24.0F, 220.0F, 40.0F};
-  const SDL_FRect speed_field{left + 260.0F, cursor_y + 24.0F, 220.0F, 40.0F};
+  const SDL_FRect ac_field{left, y + 114.0F, 220.0F, 40.0F};
+  const SDL_FRect speed_field{left + 260.0F, y + 114.0F, 220.0F, 40.0F};
+  const SDL_FRect attack_field{left, y + 194.0F, 220.0F, 40.0F};
+  const SDL_FRect save_field{left + 260.0F, y + 194.0F, 220.0F, 40.0F};
+  const SDL_FRect damage_field{left, y + 274.0F, content_width, 40.0F};
+  const SDL_FRect notes_field{left, y + 354.0F, content_width, 40.0F};
+
   DrawModalField(renderer, text, ac_field, std::string(strings::kSheetAc), ac,
                  active == SheetField::kAc);
   DrawModalField(renderer, text, speed_field, std::string(strings::kSheetSpeed),
                  speed, active == SheetField::kSpeed);
-  cursor_y = ac_field.y + ac_field.h + 34.0F;
-  const SDL_FRect notes_field{right, cursor_y, content_width, 44.0F};
+  DrawModalField(renderer, text, attack_field,
+                 std::string(strings::kSheetAttack), attack,
+                 active == SheetField::kAttack);
+  DrawModalField(renderer, text, save_field, std::string(strings::kSheetSave),
+                 save, active == SheetField::kSave);
+  DrawModalField(renderer, text, damage_field,
+                 std::string(strings::kSheetDamage), damage,
+                 active == SheetField::kDamage);
   DrawModalField(renderer, text, notes_field, std::string(strings::kSheetNotes),
                  notes, active == SheetField::kNotes);
 

@@ -34,6 +34,7 @@ constexpr std::uint8_t kCommandSetTokenMaxHp = 14;
 constexpr std::uint8_t kCommandSetTokenColor = 15;
 constexpr std::uint8_t kCommandUpdateTokenSheet = 16;
 constexpr std::uint8_t kCommandReleaseToken = 17;
+constexpr std::uint8_t kCommandRollExpression = 18;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -57,6 +58,9 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.cell.x);
   writer.I32(token.cell.y);
   writer.String(token.notes);
+  writer.I32(token.attack_bonus);
+  writer.I32(token.save_bonus);
+  writer.String(token.damage);
 }
 
 auto ReadToken(ByteReader& reader, Token& token) -> bool {
@@ -73,16 +77,23 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::int32_t x = 0;
   std::int32_t y = 0;
   std::string notes;
+  std::int32_t attack_bonus = 0;
+  std::int32_t save_bonus = 0;
+  std::string damage;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(initiative) || !reader.I32(ac) ||
       !reader.I32(speed) || !reader.U8(kind) || !reader.U32(color) ||
-      !reader.I32(x) || !reader.I32(y) || !reader.String(notes, kMaxNotes)) {
+      !reader.I32(x) || !reader.I32(y) || !reader.String(notes, kMaxNotes) ||
+      !reader.I32(attack_bonus) || !reader.I32(save_bonus) ||
+      !reader.String(damage, kMaxNotes)) {
     return false;
   }
   if (max_hp < 0 || max_hp > 1000000 || initiative < -1000000 ||
       initiative > 1000000 || ac <= 0 || ac > 1000 || speed < 0 ||
-      speed > 1000 || kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
+      speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
+      save_bonus < -100 || save_bonus > 100 ||
+      kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0) {
     return false;
   }
@@ -96,6 +107,9 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .ac = ac,
       .speed = speed,
       .notes = std::move(notes),
+      .attack_bonus = attack_bonus,
+      .save_bonus = save_bonus,
+      .damage = std::move(damage),
       .kind = static_cast<TokenKind>(kind),
       .color = color,
       .cell = Cell{.x = x, .y = y},
@@ -212,6 +226,17 @@ auto DecodeRollCommand(ByteReader& reader) -> std::optional<Command> {
   }};
 }
 
+auto DecodeRollExpressionCommand(ByteReader& reader) -> std::optional<Command> {
+  std::string expression;
+  std::string label;
+  if (!reader.String(expression, kMaxNotes) ||
+      !reader.String(label, kMaxNotes) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{RollExpression{.expression = std::move(expression),
+                                .label = std::move(label)}};
+}
+
 auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
   std::string name;
   Cell cell;
@@ -221,14 +246,21 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
   std::int32_t ac = 10;
   std::int32_t speed = 30;
   std::string notes;
+  std::int32_t attack_bonus = 0;
+  std::int32_t save_bonus = 0;
+  std::string damage;
   if (!reader.String(name, kMaxNameLength) || !ReadPosition(reader, cell) ||
       !reader.String(owner, kMaxNameLength) || !reader.U8(kind) ||
       !reader.I32(max_hp) || !reader.I32(ac) || !reader.I32(speed) ||
-      !reader.String(notes, kMaxNotes) || !reader.Done()) {
+      !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
+      !reader.I32(save_bonus) || !reader.String(damage, kMaxNotes) ||
+      !reader.Done()) {
     return std::nullopt;
   }
   if (kind > static_cast<std::uint8_t>(TokenKind::kMonster) || max_hp <= 0 ||
-      max_hp > 1000000 || ac <= 0 || ac > 1000 || speed < 0 || speed > 1000) {
+      max_hp > 1000000 || ac <= 0 || ac > 1000 || speed < 0 || speed > 1000 ||
+      attack_bonus < -100 || attack_bonus > 100 || save_bonus < -100 ||
+      save_bonus > 100) {
     return std::nullopt;
   }
   return Command{AddToken{
@@ -240,6 +272,9 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
       .ac = ac,
       .speed = speed,
       .notes = std::move(notes),
+      .attack_bonus = attack_bonus,
+      .save_bonus = save_bonus,
+      .damage = std::move(damage),
   }};
 }
 
@@ -329,12 +364,22 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
   std::int32_t ac = 10;
   std::int32_t speed = 30;
   std::string notes;
+  std::int32_t attack_bonus = 0;
+  std::int32_t save_bonus = 0;
+  std::string damage;
   if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
-      !reader.String(notes, kMaxNotes) || !reader.Done()) {
+      !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
+      !reader.I32(save_bonus) || !reader.String(damage, kMaxNotes) ||
+      !reader.Done()) {
     return std::nullopt;
   }
-  return Command{UpdateTokenSheet{
-      .id = id, .ac = ac, .speed = speed, .notes = std::move(notes)}};
+  return Command{UpdateTokenSheet{.id = id,
+                                  .ac = ac,
+                                  .speed = speed,
+                                  .notes = std::move(notes),
+                                  .attack_bonus = attack_bonus,
+                                  .save_bonus = save_bonus,
+                                  .damage = std::move(damage)}};
 }
 
 auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
@@ -556,6 +601,10 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandRollDice);
           writer.U32(static_cast<std::uint32_t>(cmd.count));
           writer.U32(static_cast<std::uint32_t>(cmd.sides));
+        } else if constexpr (std::is_same_v<T, RollExpression>) {
+          writer.U8(kCommandRollExpression);
+          writer.String(cmd.expression);
+          writer.String(cmd.label);
         } else if constexpr (std::is_same_v<T, AddToken>) {
           writer.U8(kCommandAddToken);
           writer.String(cmd.name);
@@ -567,6 +616,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.ac);
           writer.I32(cmd.speed);
           writer.String(cmd.notes);
+          writer.I32(cmd.attack_bonus);
+          writer.I32(cmd.save_bonus);
+          writer.String(cmd.damage);
         } else if constexpr (std::is_same_v<T, RemoveToken>) {
           writer.U8(kCommandRemoveToken);
           writer.U32(cmd.id);
@@ -606,6 +658,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.ac);
           writer.I32(cmd.speed);
           writer.String(cmd.notes);
+          writer.I32(cmd.attack_bonus);
+          writer.I32(cmd.save_bonus);
+          writer.String(cmd.damage);
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           writer.U8(kCommandStartEncounter);
         } else if constexpr (std::is_same_v<T, EndEncounter>) {
@@ -632,6 +687,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeSayCommand(reader);
     case kCommandRollDice:
       return DecodeRollCommand(reader);
+    case kCommandRollExpression:
+      return DecodeRollExpressionCommand(reader);
     case kCommandAddToken:
       return DecodeAddCommand(reader);
     case kCommandRemoveToken:

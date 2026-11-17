@@ -1,12 +1,15 @@
+#include <algorithm>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <variant>
 #include <vector>
 
 #include "core/bestiary.h"
 #include "core/client_view.h"
+#include "core/dice.h"
 #include "core/game_server.h"
 #include "core/game_state.h"
 #include "core/grid_map.h"
@@ -373,15 +376,24 @@ auto TestClaimAndTokenAdmin() -> void {
   Expect(server.State().TokenCopy(1)->color == 0xC85046U,
          "the colour is stored");
 
-  const dnd::CommandOutcome sheet = server.HandleCommand(
-      dnd::UpdateTokenSheet{
-          .id = 1, .ac = 16, .speed = 25, .notes = "Атака: +5, 1d8+3"},
-      "alice", false);
+  const dnd::CommandOutcome sheet =
+      server.HandleCommand(dnd::UpdateTokenSheet{.id = 1,
+                                                 .ac = 16,
+                                                 .speed = 25,
+                                                 .notes = "Атака: +5, 1d8+3",
+                                                 .attack_bonus = 5,
+                                                 .save_bonus = 2,
+                                                 .damage = "1d8+3"},
+                           "alice", false);
   Expect(sheet.accepted, "the owner can edit the character sheet");
   Expect(server.State().TokenCopy(1)->ac == 16, "КД сохраняется");
   Expect(server.State().TokenCopy(1)->speed == 25, "speed is stored");
   Expect(server.State().TokenCopy(1)->notes == "Атака: +5, 1d8+3",
          "notes are stored");
+  Expect(server.State().TokenCopy(1)->attack_bonus == 5,
+         "attack bonus is stored");
+  Expect(server.State().TokenCopy(1)->save_bonus == 2, "save bonus is stored");
+  Expect(server.State().TokenCopy(1)->damage == "1d8+3", "damage is stored");
   Expect(!server
               .HandleCommand(
                   dnd::UpdateTokenSheet{
@@ -410,6 +422,51 @@ auto TestClaimAndTokenAdmin() -> void {
       "the player can claim another character after releasing");
 }
 
+auto TestDiceExpression() -> void {
+  dnd::DiceExpression expression;
+  Expect(dnd::ParseDiceExpression("d20+5", expression), "d20+5 is parsed");
+  Expect(expression.count == 1 && expression.sides == 20 &&
+             expression.modifier == 5,
+         "d20+5 fields are correct");
+  Expect(dnd::ParseDiceExpression("2d6-1", expression) &&
+             expression.count == 2 && expression.sides == 6 &&
+             expression.modifier == -1,
+         "2d6-1 is parsed");
+  Expect(dnd::ParseDiceExpression("adv d20+5", expression) &&
+             expression.advantage && !expression.disadvantage,
+         "advantage is parsed");
+  Expect(dnd::ParseDiceExpression("DIS d20", expression) &&
+             expression.disadvantage,
+         "disadvantage is case-insensitive");
+
+  Expect(!dnd::ParseDiceExpression("", expression), "empty expression fails");
+  Expect(!dnd::ParseDiceExpression("adv 2d6", expression),
+         "advantage requires d20");
+  Expect(!dnd::ParseDiceExpression("d1", expression), "one-sided dice fail");
+  Expect(!dnd::ParseDiceExpression("0d6", expression), "zero dice fail");
+  Expect(!dnd::ParseDiceExpression("21d6", expression), "too many dice fail");
+  Expect(!dnd::ParseDiceExpression("d20+101", expression),
+         "too large modifier fails");
+
+  std::mt19937 rng(7);
+  const dnd::DiceRollResult normal = dnd::RollDiceExpression(
+      dnd::DiceExpression{.count = 2, .sides = 6, .modifier = 3}, rng);
+  Expect(normal.rolls.size() == 2, "2d6 rolls two dice");
+  Expect(normal.rolls[0] >= 1 && normal.rolls[0] <= 6,
+         "die result is in range");
+  Expect(normal.total == normal.rolls[0] + normal.rolls[1] + 3,
+         "modifier is added to the total");
+  Expect(!normal.breakdown.empty(), "roll has a breakdown");
+
+  const dnd::DiceRollResult advantage = dnd::RollDiceExpression(
+      dnd::DiceExpression{.sides = 20, .modifier = 1, .advantage = true}, rng);
+  Expect(advantage.rolls.size() == 2, "advantage rolls two d20");
+  Expect(advantage.chosen == std::max(advantage.rolls[0], advantage.rolls[1]),
+         "advantage keeps the higher roll");
+  Expect(advantage.total == advantage.chosen + 1,
+         "advantage adds the modifier");
+}
+
 auto TestBestiary() -> void {
   const auto& bestiary = dnd::DefaultBestiary();
   Expect(!bestiary.empty(), "bestiary is not empty");
@@ -417,6 +474,8 @@ auto TestBestiary() -> void {
     Expect(!bestiary.front().name.empty(), "bestiary entries have names");
     Expect(bestiary.front().ac > 0, "у записей бестиария есть КД");
     Expect(bestiary.front().max_hp > 0, "bestiary entries have HP");
+    Expect(!bestiary.front().damage.empty(),
+           "bestiary entries have damage expressions");
   }
 }
 
@@ -698,6 +757,9 @@ auto TestSaveLoadRoundtrip() -> void {
                          .ac = 16,
                          .speed = 25,
                          .notes = "Атака: +5, 1d8+3",
+                         .attack_bonus = 5,
+                         .save_bonus = 2,
+                         .damage = "1d8+3",
                          .kind = dnd::TokenKind::kPlayer,
                          .color = 0x507AC8U,
                          .cell = CellAt(1, 1)},
@@ -738,6 +800,11 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().speed == 25, "token speed survives");
     Expect(loaded->tokens.front().notes == "Атака: +5, 1d8+3",
            "token notes survive");
+    Expect(loaded->tokens.front().attack_bonus == 5,
+           "token attack bonus survives");
+    Expect(loaded->tokens.front().save_bonus == 2, "token save bonus survives");
+    Expect(loaded->tokens.front().damage == "1d8+3",
+           "token damage expression survives");
     Expect(loaded->tokens.front().kind == dnd::TokenKind::kPlayer,
            "token kind survives");
     Expect(loaded->tokens.front().color == 0x507AC8U, "token colour survives");
@@ -803,6 +870,31 @@ auto TestChatAndDice() -> void {
     Expect(line.timestamp != 0, "dice roll carries a timestamp");
   }
 
+  const dnd::CommandOutcome expression_roll = server.HandleCommand(
+      dnd::RollExpression{.expression = "adv d20+5", .label = "Атака"}, "alice",
+      false);
+  Expect(expression_roll.accepted, "roll expression is accepted");
+  if (!expression_roll.events.empty() &&
+      std::holds_alternative<dnd::LogLineAdded>(
+          expression_roll.events.front())) {
+    const auto& line =
+        std::get<dnd::LogLineAdded>(expression_roll.events.front()).line;
+    Expect(line.text.find("Атака") != std::string::npos,
+           "roll label is included");
+    Expect(line.text.find("adv d20+5") != std::string::npos,
+           "roll expression is included");
+  }
+  Expect(!server
+              .HandleCommand(dnd::RollExpression{.expression = "adv 2d6"},
+                             "alice", false)
+              .accepted,
+         "invalid advantage expression is rejected");
+  Expect(!server
+              .HandleCommand(dnd::RollExpression{.expression = "nonsense"},
+                             "alice", false)
+              .accepted,
+         "invalid expression is rejected");
+
   Expect(
       !server
            .HandleCommand(dnd::RollDice{.count = 0, .sides = 6}, "alice", false)
@@ -854,6 +946,20 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::RollDice>(*roll_decoded).sides == 8,
          "roll survives serialization");
 
+  const dnd::Command expression_command{
+      dnd::RollExpression{.expression = "adv d20+5", .label = "Атака"}};
+  const std::vector<std::uint8_t> expression_bytes =
+      dnd::EncodeCommand(expression_command);
+  const std::optional<dnd::Command> expression_decoded =
+      dnd::DecodeCommand(expression_bytes.data(), expression_bytes.size());
+  Expect(
+      expression_decoded.has_value() &&
+          std::holds_alternative<dnd::RollExpression>(*expression_decoded) &&
+          std::get<dnd::RollExpression>(*expression_decoded).expression ==
+              "adv d20+5" &&
+          std::get<dnd::RollExpression>(*expression_decoded).label == "Атака",
+      "roll expression survives serialization");
+
   const dnd::Event line{dnd::LogLineAdded{
       .line =
           dnd::LogLine{.author = "bob", .text = "oops", .timestamp = 123456},
@@ -877,22 +983,29 @@ auto TestCommandEventSerialization() -> void {
       .ac = 14,
       .speed = 40,
       .notes = "Дубина: +4, 1d8+2",
+      .attack_bonus = 4,
+      .save_bonus = 1,
+      .damage = "1d8+2",
   }};
   const std::vector<std::uint8_t> add_bytes = dnd::EncodeCommand(add);
   const std::optional<dnd::Command> add_decoded =
       dnd::DecodeCommand(add_bytes.data(), add_bytes.size());
-  Expect(add_decoded.has_value() &&
-             std::holds_alternative<dnd::AddToken>(*add_decoded) &&
-             std::get<dnd::AddToken>(*add_decoded).name == "orc" &&
-             std::get<dnd::AddToken>(*add_decoded).cell == CellAt(5, 6) &&
-             std::get<dnd::AddToken>(*add_decoded).owner == "dm" &&
-             std::get<dnd::AddToken>(*add_decoded).kind ==
-                 dnd::TokenKind::kMonster &&
-             std::get<dnd::AddToken>(*add_decoded).max_hp == 13 &&
-             std::get<dnd::AddToken>(*add_decoded).ac == 14 &&
-             std::get<dnd::AddToken>(*add_decoded).speed == 40 &&
-             std::get<dnd::AddToken>(*add_decoded).notes == "Дубина: +4, 1d8+2",
-         "spawn command survives serialization");
+  Expect(
+      add_decoded.has_value() &&
+          std::holds_alternative<dnd::AddToken>(*add_decoded) &&
+          std::get<dnd::AddToken>(*add_decoded).name == "orc" &&
+          std::get<dnd::AddToken>(*add_decoded).cell == CellAt(5, 6) &&
+          std::get<dnd::AddToken>(*add_decoded).owner == "dm" &&
+          std::get<dnd::AddToken>(*add_decoded).kind ==
+              dnd::TokenKind::kMonster &&
+          std::get<dnd::AddToken>(*add_decoded).max_hp == 13 &&
+          std::get<dnd::AddToken>(*add_decoded).ac == 14 &&
+          std::get<dnd::AddToken>(*add_decoded).speed == 40 &&
+          std::get<dnd::AddToken>(*add_decoded).notes == "Дубина: +4, 1d8+2" &&
+          std::get<dnd::AddToken>(*add_decoded).attack_bonus == 4 &&
+          std::get<dnd::AddToken>(*add_decoded).save_bonus == 1 &&
+          std::get<dnd::AddToken>(*add_decoded).damage == "1d8+2",
+      "spawn command survives serialization");
 
   const dnd::Command claim{dnd::ClaimToken{.id = 4}};
   const std::vector<std::uint8_t> claim_bytes = dnd::EncodeCommand(claim);
@@ -948,19 +1061,29 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::SetTokenColor>(*color_decoded).color == 0xC85046U,
          "colour command survives serialization");
 
-  const dnd::Command sheet_command{dnd::UpdateTokenSheet{
-      .id = 4, .ac = 15, .speed = 30, .notes = "Атака: +4, 1d6+2"}};
+  const dnd::Command sheet_command{
+      dnd::UpdateTokenSheet{.id = 4,
+                            .ac = 15,
+                            .speed = 30,
+                            .notes = "Атака: +4, 1d6+2",
+                            .attack_bonus = 4,
+                            .save_bonus = 1,
+                            .damage = "1d6+2"}};
   const std::vector<std::uint8_t> sheet_bytes =
       dnd::EncodeCommand(sheet_command);
   const std::optional<dnd::Command> sheet_decoded =
       dnd::DecodeCommand(sheet_bytes.data(), sheet_bytes.size());
-  Expect(sheet_decoded.has_value() &&
-             std::holds_alternative<dnd::UpdateTokenSheet>(*sheet_decoded) &&
-             std::get<dnd::UpdateTokenSheet>(*sheet_decoded).ac == 15 &&
-             std::get<dnd::UpdateTokenSheet>(*sheet_decoded).speed == 30 &&
-             std::get<dnd::UpdateTokenSheet>(*sheet_decoded).notes ==
-                 "Атака: +4, 1d6+2",
-         "sheet command survives serialization");
+  Expect(
+      sheet_decoded.has_value() &&
+          std::holds_alternative<dnd::UpdateTokenSheet>(*sheet_decoded) &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).ac == 15 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).speed == 30 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).notes ==
+              "Атака: +4, 1d6+2" &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).attack_bonus == 4 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).save_bonus == 1 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).damage == "1d6+2",
+      "sheet command survives serialization");
 
   const dnd::Event updated{dnd::TokenUpdated{
       .token = dnd::Token{.id = 3,
@@ -972,6 +1095,9 @@ auto TestCommandEventSerialization() -> void {
                           .ac = 14,
                           .speed = 40,
                           .notes = "Дубина: +4, 1d8+2",
+                          .attack_bonus = 4,
+                          .save_bonus = 1,
+                          .damage = "1d8+2",
                           .kind = dnd::TokenKind::kMonster,
                           .color = 0x46A864U,
                           .cell = CellAt(1, 1)},
@@ -979,20 +1105,26 @@ auto TestCommandEventSerialization() -> void {
   const std::vector<std::uint8_t> updated_bytes = dnd::EncodeEvent(updated);
   const std::optional<dnd::Event> updated_decoded =
       dnd::DecodeEvent(updated_bytes.data(), updated_bytes.size());
-  Expect(updated_decoded.has_value() &&
-             std::holds_alternative<dnd::TokenUpdated>(*updated_decoded) &&
-             std::get<dnd::TokenUpdated>(*updated_decoded).token.hp == 2 &&
-             std::get<dnd::TokenUpdated>(*updated_decoded).token.initiative ==
-                 11 &&
-             std::get<dnd::TokenUpdated>(*updated_decoded).token.ac == 14 &&
-             std::get<dnd::TokenUpdated>(*updated_decoded).token.speed == 40 &&
-             std::get<dnd::TokenUpdated>(*updated_decoded).token.notes ==
-                 "Дубина: +4, 1d8+2" &&
-             std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
-                 dnd::TokenKind::kMonster &&
-             std::get<dnd::TokenUpdated>(*updated_decoded).token.color ==
-                 0x46A864U,
-         "token update survives serialization");
+  Expect(
+      updated_decoded.has_value() &&
+          std::holds_alternative<dnd::TokenUpdated>(*updated_decoded) &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.hp == 2 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.initiative ==
+              11 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.ac == 14 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.speed == 40 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.notes ==
+              "Дубина: +4, 1d8+2" &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.attack_bonus ==
+              4 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.save_bonus == 1 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.damage ==
+              "1d8+2" &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
+              dnd::TokenKind::kMonster &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.color ==
+              0x46A864U,
+      "token update survives serialization");
 
   const dnd::Command start{dnd::StartEncounter{}};
   const std::vector<std::uint8_t> start_bytes = dnd::EncodeCommand(start);
@@ -1036,6 +1168,7 @@ auto main() -> int {
     TestServerVisibility();
     TestOwnership();
     TestClaimAndTokenAdmin();
+    TestDiceExpression();
     TestBestiary();
     TestDynamicFogObservers();
     TestUtf8();

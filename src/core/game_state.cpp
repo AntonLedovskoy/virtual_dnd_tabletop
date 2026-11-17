@@ -33,7 +33,8 @@ auto GameState::TokenCopy(TokenId id) const -> std::optional<Token> {
 
 auto GameState::AddToken(std::string name, Cell cell, std::string owner,
                          TokenKind kind, int max_hp, std::uint32_t color,
-                         int ac, int speed, std::string notes) -> TokenId {
+                         int ac, int speed, std::string notes, int attack_bonus,
+                         int save_bonus, std::string damage) -> TokenId {
   const TokenId active = ActiveTokenId();
   const TokenId id = next_token_id_++;
   const int resolved_max_hp = std::max(1, max_hp);
@@ -45,6 +46,9 @@ auto GameState::AddToken(std::string name, Cell cell, std::string owner,
                           .ac = ac,
                           .speed = speed,
                           .notes = std::move(notes),
+                          .attack_bonus = attack_bonus,
+                          .save_bonus = save_bonus,
+                          .damage = std::move(damage),
                           .kind = kind,
                           .color = color,
                           .cell = cell});
@@ -153,7 +157,9 @@ auto GameState::SetTokenColor(TokenId id, std::uint32_t color)
 }
 
 auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
-                                 std::string notes) -> std::optional<Token> {
+                                 std::string notes, int attack_bonus,
+                                 int save_bonus, std::string damage)
+    -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -161,6 +167,9 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
   token->ac = ac;
   token->speed = speed;
   token->notes = std::move(notes);
+  token->attack_bonus = attack_bonus;
+  token->save_bonus = save_bonus;
+  token->damage = std::move(damage);
   return *token;
 }
 

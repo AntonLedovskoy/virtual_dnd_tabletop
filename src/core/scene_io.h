@@ -8,7 +8,7 @@
 namespace dnd {
 
 // Файлы сохранения — версионированный little-endian дамп GameSnapshot.
-inline constexpr auto kSaveVersion = 8U;
+inline constexpr auto kSaveVersion = 9U;
 
 auto WriteSnapshot(const GameSnapshot& snapshot,
                    const std::filesystem::path& path) -> bool;

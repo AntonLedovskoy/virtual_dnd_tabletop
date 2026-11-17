@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "core/clock.h"
+#include "core/dice.h"
 
 namespace dnd {
 namespace {
@@ -17,9 +18,12 @@ constexpr int kMaxDiceSides = 100;
 constexpr std::size_t kMaxChatLength = 256;
 constexpr std::size_t kMaxTokenName = 64;
 constexpr std::size_t kMaxNotes = 512;
+constexpr std::size_t kMaxDamageExpression = 64;
+constexpr std::size_t kMaxRollLabel = 64;
 constexpr int kMaxHp = 1000000;
 constexpr int kMaxAc = 1000;
 constexpr int kMaxSpeed = 1000;
+constexpr int kMaxBonus = 100;
 
 auto AuthorName(const std::string& actor) -> std::string {
   return actor.empty() ? "DM" : actor;
@@ -65,6 +69,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleSay(cmd, actor);
         } else if constexpr (std::is_same_v<T, RollDice>) {
           return HandleRoll(cmd, actor);
+        } else if constexpr (std::is_same_v<T, RollExpression>) {
+          return HandleRollExpression(cmd, actor);
         } else if constexpr (std::is_same_v<T, AddToken>) {
           return HandleAddToken(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, RemoveToken>) {
@@ -186,6 +192,39 @@ auto GameServer::HandleRoll(const RollDice& command, const std::string& actor)
   return outcome;
 }
 
+auto GameServer::HandleRollExpression(const RollExpression& command,
+                                      const std::string& actor)
+    -> CommandOutcome {
+  DiceExpression expression;
+  if (command.expression.empty() ||
+      command.expression.size() > kMaxDamageExpression ||
+      !ParseDiceExpression(command.expression, expression)) {
+    return CommandOutcome{.reject_reason = "некорректное выражение кубов"};
+  }
+  if (command.label.size() > kMaxRollLabel) {
+    return CommandOutcome{.reject_reason = "слишком длинная подпись броска"};
+  }
+
+  const DiceRollResult result = RollDiceExpression(expression, rng_);
+  std::ostringstream text;
+  if (!command.label.empty()) {
+    text << command.label << ": ";
+  }
+  text << command.expression << " = " << result.breakdown;
+  if (result.breakdown != std::to_string(result.total)) {
+    text << " = " << result.total;
+  }
+
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = AuthorName(actor),
+                      .text = text.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
+  return outcome;
+}
+
 auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
     -> CommandOutcome {
   if (!can_control_all) {
@@ -216,6 +255,19 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   if (command.notes.size() > kMaxNotes) {
     return CommandOutcome{.reject_reason = "заметки слишком длинные"};
   }
+  if (command.attack_bonus < -kMaxBonus || command.attack_bonus > kMaxBonus ||
+      command.save_bonus < -kMaxBonus || command.save_bonus > kMaxBonus) {
+    return CommandOutcome{.reject_reason = "некорректный бонус"};
+  }
+  if (command.damage.size() > kMaxDamageExpression) {
+    return CommandOutcome{.reject_reason = "слишком длинное выражение урона"};
+  }
+  if (!command.damage.empty()) {
+    DiceExpression damage;
+    if (!ParseDiceExpression(command.damage, damage)) {
+      return CommandOutcome{.reject_reason = "некорректное выражение урона"};
+    }
+  }
   std::string owner = command.owner;
   if (owner.size() > kMaxTokenName) {
     return CommandOutcome{.reject_reason = "имя владельца слишком длинное"};
@@ -225,9 +277,10 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   }
 
   const bool encounter_active = state_.EncounterState().active;
-  const TokenId id = state_.AddToken(name, command.cell, std::move(owner),
-                                     command.kind, command.max_hp, 0,
-                                     command.ac, command.speed, command.notes);
+  const TokenId id = state_.AddToken(
+      name, command.cell, std::move(owner), command.kind, command.max_hp, 0,
+      command.ac, command.speed, command.notes, command.attack_bonus,
+      command.save_bonus, command.damage);
   const std::optional<Token> token = state_.TokenCopy(id);
   if (!token.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось создать токен"};
@@ -491,8 +544,22 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   if (command.notes.size() > kMaxNotes) {
     return CommandOutcome{.reject_reason = "заметки слишком длинные"};
   }
+  if (command.attack_bonus < -kMaxBonus || command.attack_bonus > kMaxBonus ||
+      command.save_bonus < -kMaxBonus || command.save_bonus > kMaxBonus) {
+    return CommandOutcome{.reject_reason = "некорректный бонус"};
+  }
+  if (command.damage.size() > kMaxDamageExpression) {
+    return CommandOutcome{.reject_reason = "слишком длинное выражение урона"};
+  }
+  if (!command.damage.empty()) {
+    DiceExpression damage;
+    if (!ParseDiceExpression(command.damage, damage)) {
+      return CommandOutcome{.reject_reason = "некорректное выражение урона"};
+    }
+  }
   const std::optional<Token> updated = state_.UpdateTokenSheet(
-      command.id, command.ac, command.speed, command.notes);
+      command.id, command.ac, command.speed, command.notes,
+      command.attack_bonus, command.save_bonus, command.damage);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }

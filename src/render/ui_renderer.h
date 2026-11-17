@@ -35,13 +35,22 @@ auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
                       const std::vector<std::string>& players, float panel_y)
     -> void;
 
-enum class SheetField : std::uint8_t { kAc = 0, kSpeed = 1, kNotes = 2 };
+enum class SheetField : std::uint8_t {
+  kAc = 0,
+  kSpeed = 1,
+  kAttack = 2,
+  kSave = 3,
+  kDamage = 4,
+  kNotes = 5,
+};
 
 // Модальный лист персонажа или монстра.
 auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token& token, SheetField active,
                     const std::string& ac, const std::string& speed,
-                    const std::string& notes) -> void;
+                    const std::string& attack, const std::string& save,
+                    const std::string& damage, const std::string& notes)
+    -> void;
 
 // Модальный список встроенного бестиария.
 auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,

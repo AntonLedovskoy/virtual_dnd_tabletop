@@ -28,6 +28,13 @@ struct RollDice {
   int sides = 20;
 };
 
+// Бросок выражения вида d20+5, 2d6+3 или adv d20+5. label — необязательная
+// подпись в логе, например «Атака» или «Спасбросок».
+struct RollExpression {
+  std::string expression;
+  std::string label;
+};
+
 // Только DM: создать токен (пустое имя заменяется автоматическим). Токены
 // персонажей по умолчанию свободны, затем игрок может их забрать.
 struct AddToken {
@@ -39,6 +46,9 @@ struct AddToken {
   int ac = 10;
   int speed = 30;
   std::string notes;
+  int attack_bonus = 0;
+  int save_bonus = 0;
+  std::string damage;
 };
 
 // Только DM: удалить токен.
@@ -97,6 +107,9 @@ struct UpdateTokenSheet {
   int ac = 10;
   int speed = 30;
   std::string notes;
+  int attack_bonus = 0;
+  int save_bonus = 0;
+  std::string damage;
 };
 
 // Управление боем, доступное только DM.
@@ -104,10 +117,10 @@ struct StartEncounter {};
 struct EndEncounter {};
 struct NextTurn {};
 
-using Command =
-    std::variant<MoveToken, Say, RollDice, AddToken, RemoveToken, SetTokenHp,
-                 SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner,
-                 RenameToken, SetTokenMaxHp, SetTokenColor, UpdateTokenSheet,
-                 StartEncounter, EndEncounter, NextTurn>;
+using Command = std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
+                             RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
+                             ReleaseToken, SetTokenOwner, RenameToken,
+                             SetTokenMaxHp, SetTokenColor, UpdateTokenSheet,
+                             StartEncounter, EndEncounter, NextTurn>;
 
 }  // namespace dnd
