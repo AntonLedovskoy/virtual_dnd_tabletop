@@ -13,8 +13,8 @@ namespace dnd {
 class TextRenderer;
 struct Token;
 
-// Grid, walls, tokens and fog. offset_x/offset_y are the camera position in
-// window pixels; cell_size is already zoomed.
+// Сетка, стены, токены и туман. offset_x/offset_y — позиция камеры в пикселях
+// окна; cell_size уже учитывает зум.
 auto DrawGrid(SDL_Renderer* renderer, const GridMap& map, float cell_size,
               float offset_x, float offset_y) -> void;
 auto DrawWalls(SDL_Renderer* renderer, const GridMap& map, float cell_size,

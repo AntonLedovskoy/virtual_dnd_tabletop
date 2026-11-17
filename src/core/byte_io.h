@@ -7,8 +7,8 @@
 
 namespace dnd {
 
-// Minimal little-endian binary encoding shared by save files and the network
-// protocol.
+// Минимальное little-endian бинарное кодирование, общее для файлов
+// сохранения и сетевого протокола.
 class ByteWriter {
  public:
   auto U8(std::uint8_t value) -> void;

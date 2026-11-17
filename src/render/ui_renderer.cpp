@@ -17,6 +17,8 @@ namespace {
 
 constexpr SDL_Color kPanelBackground{
     .r = 0x0c, .g = 0x0c, .b = 0x12, .a = 0xd0};
+constexpr SDL_Color kModalBackground{
+    .r = 0x0c, .g = 0x0c, .b = 0x12, .a = SDL_ALPHA_OPAQUE};
 constexpr SDL_Color kPanelBorder{
     .r = 0x3a, .g = 0x3a, .b = 0x48, .a = SDL_ALPHA_OPAQUE};
 constexpr SDL_Color kLogText{
@@ -254,6 +256,10 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                      std::to_string(token->max_hp) + "   " +
                      std::string(strings::kInitiativeShort) + " " +
                      std::to_string(token->initiative));
+  lines.emplace_back(std::string(strings::kSheetAc) + ": " +
+                     std::to_string(token->ac) + "   " +
+                     std::string(strings::kSheetSpeed) + ": " +
+                     std::to_string(token->speed));
 
   std::vector<std::string> hints;
   if (is_client && token->kind == TokenKind::kPlayer && token->owner.empty()) {
@@ -354,6 +360,119 @@ auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
                max_text_width);
     y += static_cast<float>(line_height);
   }
+}
+
+namespace {
+
+auto DrawModalField(SDL_Renderer* renderer, TextRenderer* text,
+                    const SDL_FRect& rect, const std::string& label,
+                    const std::string& value, bool active) -> void {
+  const SDL_Color border =
+      active ? SDL_Color{.r = 0x6c, .g = 0xa8, .b = 0xff, .a = SDL_ALPHA_OPAQUE}
+             : kPanelBorder;
+  text->Draw(label, rect.x, rect.y - 24.0F, active ? border : kHintText,
+             rect.w);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &rect);
+  SetDrawColor(renderer, border);
+  SDL_RenderRect(renderer, &rect);
+  const float text_y = rect.y + ((rect.h - text->LineHeight()) / 2.0F);
+  text->Draw(value, rect.x + 10.0F, text_y, kLogText, rect.w - 20.0F);
+}
+
+}  // namespace
+
+auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
+                    const Token& token, SheetField active,
+                    const std::string& ac, const std::string& speed,
+                    const std::string& notes) -> void {
+  if (renderer == nullptr || text == nullptr) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+    return;
+  }
+  constexpr float width = 640.0F;
+  constexpr float height = 360.0F;
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const auto left = x + 40.0F;
+  const auto right = x + 40.0F;
+  const auto content_width = width - 80.0F;
+  auto cursor_y = y + 18.0F;
+  text->Draw(std::string(strings::kSheetTitle) + ": " + token.name, left,
+             cursor_y, kAuthorText, content_width);
+  cursor_y += text->LineHeight() + 8.0F;
+  text->Draw(std::string(KindLabel(token.kind)) + "  HP " +
+                 std::to_string(token.hp) + "/" + std::to_string(token.max_hp) +
+                 "  Иниц. " + std::to_string(token.initiative),
+             left, cursor_y, kHintText, content_width);
+  cursor_y += text->LineHeight() + 20.0F;
+
+  const SDL_FRect ac_field{left, cursor_y + 24.0F, 220.0F, 40.0F};
+  const SDL_FRect speed_field{left + 260.0F, cursor_y + 24.0F, 220.0F, 40.0F};
+  DrawModalField(renderer, text, ac_field, std::string(strings::kSheetAc), ac,
+                 active == SheetField::kAc);
+  DrawModalField(renderer, text, speed_field, std::string(strings::kSheetSpeed),
+                 speed, active == SheetField::kSpeed);
+  cursor_y = ac_field.y + ac_field.h + 34.0F;
+  const SDL_FRect notes_field{right, cursor_y, content_width, 44.0F};
+  DrawModalField(renderer, text, notes_field, std::string(strings::kSheetNotes),
+                 notes, active == SheetField::kNotes);
+
+  text->Draw(std::string(strings::kSheetHint), left, y + height - 30.0F,
+             kHintText, content_width);
+}
+
+auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
+                       const std::vector<MonsterTemplate>& bestiary) -> void {
+  if (renderer == nullptr || text == nullptr) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+    return;
+  }
+  constexpr float width = 560.0F;
+  constexpr float height = 300.0F;
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const auto left = x + 30.0F;
+  const auto content_width = width - 60.0F;
+  auto cursor_y = y + 18.0F;
+  text->Draw(std::string(strings::kBestiaryTitle), left, cursor_y, kAuthorText,
+             content_width);
+  cursor_y += text->LineHeight() + 10.0F;
+  const int rows = std::min<int>(5, static_cast<int>(bestiary.size()));
+  for (int i = 0; i < rows; ++i) {
+    const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(i)];
+    const std::string line = std::to_string(i + 1) + ". " + monster.name +
+                             "   AC " + std::to_string(monster.ac) + "   HP " +
+                             std::to_string(monster.max_hp);
+    text->Draw(line, left, cursor_y, kLogText, content_width);
+    cursor_y += text->LineHeight() + 2.0F;
+  }
+  text->Draw(std::string(strings::kBestiaryHint), left, y + height - 30.0F,
+             kHintText, content_width);
 }
 
 }  // namespace dnd

@@ -16,7 +16,10 @@ constexpr int kMinDiceSides = 2;
 constexpr int kMaxDiceSides = 100;
 constexpr std::size_t kMaxChatLength = 256;
 constexpr std::size_t kMaxTokenName = 64;
+constexpr std::size_t kMaxNotes = 512;
 constexpr int kMaxHp = 1000000;
+constexpr int kMaxAc = 1000;
+constexpr int kMaxSpeed = 1000;
 
 auto AuthorName(const std::string& actor) -> std::string {
   return actor.empty() ? "DM" : actor;
@@ -80,6 +83,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleSetTokenMaxHp(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, SetTokenColor>) {
           return HandleSetTokenColor(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, UpdateTokenSheet>) {
+          return HandleUpdateTokenSheet(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           return HandleStartEncounter(can_control_all);
         } else if constexpr (std::is_same_v<T, EndEncounter>) {
@@ -96,8 +101,8 @@ auto GameServer::CanControl(const Token& token, const std::string& actor,
   if (can_control_all) {
     return true;
   }
-  // Player characters stay locked until somebody claims them. Free NPCs and
-  // party tokens may still be moved by any player.
+  // Персонажи заблокированы, пока их кто-нибудь не заберёт. Свободных NPC
+  // и общие токены по-прежнему может двигать любой игрок.
   if (token.kind == TokenKind::kPlayer && token.owner.empty()) {
     return false;
   }
@@ -202,6 +207,13 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   if (command.max_hp <= 0 || command.max_hp > kMaxHp) {
     return CommandOutcome{.reject_reason = "некорректный максимум HP"};
   }
+  if (command.ac <= 0 || command.ac > kMaxAc || command.speed < 0 ||
+      command.speed > kMaxSpeed) {
+    return CommandOutcome{.reject_reason = "некорректные AC или скорость"};
+  }
+  if (command.notes.size() > kMaxNotes) {
+    return CommandOutcome{.reject_reason = "заметки слишком длинные"};
+  }
   std::string owner = command.owner;
   if (owner.size() > kMaxTokenName) {
     return CommandOutcome{.reject_reason = "имя владельца слишком длинное"};
@@ -212,7 +224,8 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
 
   const bool encounter_active = state_.EncounterState().active;
   const TokenId id = state_.AddToken(name, command.cell, std::move(owner),
-                                     command.kind, command.max_hp);
+                                     command.kind, command.max_hp, 0,
+                                     command.ac, command.speed, command.notes);
   const std::optional<Token> token = state_.TokenCopy(id);
   if (!token.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось создать токен"};
@@ -225,7 +238,7 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
         EncounterUpdated{.encounter = state_.EncounterState()});
   }
   if (command.kind == TokenKind::kPlayer) {
-    // A new player character can change what the party sees.
+    // Новый персонаж может изменить обзор партии.
     RecomputeFog();
     outcome.events.emplace_back(ViewUpdated{
         .snapshot = ClientSnapshot(),
@@ -422,6 +435,35 @@ auto GameServer::HandleSetTokenColor(const SetTokenColor& command,
       state_.SetTokenColor(command.id, command.color);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить токен"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  return outcome;
+}
+
+auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
+                                        const std::string& actor,
+                                        bool can_control_all)
+    -> CommandOutcome {
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!CanControl(*token, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  if (command.ac <= 0 || command.ac > kMaxAc || command.speed < 0 ||
+      command.speed > kMaxSpeed) {
+    return CommandOutcome{.reject_reason = "некорректные AC или скорость"};
+  }
+  if (command.notes.size() > kMaxNotes) {
+    return CommandOutcome{.reject_reason = "заметки слишком длинные"};
+  }
+  const std::optional<Token> updated = state_.UpdateTokenSheet(
+      command.id, command.ac, command.speed, command.notes);
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }
   CommandOutcome outcome;
   outcome.accepted = true;

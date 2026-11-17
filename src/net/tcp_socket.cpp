@@ -192,7 +192,7 @@ auto TcpConnection::TryCompleteConnect() -> bool {
   const timeval timeout{};
   const int ready = select(0, nullptr, &writable, nullptr, &timeout);
   if (ready == 0) {
-    return true;  // still connecting, try again next frame
+    return true;  // ещё подключается, повторим в следующем кадре
   }
   if (ready < 0) {
     connecting_ = false;

@@ -13,8 +13,8 @@
 
 namespace dnd {
 
-// Authoritative world state. Local play runs it in-process next to the client;
-// over the network it will live on the host only.
+// Авторитетное состояние мира. В локальной игре работает в том же процессе
+// рядом с клиентом; по сети живёт только на хосте.
 class GameState {
  public:
   explicit GameState(GridMap map);
@@ -30,15 +30,16 @@ class GameState {
   [[nodiscard]] auto AddToken(std::string name, Cell cell,
                               std::string owner = {},
                               TokenKind kind = TokenKind::kPlayer,
-                              int max_hp = 10, std::uint32_t color = 0)
-      -> TokenId;
+                              int max_hp = 10, std::uint32_t color = 0,
+                              int ac = 10, int speed = 30,
+                              std::string notes = {}) -> TokenId;
 
-  // Applies a client command; returns the event to broadcast when the command
-  // changed the world.
+  // Применяет команду клиента; возвращает событие для рассылки, если команда
+  // изменила мир.
   [[nodiscard]] auto ApplyCommand(const Command& command)
       -> std::optional<Event>;
 
-  // Client-side view update: only events are allowed to move tokens.
+  // Обновление вида на клиенте: двигать токены разрешено только событиями.
   auto ApplyEvent(const Event& event) -> void;
 
   auto RemoveToken(TokenId id) -> bool;
@@ -53,8 +54,11 @@ class GameState {
       -> std::optional<Token>;
   [[nodiscard]] auto SetTokenColor(TokenId id, std::uint32_t color)
       -> std::optional<Token>;
+  [[nodiscard]] auto UpdateTokenSheet(TokenId id, int ac, int speed,
+                                      std::string notes)
+      -> std::optional<Token>;
 
-  // Combat order.
+  // Боевой порядок.
   [[nodiscard]] auto EncounterState() const -> const Encounter& {
     return encounter_;
   }

@@ -8,7 +8,7 @@
 
 namespace dnd {
 
-// Transferable form of a FogOfWar instance.
+// Передаваемая форма экземпляра FogOfWar.
 struct FogSnapshot {
   int width = 0;
   int height = 0;
@@ -16,8 +16,8 @@ struct FogSnapshot {
   std::vector<std::uint8_t> explored;
 };
 
-// Per-viewer fog: what is currently in line of sight and what has ever been
-// seen. The authoritative side keeps one instance per player.
+// Туман для каждого наблюдателя: что сейчас в поле зрения и что когда-либо
+// было увидено. Авторитетная сторона хранит по одному экземпляру на игрока.
 class FogOfWar {
  public:
   FogOfWar(int width, int height);
@@ -27,8 +27,8 @@ class FogOfWar {
   [[nodiscard]] auto IsVisible(Cell cell) const -> bool;
   [[nodiscard]] auto IsExplored(Cell cell) const -> bool;
 
-  // Recomputes the visible set from the observers' positions and folds it into
-  // the explored set. Observers outside the map are ignored.
+  // Пересчитывает видимое множество по позициям наблюдателей и добавляет его
+  // в исследованное. Наблюдатели вне карты игнорируются.
   auto Recompute(const GridMap& map, const std::vector<Cell>& observers,
                  int radius) -> void;
 

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "core/bestiary.h"
 #include "core/encounter.h"
 #include "core/log_line.h"
 #include "core/token.h"
@@ -13,25 +14,37 @@ namespace dnd {
 
 class TextRenderer;
 
-// Bottom overlay with the shared table log and the chat input line.
+// Нижняя панель с общим логом стола и строкой ввода чата.
 auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                   const std::vector<LogLine>& lines, bool typing,
                   const std::string& input) -> void;
 
-// Top-right initiative order of the tokens the client can see.
+// Порядок инициативы справа сверху для видимых клиенту токенов.
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
                          const std::vector<Token>& tokens,
                          const Encounter& encounter) -> void;
 
-// Top-left details for the selected token, including claim/owner hints.
-// Returns the bottom edge of the panel, or 0 when nothing was drawn.
+// Сведения о выбранном токене слева сверху, включая подсказки о владельце.
+// Возвращает нижнюю границу панели или 0, если ничего не нарисовано.
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
                     bool is_client) -> float;
 
-// Left-side player list from the host roster, placed at the requested y.
+// Список игроков слева из ростера хоста, размещается на заданной координате y.
 auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
                       const std::vector<std::string>& players, float panel_y)
     -> void;
+
+enum class SheetField : std::uint8_t { kAc = 0, kSpeed = 1, kNotes = 2 };
+
+// Модальный лист персонажа или монстра.
+auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
+                    const Token& token, SheetField active,
+                    const std::string& ac, const std::string& speed,
+                    const std::string& notes) -> void;
+
+// Модальный список встроенного бестиария.
+auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
+                       const std::vector<MonsterTemplate>& bestiary) -> void;
 
 }  // namespace dnd

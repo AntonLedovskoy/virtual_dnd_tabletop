@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-# Build every dependency as a static library so the executable is self-contained.
+# Собираем все зависимости статически, чтобы исполняемый файл был автономным.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 set(SDL3_VERSION       release-3.4.20)
@@ -17,7 +17,7 @@ set(SDL3_TTF_VERSION   release-3.2.2)
 set(SDL3_IMAGE_VERSION release-3.4.8)
 set(SDL3_NET_VERSION   release-3.2.0)
 
-# SDL3 core: static only, no tests/examples/install rules
+# Ядро SDL3: только статически, без тестов, примеров и установки
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
@@ -25,13 +25,13 @@ set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
 
-# SDL3_ttf: vendor FreeType/HarfBuzz/plutosvg, no samples
+# SDL3_ttf: встроенные FreeType/HarfBuzz/plutosvg, без примеров
 set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
 set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
 set(SDLTTF_INSTALL OFF CACHE BOOL "" FORCE)
 set(SDLTTF_INSTALL_CPACK OFF CACHE BOOL "" FORCE)
 
-# SDL3_image: vendor the decoders, keep only the commonly needed formats
+# SDL3_image: встроенные декодеры, только часто нужные форматы
 set(SDLIMAGE_VENDORED ON CACHE BOOL "" FORCE)
 set(SDLIMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_TESTS OFF CACHE BOOL "" FORCE)
@@ -42,13 +42,13 @@ set(SDLIMAGE_JXL OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_TIF OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_WEBP OFF CACHE BOOL "" FORCE)
 
-# SDL3_net: no samples
+# SDL3_net: без примеров
 set(SDLNET_SAMPLES OFF CACHE BOOL "" FORCE)
 set(SDLNET_INSTALL OFF CACHE BOOL "" FORCE)
 
-# The satellite libraries keep their vendored decoders (FreeType, HarfBuzz,
-# libpng, ...) in git submodules, so they are fetched as git clones. A plain
-# source archive would lack the external/ directories.
+# Дочерние библиотеки хранят встроенные декодеры (FreeType, HarfBuzz,
+# libpng, ...) в git-подмодулях, поэтому они скачиваются git-клонами.
+# Обычный архив исходников был бы без каталогов external/.
 FetchContent_Declare(
   SDL3
   GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
@@ -84,14 +84,15 @@ FetchContent_Declare(
   SYSTEM
 )
 
-# SDL3 must be available first: the satellite libraries reuse SDL3::Headers and
-# SDL3::SDL3 when those targets are already defined instead of looking for an
-# installed SDL3 package.
+# SDL3 должен быть доступен первым: дочерние библиотеки переиспользуют
+# SDL3::Headers и SDL3::SDL3, если эти цели уже определены, вместо поиска
+# установленного пакета SDL3.
 FetchContent_MakeAvailable(SDL3 SDL3_image SDL3_ttf SDL3_net)
 
-# MinGW's io.h declares POSIX read()/write(), which clash with the static
-# Windows helpers of the same name inside SDL_net. NO_OLDNAMES hides those
-# legacy declarations for the SDL_net translation units only.
+# io.h из MinGW объявляет POSIX read()/write(), которые конфликтуют со
+# статическими Windows-хелперами с теми же именами внутри SDL_net.
+# NO_OLDNAMES скрывает эти устаревшие объявления только для единиц
+# трансляции SDL_net.
 if(WIN32 AND TARGET SDL3_net-static)
   target_compile_definitions(SDL3_net-static PRIVATE NO_OLDNAMES)
 elseif(WIN32 AND TARGET SDL3_net-shared)
@@ -99,6 +100,7 @@ elseif(WIN32 AND TARGET SDL3_net-shared)
 endif()
 
 add_library(dnd_core STATIC
+  src/core/bestiary.cpp
   src/core/byte_io.cpp
   src/core/client_view.cpp
   src/core/game_server.cpp

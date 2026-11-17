@@ -15,6 +15,7 @@ constexpr std::uint32_t kMaxNameLength = 256;
 constexpr std::uint32_t kMaxChatText = 256;
 constexpr std::uint32_t kMaxLogText = 512;
 constexpr std::uint32_t kMaxLogAuthor = 64;
+constexpr std::uint32_t kMaxNotes = 512;
 
 constexpr std::uint8_t kCommandMoveToken = 1;
 constexpr std::uint8_t kCommandSay = 2;
@@ -31,6 +32,7 @@ constexpr std::uint8_t kCommandSetTokenOwner = 12;
 constexpr std::uint8_t kCommandRenameToken = 13;
 constexpr std::uint8_t kCommandSetTokenMaxHp = 14;
 constexpr std::uint8_t kCommandSetTokenColor = 15;
+constexpr std::uint8_t kCommandUpdateTokenSheet = 16;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -47,10 +49,13 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.hp);
   writer.I32(token.max_hp);
   writer.I32(token.initiative);
+  writer.I32(token.ac);
+  writer.I32(token.speed);
   writer.U8(static_cast<std::uint8_t>(token.kind));
   writer.U32(token.color);
   writer.I32(token.cell.x);
   writer.I32(token.cell.y);
+  writer.String(token.notes);
 }
 
 auto ReadToken(ByteReader& reader, Token& token) -> bool {
@@ -60,19 +65,23 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::int32_t hp = 0;
   std::int32_t max_hp = 0;
   std::int32_t initiative = 0;
+  std::int32_t ac = 10;
+  std::int32_t speed = 30;
   std::uint8_t kind = 0;
   std::uint32_t color = 0;
   std::int32_t x = 0;
   std::int32_t y = 0;
+  std::string notes;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
-      !reader.I32(max_hp) || !reader.I32(initiative) || !reader.U8(kind) ||
-      !reader.U32(color) || !reader.I32(x) || !reader.I32(y)) {
+      !reader.I32(max_hp) || !reader.I32(initiative) || !reader.I32(ac) ||
+      !reader.I32(speed) || !reader.U8(kind) || !reader.U32(color) ||
+      !reader.I32(x) || !reader.I32(y) || !reader.String(notes, kMaxNotes)) {
     return false;
   }
   if (max_hp < 0 || max_hp > 1000000 || initiative < -1000000 ||
-      initiative > 1000000 ||
-      kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
+      initiative > 1000000 || ac <= 0 || ac > 1000 || speed < 0 ||
+      speed > 1000 || kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0) {
     return false;
   }
@@ -83,6 +92,9 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .hp = hp,
       .max_hp = max_hp,
       .initiative = initiative,
+      .ac = ac,
+      .speed = speed,
+      .notes = std::move(notes),
       .kind = static_cast<TokenKind>(kind),
       .color = color,
       .cell = Cell{.x = x, .y = y},
@@ -205,13 +217,17 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
   std::string owner;
   std::uint8_t kind = 0;
   std::int32_t max_hp = 0;
+  std::int32_t ac = 10;
+  std::int32_t speed = 30;
+  std::string notes;
   if (!reader.String(name, kMaxNameLength) || !ReadPosition(reader, cell) ||
       !reader.String(owner, kMaxNameLength) || !reader.U8(kind) ||
-      !reader.I32(max_hp) || !reader.Done()) {
+      !reader.I32(max_hp) || !reader.I32(ac) || !reader.I32(speed) ||
+      !reader.String(notes, kMaxNotes) || !reader.Done()) {
     return std::nullopt;
   }
   if (kind > static_cast<std::uint8_t>(TokenKind::kMonster) || max_hp <= 0 ||
-      max_hp > 1000000) {
+      max_hp > 1000000 || ac <= 0 || ac > 1000 || speed < 0 || speed > 1000) {
     return std::nullopt;
   }
   return Command{AddToken{
@@ -220,6 +236,9 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
       .owner = std::move(owner),
       .kind = static_cast<TokenKind>(kind),
       .max_hp = max_hp,
+      .ac = ac,
+      .speed = speed,
+      .notes = std::move(notes),
   }};
 }
 
@@ -293,6 +312,20 @@ auto DecodeSetTokenColorCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{SetTokenColor{.id = id, .color = color}};
+}
+
+auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
+    -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::int32_t ac = 10;
+  std::int32_t speed = 30;
+  std::string notes;
+  if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
+      !reader.String(notes, kMaxNotes) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{UpdateTokenSheet{
+      .id = id, .ac = ac, .speed = speed, .notes = std::move(notes)}};
 }
 
 auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
@@ -522,6 +555,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.String(cmd.owner);
           writer.U8(static_cast<std::uint8_t>(cmd.kind));
           writer.I32(cmd.max_hp);
+          writer.I32(cmd.ac);
+          writer.I32(cmd.speed);
+          writer.String(cmd.notes);
         } else if constexpr (std::is_same_v<T, RemoveToken>) {
           writer.U8(kCommandRemoveToken);
           writer.U32(cmd.id);
@@ -552,6 +588,12 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandSetTokenColor);
           writer.U32(cmd.id);
           writer.U32(cmd.color);
+        } else if constexpr (std::is_same_v<T, UpdateTokenSheet>) {
+          writer.U8(kCommandUpdateTokenSheet);
+          writer.U32(cmd.id);
+          writer.I32(cmd.ac);
+          writer.I32(cmd.speed);
+          writer.String(cmd.notes);
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           writer.U8(kCommandStartEncounter);
         } else if constexpr (std::is_same_v<T, EndEncounter>) {
@@ -596,6 +638,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeSetTokenMaxHpCommand(reader);
     case kCommandSetTokenColor:
       return DecodeSetTokenColorCommand(reader);
+    case kCommandUpdateTokenSheet:
+      return DecodeUpdateTokenSheetCommand(reader);
     case kCommandStartEncounter:
       return DecodeStartEncounterCommand(reader);
     case kCommandEndEncounter:

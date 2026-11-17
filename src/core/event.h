@@ -11,17 +11,17 @@
 
 namespace dnd {
 
-// Server-to-client facts. Only events may change what a client displays, which
-// keeps the local and the networked paths identical.
+// Факты, которые сервер отправляет клиенту. Только события могут менять
+// отображение у клиента, поэтому локальный и сетевой пути совпадают.
 struct TokenMoved {
   TokenId id = 0;
   Cell from{};
   Cell to{};
 };
 
-// Refreshes the whole player view: fog plus exactly the tokens the player may
-// see. Tokens can appear here for the first time (a monster stepping into the
-// light) or disappear again, so a fog-only update is not enough.
+// Полное обновление вида игрока: туман и ровно те токены, которые игрок
+// может видеть. Токены могут появиться впервые (монстр входит в свет) или
+// снова исчезнуть, поэтому одного обновления тумана недостаточно.
 struct ViewUpdated {
   GameSnapshot snapshot;
   FogSnapshot fog;
@@ -31,8 +31,8 @@ struct LogLineAdded {
   LogLine line;
 };
 
-// Incremental token updates. Players ignore the ones for tokens they cannot
-// display, so these never leak hidden creatures.
+// Инкрементальные обновления токенов. Игроки игнорируют события для
+// невидимых токенов, поэтому скрытые существа не утекают.
 struct TokenAdded {
   Token token;
 };
@@ -45,7 +45,7 @@ struct TokenUpdated {
   Token token;
 };
 
-// Combat order changed (start, end, next turn).
+// Изменился боевой порядок (начало, конец, следующий ход).
 struct EncounterUpdated {
   Encounter encounter;
 };

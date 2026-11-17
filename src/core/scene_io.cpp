@@ -11,7 +11,7 @@
 namespace dnd {
 namespace {
 
-constexpr std::uint32_t kMagic = 0x53444E44;  // "DNDS" little-endian
+constexpr std::uint32_t kMagic = 0x53444E44;  // "DNDS" в little-endian
 constexpr std::uint32_t kMaxPayload = 64U * 1024U * 1024U;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {

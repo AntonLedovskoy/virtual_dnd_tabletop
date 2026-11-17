@@ -32,8 +32,8 @@ struct PeerCommand {
   Command command;
 };
 
-// Listens for player clients. The app owns the authoritative GameServer: it
-// supplies this class with welcomes and events and consumes peer commands.
+// Принимает клиентов игроков. Авторитетный GameServer принадлежит приложению:
+// оно передаёт сюда welcome/события и забирает команды участников.
 class NetServer {
  public:
   NetServer() = default;
@@ -45,11 +45,12 @@ class NetServer {
   [[nodiscard]] auto Port() const -> std::uint16_t { return listener_.Port(); }
   [[nodiscard]] auto PeerCount() const -> std::size_t { return peers_.size(); }
   [[nodiscard]] auto Peers() const -> std::vector<PeerInfo>;
-  // Host-only convenience: disconnects the welcomed peer with this exact name.
+  // Удобный метод для хоста: отключает участника с точно таким именем.
   auto KickByName(const std::string& name) -> bool;
 
-  // Accepts new connections, completes the Hello handshake, collects valid
-  // commands and drops idle peers. Joined peers must be sent a Welcome.
+  // Принимает новые подключения, завершает Hello-handshake, собирает
+  // корректные команды и отключает простаивающих. Вошедшим нужно отправить
+  // Welcome.
   auto Poll(std::vector<PeerJoined>& joined, std::vector<PeerCommand>& commands,
             std::vector<PeerId>& dropped) -> void;
 

@@ -5,6 +5,7 @@
 #include <variant>
 #include <vector>
 
+#include "core/bestiary.h"
 #include "core/client_view.h"
 #include "core/game_server.h"
 #include "core/game_state.h"
@@ -178,8 +179,8 @@ auto TestServerVisibility() -> void {
   Expect(own_move_visible, "visible move is visible to players");
   Expect(view.Tokens().front().cell == CellAt(1, 0), "client view moves token");
 
-  // A token that was hidden when the client joined must show up once it
-  // enters the party's line of sight.
+  // Токен, скрытый при входе клиента, должен появиться, когда он попадёт
+  // в поле зрения партии.
   const dnd::CommandOutcome reveal = server.HandleCommand(
       dnd::MoveToken{.id = 2, .target = CellAt(4, 0)}, "alice", false);
   Expect(reveal.accepted, "goblin move into sight is accepted");
@@ -364,6 +365,40 @@ auto TestClaimAndTokenAdmin() -> void {
   Expect(color.accepted, "the owner can set the colour");
   Expect(server.State().TokenCopy(1)->color == 0xC85046U,
          "the colour is stored");
+
+  const dnd::CommandOutcome sheet = server.HandleCommand(
+      dnd::UpdateTokenSheet{
+          .id = 1, .ac = 16, .speed = 25, .notes = "Атака: +5, 1d8+3"},
+      "alice", false);
+  Expect(sheet.accepted, "the owner can edit the character sheet");
+  Expect(server.State().TokenCopy(1)->ac == 16, "AC is stored");
+  Expect(server.State().TokenCopy(1)->speed == 25, "speed is stored");
+  Expect(server.State().TokenCopy(1)->notes == "Атака: +5, 1d8+3",
+         "notes are stored");
+  Expect(!server
+              .HandleCommand(
+                  dnd::UpdateTokenSheet{
+                      .id = 1, .ac = 12, .speed = 30, .notes = "чужое"},
+                  "bob", false)
+              .accepted,
+         "other players cannot edit the sheet");
+  Expect(!server
+              .HandleCommand(
+                  dnd::UpdateTokenSheet{
+                      .id = 1, .ac = 0, .speed = 30, .notes = ""},
+                  "alice", false)
+              .accepted,
+         "invalid AC is rejected");
+}
+
+auto TestBestiary() -> void {
+  const auto& bestiary = dnd::DefaultBestiary();
+  Expect(!bestiary.empty(), "bestiary is not empty");
+  if (!bestiary.empty()) {
+    Expect(!bestiary.front().name.empty(), "bestiary entries have names");
+    Expect(bestiary.front().ac > 0, "bestiary entries have AC");
+    Expect(bestiary.front().max_hp > 0, "bestiary entries have HP");
+  }
 }
 
 auto TestDynamicFogObservers() -> void {
@@ -641,6 +676,9 @@ auto TestSaveLoadRoundtrip() -> void {
                          .hp = 7,
                          .max_hp = 12,
                          .initiative = 15,
+                         .ac = 16,
+                         .speed = 25,
+                         .notes = "Атака: +5, 1d8+3",
                          .kind = dnd::TokenKind::kPlayer,
                          .color = 0x507AC8U,
                          .cell = CellAt(1, 1)},
@@ -677,6 +715,10 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().max_hp == 12, "token max hp survives");
     Expect(loaded->tokens.front().initiative == 15,
            "token initiative survives");
+    Expect(loaded->tokens.front().ac == 16, "token AC survives");
+    Expect(loaded->tokens.front().speed == 25, "token speed survives");
+    Expect(loaded->tokens.front().notes == "Атака: +5, 1d8+3",
+           "token notes survive");
     Expect(loaded->tokens.front().kind == dnd::TokenKind::kPlayer,
            "token kind survives");
     Expect(loaded->tokens.front().color == 0x507AC8U, "token colour survives");
@@ -813,6 +855,9 @@ auto TestCommandEventSerialization() -> void {
       .owner = "dm",
       .kind = dnd::TokenKind::kMonster,
       .max_hp = 13,
+      .ac = 14,
+      .speed = 40,
+      .notes = "Дубина: +4, 1d8+2",
   }};
   const std::vector<std::uint8_t> add_bytes = dnd::EncodeCommand(add);
   const std::optional<dnd::Command> add_decoded =
@@ -824,7 +869,10 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::AddToken>(*add_decoded).owner == "dm" &&
              std::get<dnd::AddToken>(*add_decoded).kind ==
                  dnd::TokenKind::kMonster &&
-             std::get<dnd::AddToken>(*add_decoded).max_hp == 13,
+             std::get<dnd::AddToken>(*add_decoded).max_hp == 13 &&
+             std::get<dnd::AddToken>(*add_decoded).ac == 14 &&
+             std::get<dnd::AddToken>(*add_decoded).speed == 40 &&
+             std::get<dnd::AddToken>(*add_decoded).notes == "Дубина: +4, 1d8+2",
          "spawn command survives serialization");
 
   const dnd::Command claim{dnd::ClaimToken{.id = 4}};
@@ -872,6 +920,20 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::SetTokenColor>(*color_decoded).color == 0xC85046U,
          "colour command survives serialization");
 
+  const dnd::Command sheet_command{dnd::UpdateTokenSheet{
+      .id = 4, .ac = 15, .speed = 30, .notes = "Атака: +4, 1d6+2"}};
+  const std::vector<std::uint8_t> sheet_bytes =
+      dnd::EncodeCommand(sheet_command);
+  const std::optional<dnd::Command> sheet_decoded =
+      dnd::DecodeCommand(sheet_bytes.data(), sheet_bytes.size());
+  Expect(sheet_decoded.has_value() &&
+             std::holds_alternative<dnd::UpdateTokenSheet>(*sheet_decoded) &&
+             std::get<dnd::UpdateTokenSheet>(*sheet_decoded).ac == 15 &&
+             std::get<dnd::UpdateTokenSheet>(*sheet_decoded).speed == 30 &&
+             std::get<dnd::UpdateTokenSheet>(*sheet_decoded).notes ==
+                 "Атака: +4, 1d6+2",
+         "sheet command survives serialization");
+
   const dnd::Event updated{dnd::TokenUpdated{
       .token = dnd::Token{.id = 3,
                           .name = "orc",
@@ -879,6 +941,9 @@ auto TestCommandEventSerialization() -> void {
                           .hp = 2,
                           .max_hp = 9,
                           .initiative = 11,
+                          .ac = 14,
+                          .speed = 40,
+                          .notes = "Дубина: +4, 1d8+2",
                           .kind = dnd::TokenKind::kMonster,
                           .color = 0x46A864U,
                           .cell = CellAt(1, 1)},
@@ -891,6 +956,10 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::TokenUpdated>(*updated_decoded).token.hp == 2 &&
              std::get<dnd::TokenUpdated>(*updated_decoded).token.initiative ==
                  11 &&
+             std::get<dnd::TokenUpdated>(*updated_decoded).token.ac == 14 &&
+             std::get<dnd::TokenUpdated>(*updated_decoded).token.speed == 40 &&
+             std::get<dnd::TokenUpdated>(*updated_decoded).token.notes ==
+                 "Дубина: +4, 1d8+2" &&
              std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
                  dnd::TokenKind::kMonster &&
              std::get<dnd::TokenUpdated>(*updated_decoded).token.color ==
@@ -939,6 +1008,7 @@ auto main() -> int {
     TestServerVisibility();
     TestOwnership();
     TestClaimAndTokenAdmin();
+    TestBestiary();
     TestDynamicFogObservers();
     TestUtf8();
     TestTokenManagement();

@@ -8,8 +8,8 @@
 
 namespace dnd {
 
-// Complete authoritative world state: enough to rebuild a GameState from
-// scratch, both for joining clients and for save files.
+// Полное авторитетное состояние мира: достаточно, чтобы собрать GameState
+// заново — и для подключающихся клиентов, и для файлов сохранения.
 struct GameSnapshot {
   GridMap map{1, 1};
   std::vector<Token> tokens;

@@ -20,21 +20,21 @@ struct CommandOutcome {
   std::vector<Event> events;
 };
 
-// Authoritative session: owns the world, validates commands against token
-// ownership, rolls dice and keeps the visibility slice of the local player.
-// Network play runs the same class on the host.
+// Авторитетная сессия: владеет миром, проверяет команды с учётом владения
+// токенами, бросает кубы и хранит срез видимости локального игрока.
+// Сетевая игра запускает тот же класс на хосте.
 class GameServer {
  public:
-  // All player-kind tokens provide party vision; NPCs and monsters never do.
+  // Обзор партии дают только токены персонажей (kPlayer), не NPC и не монстры.
   GameServer(GameSnapshot snapshot, int sight_radius,
              std::uint32_t rng_seed = std::random_device{}());
 
-  // Replaces the world (load/save) and recomputes visibility.
+  // Заменяет мир (загрузка/сохранение) и пересчитывает видимость.
   auto Reset(GameSnapshot snapshot) -> void;
 
-  // Applies a command. `actor` is the player name from the handshake and
-  // `can_control_all` is true for the DM. Tokens with a non-empty owner can
-  // only be changed by that owner; the DM can change everything.
+  // Применяет команду. `actor` — имя игрока из handshake, `can_control_all`
+  // истинно для DM. Токены с непустым owner может менять только владелец;
+  // DM может менять всё.
   [[nodiscard]] auto HandleCommand(const Command& command,
                                    const std::string& actor,
                                    bool can_control_all) -> CommandOutcome;
@@ -43,17 +43,17 @@ class GameServer {
   [[nodiscard]] auto Snapshot() const -> GameSnapshot {
     return state_.Snapshot();
   }
-  // Player view: only tokens inside party line of sight.
+  // Вид игрока: только токены в пределах видимости партии.
   [[nodiscard]] auto ClientSnapshot() const -> GameSnapshot;
-  // DM view: the whole world.
+  // Вид DM: весь мир.
   [[nodiscard]] auto DmSnapshot() const -> GameSnapshot {
     return state_.Snapshot();
   }
   [[nodiscard]] auto FogState() const -> FogSnapshot { return fog_.Snapshot(); }
-  // DM sees every cell, so the fog overlay has nothing to hide.
+  // DM видит все клетки, поэтому туману нечего скрывать.
   [[nodiscard]] auto FullFogState() const -> FogSnapshot;
 
-  // Whether a player's client is allowed to receive this event.
+  // Можно ли отправлять это событие клиенту игрока.
   [[nodiscard]] auto EventVisibleToPlayers(const Event& event) const -> bool;
 
  private:
@@ -96,6 +96,10 @@ class GameServer {
   [[nodiscard]] auto HandleSetTokenColor(const SetTokenColor& command,
                                          const std::string& actor,
                                          bool can_control_all)
+      -> CommandOutcome;
+  [[nodiscard]] auto HandleUpdateTokenSheet(const UpdateTokenSheet& command,
+                                            const std::string& actor,
+                                            bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleStartEncounter(bool can_control_all)
       -> CommandOutcome;

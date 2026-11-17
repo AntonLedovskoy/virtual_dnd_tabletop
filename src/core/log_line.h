@@ -5,8 +5,8 @@
 
 namespace dnd {
 
-// One line of the shared table log: chat, dice rolls and system messages.
-// timestamp is Unix seconds; 0 means "unknown" and is rendered without a time.
+// Одна строка общего лога: чат, броски кубов и системные сообщения.
+// timestamp — секунды Unix; 0 означает «неизвестно» и выводится без времени.
 struct LogLine {
   std::string author;
   std::string text;

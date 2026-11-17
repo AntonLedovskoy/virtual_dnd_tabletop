@@ -1,45 +1,49 @@
 # AGENTS.md
 
-C++20 + SDL3 virtual tabletop. One executable (`dnd`) acts as either the
-authoritative host/DM or a TCP client. No README or CI; the build scripts and
-tests are the source of truth.
+Виртуальный стол для D&D на C++20 + SDL3. Один исполняемый файл (`dnd`)
+работает либо как авторитетный хост/DM, либо как TCP-клиент. README и CI нет;
+источник истины — сборочные скрипты и тесты.
 
-## Build and test
+Комментарии в коде и документация — на русском. Сообщения коммитов — тоже на
+русском.
 
-- Windows: `.\build.bat` (default debug). Profiles: `-p debug|release|relwithdebinfo|minsize`; `-c` forces reconfigure; `-j N` sets jobs.
-- `build.bat` wraps `build.sh` in MSYS2 UCRT64. It expects MSYS2 at `C:\msys64` or `%MSYS2_ROOT%`; do not run `build.sh` directly from PowerShell.
-- Binaries land in `.build/<profile>/` (e.g. `.build/debug/dnd.exe`).
-- First configure downloads SDL3, SDL3_ttf, SDL3_image, and SDL3_net via CMake FetchContent (network required, several minutes). Later runs reuse `.build/<profile>` unless `-c` is passed.
-- Run all tests: `ctest --test-dir .build/debug --output-on-failure`
-- One suite: `ctest --test-dir .build/debug -R core_tests` or run `.build/debug/dnd_core_tests.exe` directly.
-- Tests are plain `main()` binaries with an `Expect` helper, not a test framework. There is no per-test-case CLI filter; to isolate a case, add a `TestX()` and call it from `main()` in `tests/core_tests.cpp` or `tests/net_tests.cpp`.
-- `net_tests` binds an ephemeral localhost TCP port and polls with 3-second deadlines; no external services are needed.
-- The GUI executable needs a display; debug it with `.vscode/launch.json`, not from tests.
+## Сборка и тесты
 
-## Architecture
+- Windows: `.\build.bat` (по умолчанию debug). Профили: `-p debug|release|relwithdebinfo|minsize`; `-c` принудительно перенастраивает; `-j N` задаёт число задач.
+- `build.bat` запускает `build.sh` в MSYS2 UCRT64. Ожидает MSYS2 в `C:\msys64` или `%MSYS2_ROOT%`; не запускайте `build.sh` напрямую из PowerShell.
+- Бинарники лежат в `.build/<profile>/` (например, `.build/debug/dnd.exe`).
+- Первая конфигурация скачивает SDL3, SDL3_ttf, SDL3_image и SDL3_net через CMake FetchContent (нужна сеть, несколько минут). Дальше `.build/<profile>` переиспользуется, если не передан `-c`.
+- Все тесты: `ctest --test-dir .build/debug --output-on-failure`
+- Один набор: `ctest --test-dir .build/debug -R core_tests` или запуск `.build/debug/dnd_core_tests.exe` напрямую.
+- Тесты — обычные `main()` с хелпером `Expect`, без фреймворка. Фильтра по отдельному тесту нет; чтобы изолировать случай, добавьте `TestX()` и вызовите его из `main()` в `tests/core_tests.cpp` или `tests/net_tests.cpp`.
+- `net_tests` занимает временный localhost-порт и ждёт с таймаутами 3 секунды; внешние сервисы не нужны.
+- GUI требует дисплея; отлаживайте через `.vscode/launch.json`, а не из тестов.
 
-- `src/core`: SDL-free game logic. `GameState` holds rules, `GameServer` validates commands, ownership, fog, and dice, `ClientView` is the only state rendering may read, and `LocalTransport` is the in-process command/event queue.
-- `src/net`: TCP framing, sockets, and client/server transports. `NetServer` is not authoritative; `App` owns the `GameServer` and feeds it peer commands.
-- `src/app`: SDL window/input, the Host/Join menu, and the host/client pump. `src/render`: drawing only. Entrypoint is `src/main.cpp` using SDL3 main callbacks (`SDL_MAIN_USE_CALLBACKS`).
-- Text goes through `render/text_renderer` (`TTF_Text` + `TTF_DrawRendererText`, pooled objects). Call `BeginFrame()` once per rendered frame; do not reintroduce per-frame `TTF_RenderText_Blended` + texture creation.
-- Plain launch shows the Host/Join/Map menu. `--host`, `--port`, or `--connect HOST[:PORT]` auto-start that mode; `--editor` opens the map editor; `--menu` forces the menu. Clients also accept `--name` and both sides accept `--password`.
-- Host mode is always the DM and also plays locally. The default port is 7777. Player names must be non-empty and unique; the host can kick with `/kick NAME`.
-- The map editor saves `scene.dndscene` beside the executable and reuses the snapshot format. Editor keys: `1`–`5` brushes, `[`/`]` width, `-`/`=` height, `F5`/`F9` scene, `Enter` host, `Esc` menu. Middle-drag pans and the wheel zooms in both editor and game.
-- Visibility and permissions are enforced in `GameServer` (`ClientSnapshot`, `EventVisibleToPlayers`, `can_control_all`), not in the renderer. Players cannot add/remove tokens or control encounters.
-- Party fog is computed from every `TokenKind::kPlayer` token; NPC and monster tokens never grant vision. Unclaimed player tokens are locked until claimed; free NPC tokens with an empty owner may be moved by players. The DM can reassign or release owners.
-- F5 saves, F9 loads. The file is `savegame.bin` beside the executable via `SDL_GetBasePath()`, and saving/loading is host-only.
+## Архитектура
 
-## Serialization and protocol
+- `src/core`: игровая логика без SDL. `GameState` хранит правила, `GameServer` проверяет команды, владение, туман и кубы, `ClientView` — единственное состояние, которое может читать рендеринг, `LocalTransport` — внутрипроцессная очередь команд/событий.
+- `src/net`: TCP-фрейминг, сокеты и клиент/сервер. `NetServer` не авторитетен; `App` владеет `GameServer` и передаёт ему команды участников.
+- `src/app`: окно/ввод SDL, меню Host/Join и цикл хоста/клиента. `src/render`: только отрисовка. Точка входа — `src/main.cpp` на колбэках SDL3 (`SDL_MAIN_USE_CALLBACKS`).
+- Текст идёт через `render/text_renderer` (`TTF_Text` + `TTF_DrawRendererText`, пул объектов). Вызывайте `BeginFrame()` раз в кадр; не возвращайте `TTF_RenderText_Blended` с созданием текстур на каждый кадр.
+- Обычный запуск показывает меню Host/Join/Map. `--host`, `--port` или `--connect HOST[:PORT]` сразу запускают режим; `--editor` открывает редактор карт; `--menu` принудительно показывает меню. Клиенты также принимают `--name`, обе стороны — `--password`.
+- Хост всегда DM и играет локально. Порт по умолчанию 7777. Имена игроков непустые и уникальные; хост исключает командой `/kick ИМЯ`.
+- Редактор карт сохраняет `scene.dndscene` рядом с `.exe` и использует формат снапшота. Клавиши: `1`–`5` — кисти, `[`/`]` — ширина, `-`/`=` — высота, `F5`/`F9` — сцена, `Enter` — хост, `Esc` — меню. Панорама — средней кнопкой, зум — колесом, в редакторе и в игре.
+- `L` открывает лист выбранного токена (AC, скорость, заметки), `B` — встроенный бестиарий у DM. Шаблоны бестиария лежат в `src/core/bestiary`; при спавне копируются в токен.
+- Видимость и права проверяются в `GameServer` (`ClientSnapshot`, `EventVisibleToPlayers`, `can_control_all`), а не в рендерере. Игроки не могут добавлять/удалять токены и управлять боем.
+- Туман партии считается по всем токенам `TokenKind::kPlayer`; NPC и монстры обзор не дают. Незанятые токены персонажей заблокированы до claim; свободные NPC с пустым owner игроки могут двигать. DM может назначать и снимать владельцев.
+- `F5` сохраняет, `F9` загружает. Файл `savegame.bin` рядом с `.exe` через `SDL_GetBasePath()`; сохранение и загрузка доступны только хосту.
 
-- `src/core/serialization.cpp` is a hand-written little-endian binary format shared by save files and TCP messages. Decoders are intentionally strict: reject truncation, trailing bytes, and out-of-range values.
-- Changing any serialized `Token`, `GameSnapshot`, `Command`, or `Event` field requires updating both encode and decode paths, extending `core_tests`/`net_tests`, and bumping `kSaveVersion` in `src/core/scene_io.h` and `kProtocolVersion` in `src/net/protocol.h`. Version mismatches reject saves and clients.
-- `Hello` carries the player name and password. The server enforces the password and broadcasts a `Roster` message after joins, drops, and kicks.
-- Save files are `DNDS` magic + version + payload length + encoded snapshot.
+## Сериализация и протокол
 
-## Style
+- `src/core/serialization.cpp` — ручной little-endian бинарный формат, общий для сохранений и TCP. Декодеры намеренно строгие: отвергают обрезанные данные, лишние байты и значения вне диапазона.
+- Изменение любого сериализуемого поля `Token`, `GameSnapshot`, `Command` или `Event` требует правки encode и decode, расширения `core_tests`/`net_tests` и поднятия `kSaveVersion` в `src/core/scene_io.h` и `kProtocolVersion` в `src/net/protocol.h`. Несовпадение версий отвергает сохранения и клиентов.
+- `Hello` содержит имя игрока и пароль. Сервер проверяет пароль и рассылает `Roster` после входа, выхода и кика.
+- Файл сохранения: magic `DNDS`, версия, длина payload, закодированный снапшот.
 
-- Google C++ style via `.clang-format` (80 columns, 2-space indent); `auto Fn() -> T` trailing return types are used throughout.
-- `.clang-tidy` enforces naming: types/functions CamelCase, locals/variables `lower_case`, private members trailing `_`, constants `kCamelCase`.
-- Project headers use paths rooted at `src/`, e.g. `#include "core/game_state.h"`.
-- Player-facing UI strings are Russian and live in `src/app/strings.h`. Use `core/utf8.h` for backspace/truncation instead of byte-wise `pop_back`/`resize`.
-- Keep `dnd_core` free of SDL dependencies; SDL belongs in `src/app` and `src/render`.
+## Стиль
+
+- Google C++ style через `.clang-format` (80 колонок, отступ 2); везде используются trailing return types `auto Fn() -> T`.
+- `.clang-tidy` проверяет имена: типы/функции CamelCase, локальные/переменные `lower_case`, приватные члены с `_` в конце, константы `kCamelCase`.
+- Заголовки проекта подключаются от `src/`, например `#include "core/game_state.h"`.
+- Строки интерфейса для игрока — на русском, в `src/app/strings.h`. Для backspace/обрезки используйте `core/utf8.h`, а не побайтовые `pop_back`/`resize`.
+- `dnd_core` не должен зависеть от SDL; SDL — только в `src/app` и `src/render`.

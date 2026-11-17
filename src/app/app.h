@@ -16,6 +16,7 @@
 #include "net/net_server.h"
 #include "render/editor_renderer.h"
 #include "render/menu_renderer.h"
+#include "render/ui_renderer.h"
 
 struct TTF_Font;
 
@@ -35,10 +36,10 @@ struct AppOptions {
   bool start_editor = false;
 };
 
-// Owns the SDL window/renderer and wires input to commands, a local
-// authoritative GameServer and a ClientView. Host mode also serves remote
-// clients over TCP; client mode talks to a remote host instead of running a
-// local server.
+// Владеет окном/рендерером SDL и связывает ввод с командами, локальным
+// авторитетным GameServer и ClientView. Режим хоста обслуживает удалённых
+// клиентов по TCP; режим клиента работает с удалённым хостом без локального
+// сервера.
 class App {
  public:
   explicit App(AppOptions options);
@@ -86,6 +87,15 @@ class App {
   auto SubmitMove(Cell target) -> void;
   auto SendCommand(const Command& command) -> void;
   auto SubmitChat() -> void;
+  auto OpenSheet() -> void;
+  auto CloseSheet() -> void;
+  auto SaveSheet() -> void;
+  auto HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto HandleSheetTextInput(const char* text) -> void;
+  [[nodiscard]] auto CanEditToken(const Token& token) const -> bool;
+  auto OpenBestiary() -> void;
+  auto HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto SpawnBestiary(int index) -> void;
   auto ClaimSelectedToken() -> void;
   auto CycleSelectedColor() -> void;
   auto AdjustSelectedHp(int delta) -> void;
@@ -123,6 +133,15 @@ class App {
   EditorBrush editor_brush_ = EditorBrush::kWall;
   std::string editor_status_;
   bool editor_panel_visible_ = true;
+
+  bool sheet_active_ = false;
+  TokenId sheet_token_id_ = 0;
+  SheetField sheet_field_ = SheetField::kAc;
+  std::string sheet_ac_;
+  std::string sheet_speed_;
+  std::string sheet_notes_;
+
+  bool bestiary_active_ = false;
   float cell_size_ = 48.0F;
   float camera_x_ = 0.0F;
   float camera_y_ = 0.0F;

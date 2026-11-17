@@ -12,8 +12,8 @@
 
 namespace dnd {
 
-// Wire format shared by save files and TCP messages. Decoders are strict:
-// they reject truncated input, trailing bytes and out-of-range values.
+// Формат передачи, общий для сохранений и TCP-сообщений. Декодеры строгие:
+// отвергают обрезанные данные, лишние байты и значения вне диапазона.
 auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t>;
 auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
     -> std::optional<GameSnapshot>;

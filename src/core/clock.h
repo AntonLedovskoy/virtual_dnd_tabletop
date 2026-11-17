@@ -5,8 +5,8 @@
 
 namespace dnd {
 
-// Seconds since the Unix epoch, used for log timestamps. 32 bits are enough
-// until 2106 and keep the wire format compact.
+// Секунды с начала эпохи Unix для временных меток лога. 32 бит хватает
+// до 2106 года и сохраняет компактный формат передачи.
 inline auto CurrentTimeSeconds() -> std::uint32_t {
   return static_cast<std::uint32_t>(
       std::chrono::duration_cast<std::chrono::seconds>(

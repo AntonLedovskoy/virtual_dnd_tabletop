@@ -8,9 +8,9 @@
 
 namespace dnd {
 
-// In-process stand-in for the future network transport. It keeps the client
-// and the authoritative world behind the same command/event boundary from day
-// one, so swapping in SDL3_net later does not touch game logic.
+// Внутрипроцессная замена будущего сетевого транспорта. С самого начала
+// держит клиент и авторитетный мир за одной границей команд/событий, поэтому
+// последующая замена на SDL3_net не затрагивает игровую логику.
 class LocalTransport {
  public:
   auto SubmitCommand(const Command& command) -> void;

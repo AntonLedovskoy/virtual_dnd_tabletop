@@ -15,8 +15,8 @@ struct TextMetrics {
   float height = 0.0F;
 };
 
-// Owns a TTF text engine and a reusable pool of TTF_Text objects. Call
-// BeginFrame() once per rendered frame before issuing draw calls.
+// Владеет TTF-движком текста и пулом переиспользуемых TTF_Text. Вызывайте
+// BeginFrame() раз в кадр перед отрисовкой текста.
 class TextRenderer {
  public:
   TextRenderer(SDL_Renderer* renderer, TTF_Font* font);
@@ -30,12 +30,12 @@ class TextRenderer {
 
   auto BeginFrame() -> void;
 
-  // Single-line text. max_width > 0 enables ellipsis when the text does not
-  // fit. Pass 0 for no limit.
+  // Однострочный текст. max_width > 0 включает многоточие, если текст не
+  // помещается. Передайте 0, чтобы не ограничивать ширину.
   auto Draw(std::string_view text, float x, float y, SDL_Color color,
             float max_width = 0.0F) -> void;
 
-  // Word-wrapped text. Returns the y coordinate below the drawn block.
+  // Текст с переносом по словам. Возвращает y под нарисованным блоком.
   auto DrawWrapped(std::string_view text, float x, float y, SDL_Color color,
                    float max_width) -> float;
 

@@ -4,8 +4,8 @@
 
 namespace dnd::strings {
 
-// Player-facing UI strings. Kept in one place so a future language switch does
-// not require touching the renderer and app logic.
+// Строки интерфейса для игрока. Собраны в одном месте, чтобы будущая смена
+// языка не требовала правок рендерера и логики приложения.
 inline constexpr std::string_view kInitiative = "Инициатива";
 inline constexpr std::string_view kRound = "раунд";
 inline constexpr std::string_view kToken = "Токен";
@@ -77,5 +77,19 @@ inline constexpr std::string_view kEditorSceneSaved = "Сцена сохране
 inline constexpr std::string_view kEditorSceneLoaded = "Сцена загружена";
 inline constexpr std::string_view kEditorSceneMissing =
     "Файл сцены не найден или повреждён";
+
+inline constexpr std::string_view kSheetTitle = "Лист";
+inline constexpr std::string_view kSheetAc = "AC";
+inline constexpr std::string_view kSheetSpeed = "Скорость";
+inline constexpr std::string_view kSheetNotes = "Атаки и заметки";
+inline constexpr std::string_view kSheetHint =
+    "Tab — поле | Enter — сохранить | Esc — закрыть";
+inline constexpr std::string_view kSheetNoAccess =
+    "Нельзя редактировать чужого персонажа";
+inline constexpr std::string_view kBestiaryTitle = "Бестиарий";
+inline constexpr std::string_view kBestiaryHint =
+    "1–5 — поставить под курсор | Esc — закрыть";
+inline constexpr std::string_view kBestiaryDmOnly =
+    "Бестиарий доступен только DM";
 
 }  // namespace dnd::strings

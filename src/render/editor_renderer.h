@@ -19,8 +19,8 @@ enum class EditorBrush : std::uint8_t {
   kErase = 4,
 };
 
-// Fixed top-left panel. Clicks inside it are reserved for future controls and
-// must not paint the map underneath.
+// Фиксированная панель слева сверху. Клики внутри неё зарезервированы для
+// будущих элементов и не должны рисовать на карте под панелью.
 auto EditorPanelBounds() -> SDL_FRect;
 
 auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,

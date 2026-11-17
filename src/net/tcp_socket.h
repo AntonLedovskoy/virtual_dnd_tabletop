@@ -7,12 +7,11 @@
 
 namespace dnd {
 
-// Length-prefixed TCP framing on top of Winsock. Every frame is a single
-// protocol message; the socket layer only deals with byte blobs.
+// TCP-фрейминг с префиксом длины поверх Winsock. Каждый фрейм — одно
+// сообщение протокола; сокетный слой работает только с байтами.
 auto InitializeSockets() -> bool;
 
-// Non-loopback IPv4 addresses of this machine, useful for showing the host
-// address in the lobby.
+// Не-loopback IPv4-адреса машины — для показа адреса хоста в лобби.
 auto LocalIpv4Addresses() -> std::vector<std::string>;
 
 class TcpConnection {
@@ -21,14 +20,14 @@ class TcpConnection {
   TcpConnection(const TcpConnection&) = delete;
   auto operator=(const TcpConnection&) -> TcpConnection& = delete;
 
-  // Non-blocking connect: returns a connection that may still be connecting;
-  // Poll() reports progress without ever blocking the caller.
+  // Неблокирующее подключение: соединение может ещё устанавливаться;
+  // Poll() сообщает о прогрессе, никогда не блокируя вызывающего.
   static auto Connect(const std::string& host, std::uint16_t port)
       -> std::unique_ptr<TcpConnection>;
 
   auto QueueFrame(const std::vector<std::uint8_t>& frame) -> void;
-  // Reads whatever is available and appends complete frames. Returns false
-  // after the peer disconnected or an I/O error happened.
+  // Читает доступные данные и добавляет целые фреймы. Возвращает false
+  // после отключения собеседника или ошибки ввода-вывода.
   auto Poll(std::vector<std::vector<std::uint8_t>>& frames) -> bool;
   [[nodiscard]] auto Connected() const -> bool { return connected_; }
 
@@ -54,7 +53,7 @@ class TcpListener {
   TcpListener(const TcpListener&) = delete;
   auto operator=(const TcpListener&) -> TcpListener& = delete;
 
-  // port 0 asks the OS for an ephemeral port (used by tests).
+  // Порт 0 просит ОС выделить временный порт (используется в тестах).
   auto Listen(std::uint16_t port) -> bool;
   [[nodiscard]] auto Listening() const -> bool;
   [[nodiscard]] auto Port() const -> std::uint16_t;

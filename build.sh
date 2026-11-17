@@ -5,18 +5,18 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [options] [-- <build-args>...]
+Использование: $(basename "$0") [параметры] [-- <аргументы сборки>...]
 
-Options:
-  -p, --profile <name>  Build profile: debug (default), release,
+Параметры:
+  -p, --profile <имя>   Профиль: debug (по умолчанию), release,
                         relwithdebinfo, minsize
-  -c, --configure       Force CMake configure before building
-  -j, --jobs <n>        Parallel build jobs (default: number of CPUs)
-  -h, --help            Show this help
+  -c, --configure       Принудительно настроить CMake перед сборкой
+  -j, --jobs <n>        Число параллельных задач (по умолчанию: число CPU)
+  -h, --help            Показать эту справку
 
-Build directory: .build/<profile>
+Каталог сборки: .build/<profile>
 
-Examples:
+Примеры:
   ./build.sh
   ./build.sh -p release
   ./build.sh -p release -c
@@ -108,8 +108,8 @@ if command -v ninja >/dev/null 2>&1; then
   GENERATOR=(-G Ninja)
 fi
 
-# FetchContent clones dependency repositories, so cmake needs git. MSYS2 shells
-# do not always ship it; fall back to the standalone Git for Windows install.
+# FetchContent клонирует репозитории зависимостей, поэтому cmake нужен git.
+# В shell MSYS2 он есть не всегда; используем отдельный Git for Windows.
 GIT_HINT=()
 if ! command -v git >/dev/null 2>&1; then
   for candidate in "/c/Program Files/Git/cmd/git.exe" "/c/Program Files (x86)/Git/cmd/git.exe"; do
@@ -180,7 +180,7 @@ echo "==> Building '$PROFILE' with $JOBS job(s)"
 cmake --build "$BUILD_DIR" --config "$BUILD_TYPE" --parallel "$JOBS" \
       ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
-# CMake may have regenerated compile_commands.json during the build.
+# CMake мог перегенерировать compile_commands.json во время сборки.
 update_compile_db
 
 echo "==> Done: .build/$PROFILE"

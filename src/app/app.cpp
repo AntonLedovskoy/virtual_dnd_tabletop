@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "app/strings.h"
+#include "core/bestiary.h"
 #include "core/scene_io.h"
 #include "core/utf8.h"
 #include "net/tcp_socket.h"
@@ -52,7 +53,7 @@ constexpr std::array<std::uint32_t, 6> kTokenPalette{{
 
 auto BuildSnapshot() -> GameSnapshot {
   GridMap map(kMapWidth, kMapHeight);
-  // A vertical wall with one doorway and a horizontal wall with a gap.
+  // Вертикальная стена с одним проходом и горизонтальная стена с разрывом.
   for (int y = 0; y <= 5; ++y) {
     if (y != 3) {
       map.SetBlocked(Cell{.x = 7, .y = y}, true);
@@ -116,7 +117,7 @@ auto ParseNumber(std::string_view text, int& value) -> bool {
   return true;
 }
 
-// "/roll 2d6" payload -> count = 2, sides = 6.
+// Полезная нагрузка "/roll 2d6" -> count = 2, sides = 6.
 auto ParseDice(std::string_view text, int& count, int& sides) -> bool {
   const auto separator = text.find('d');
   if (separator == std::string_view::npos || separator == 0 ||
@@ -163,7 +164,7 @@ App::App(AppOptions options)
     : options_(std::move(options)),
       scene_(BuildSnapshot()),
       server_(scene_, kSightRadius) {
-  // The host is the DM: the full world, no fog.
+  // Хост — это DM: весь мир и никакого тумана.
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   menu_.address = options_.connect_host;
   menu_.port = std::to_string(options_.port);
@@ -192,9 +193,9 @@ auto App::Initialize() -> bool {
     return false;
   }
   SDL_StartTextInput(window_);
-  // Nearest sampling keeps text sharp if the renderer is scaled by DPI.
+  // Nearest-сэмплинг сохраняет текст чётким при масштабировании из-за DPI.
   SDL_SetDefaultTextureScaleMode(renderer_, SDL_SCALEMODE_NEAREST);
-  // Vsync-driven iteration; harmless if the driver has no vsync support.
+  // Итерации по vsync; безопасно, если драйвер не поддерживает vsync.
   SDL_SetRenderVSync(renderer_, 1);
 
   LoadFont();
@@ -779,6 +780,35 @@ auto App::LoadFont() -> void {
 }
 
 auto App::HandleEvent(const SDL_Event& event) -> void {
+  if (sheet_active_) {
+    switch (event.type) {
+      case SDL_EVENT_TEXT_INPUT:
+        HandleSheetTextInput(event.text.text);
+        break;
+      case SDL_EVENT_KEY_DOWN:
+        HandleSheetKeyDown(event.key);
+        break;
+      default:
+        break;
+    }
+    return;
+  }
+
+  if (bestiary_active_) {
+    switch (event.type) {
+      case SDL_EVENT_MOUSE_MOTION:
+        mouse_x_ = event.motion.x;
+        mouse_y_ = event.motion.y;
+        break;
+      case SDL_EVENT_KEY_DOWN:
+        HandleBestiaryKeyDown(event.key);
+        break;
+      default:
+        break;
+    }
+    return;
+  }
+
   if (in_editor_) {
     switch (event.type) {
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -902,6 +932,12 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SDLK_V:
       CycleSelectedColor();
       break;
+    case SDLK_L:
+      OpenSheet();
+      break;
+    case SDLK_B:
+      OpenBestiary();
+      break;
     case SDLK_HOME:
       CenterCamera();
       break;
@@ -916,9 +952,9 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
     return;
   }
   const auto spawn_at_cursor = [this](TokenKind kind) -> void {
-    // Spawn strictly under the current cursor: the log panel overlaps the
-    // bottom of the map, so a stale hover cell would put the token somewhere
-    // the DM did not point at.
+    // Создаём строго под текущим курсором: панель лога перекрывает низ
+    // карты, поэтому устаревшая клетка наведения поставила бы токен не туда,
+    // куда указывал DM.
     const Cell target = CellFromPixel(mouse_x_, mouse_y_);
     if (!view_.Map().Contains(target)) {
       view_.AddLocalLine("Нельзя создать токен за пределами карты");
@@ -999,7 +1035,7 @@ auto App::HandleMouseUp(const SDL_MouseButtonEvent& button) -> void {
   }
   const Cell cell = CellFromPixel(button.x, button.y);
   const Token* token = FindSelectedToken();
-  // A plain click selects a token; only submit when it actually moved.
+  // Обычный клик выбирает токен; ход отправляем, только если он сдвинулся.
   if (token != nullptr && view_.Map().Contains(cell) && token->cell != cell) {
     SubmitMove(cell);
   }
@@ -1082,6 +1118,157 @@ auto App::ClaimSelectedToken() -> void {
     return;
   }
   SendCommand(ClaimToken{.id = token->id});
+}
+
+auto App::CanEditToken(const Token& token) const -> bool {
+  if (options_.mode == AppMode::kHost) {
+    return true;
+  }
+  if (token.kind == TokenKind::kPlayer && token.owner != options_.player_name) {
+    return false;
+  }
+  return token.owner.empty() || token.owner == options_.player_name;
+}
+
+auto App::OpenSheet() -> void {
+  const Token* token = FindSelectedToken();
+  if (token == nullptr) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  if (!CanEditToken(*token)) {
+    view_.AddLocalLine(std::string(strings::kSheetNoAccess));
+    return;
+  }
+  sheet_active_ = true;
+  sheet_token_id_ = token->id;
+  sheet_field_ = SheetField::kAc;
+  sheet_ac_ = std::to_string(token->ac);
+  sheet_speed_ = std::to_string(token->speed);
+  sheet_notes_ = token->notes;
+}
+
+auto App::CloseSheet() -> void {
+  sheet_active_ = false;
+  sheet_token_id_ = 0;
+}
+
+auto App::SaveSheet() -> void {
+  int ac = 0;
+  int speed = 0;
+  if (!ParseNumber(sheet_ac_, ac) || !ParseNumber(sheet_speed_, speed)) {
+    view_.AddLocalLine("AC и скорость должны быть положительными числами");
+    return;
+  }
+  const Token* token = nullptr;
+  for (const Token& candidate : view_.Tokens()) {
+    if (candidate.id == sheet_token_id_) {
+      token = &candidate;
+      break;
+    }
+  }
+  if (token == nullptr) {
+    CloseSheet();
+    return;
+  }
+  SendCommand(UpdateTokenSheet{
+      .id = token->id, .ac = ac, .speed = speed, .notes = sheet_notes_});
+  CloseSheet();
+}
+
+auto App::HandleSheetTextInput(const char* text) -> void {
+  if (text == nullptr) {
+    return;
+  }
+  if (sheet_field_ == SheetField::kAc || sheet_field_ == SheetField::kSpeed) {
+    std::string* buffer =
+        sheet_field_ == SheetField::kAc ? &sheet_ac_ : &sheet_speed_;
+    for (const char* it = text; *it != '\0'; ++it) {
+      if (*it >= '0' && *it <= '9') {
+        buffer->push_back(*it);
+      }
+    }
+    TruncateUtf8(*buffer, 5);
+    return;
+  }
+  sheet_notes_ += text;
+  TruncateUtf8(sheet_notes_, 512);
+}
+
+auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (key.key == SDLK_ESCAPE) {
+    CloseSheet();
+    return;
+  }
+  if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
+    SaveSheet();
+    return;
+  }
+  if (key.key == SDLK_TAB) {
+    const int next = (static_cast<int>(sheet_field_) + 1) % 3;
+    sheet_field_ = static_cast<SheetField>(next);
+    return;
+  }
+  if (key.key != SDLK_BACKSPACE) {
+    return;
+  }
+  std::string* buffer = nullptr;
+  switch (sheet_field_) {
+    case SheetField::kAc:
+      buffer = &sheet_ac_;
+      break;
+    case SheetField::kSpeed:
+      buffer = &sheet_speed_;
+      break;
+    case SheetField::kNotes:
+      buffer = &sheet_notes_;
+      break;
+  }
+  if (buffer != nullptr && !buffer->empty()) {
+    buffer->resize(PreviousCodePointStart(*buffer));
+  }
+}
+
+auto App::OpenBestiary() -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kBestiaryDmOnly));
+    return;
+  }
+  bestiary_active_ = true;
+}
+
+auto App::HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (key.key == SDLK_ESCAPE || key.key == SDLK_B) {
+    bestiary_active_ = false;
+    return;
+  }
+  if (key.key >= SDLK_1 && key.key <= SDLK_5) {
+    SpawnBestiary(static_cast<int>(key.key - SDLK_1));
+  }
+}
+
+auto App::SpawnBestiary(int index) -> void {
+  const auto& bestiary = DefaultBestiary();
+  if (index < 0 || index >= static_cast<int>(bestiary.size())) {
+    return;
+  }
+  const Cell cell = CellFromPixel(mouse_x_, mouse_y_);
+  if (!view_.Map().Contains(cell) || view_.Map().IsBlocked(cell)) {
+    view_.AddLocalLine("Нельзя поставить монстра в эту клетку");
+    return;
+  }
+  const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(index)];
+  SendCommand(AddToken{
+      .name = monster.name,
+      .cell = cell,
+      .owner = "dm",
+      .kind = TokenKind::kMonster,
+      .max_hp = monster.max_hp,
+      .ac = monster.ac,
+      .speed = monster.speed,
+      .notes = monster.notes,
+  });
+  bestiary_active_ = false;
 }
 
 auto App::CycleSelectedColor() -> void {
@@ -1208,8 +1395,8 @@ auto App::ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void {
     return;
   }
   for (const Event& event : outcome.events) {
-    // The DM view is already complete; it only needs token moves and log
-    // lines. Players additionally get view refreshes and fog.
+    // Вид DM уже полный: ему нужны только перемещения токенов и строки лога.
+    // Игроки дополнительно получают обновления вида и туман.
     if (!std::holds_alternative<ViewUpdated>(event)) {
       transport_.PostEvent(event);
     }
@@ -1319,8 +1506,8 @@ auto App::PumpClient() -> void {
 
   if (in_game_ && !net_client_.Connected() && now >= next_reconnect_) {
     next_reconnect_ = now + kReconnectDelay;
-    // Connection attempts are non-blocking; success is reported when the
-    // Welcome arrives, so retries stay silent.
+    // Попытки подключения неблокирующие; успех определяется по приходу
+    // Welcome, поэтому повторы не шумят.
     net_client_.Reconnect();
   }
 }
@@ -1387,9 +1574,9 @@ auto App::Iterate() -> void {
     return;
   }
 
-  // While dragging, the selected token is drawn on the hovered cell; the
-  // server only learns about it when the button is released. Tokens outside
-  // the currently visible area are not shown at all.
+  // При перетаскивании выбранный токен рисуется на клетке под курсором;
+  // сервер узнаёт о ходе только при отпускании кнопки. Токены вне текущей
+  // зоны видимости не показываются вообще.
   std::vector<Token> shown;
   for (const Token& token : view_.Tokens()) {
     if (!view_.Fog().IsVisible(token.cell)) {
@@ -1424,6 +1611,24 @@ auto App::Iterate() -> void {
                       camera_y_);
   }
   DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_active_, chat_input_);
+  if (sheet_active_) {
+    const Token* sheet_token = nullptr;
+    for (const Token& token : view_.Tokens()) {
+      if (token.id == sheet_token_id_) {
+        sheet_token = &token;
+        break;
+      }
+    }
+    if (sheet_token == nullptr) {
+      CloseSheet();
+    } else {
+      DrawSheetPanel(renderer_, text_.get(), *sheet_token, sheet_field_,
+                     sheet_ac_, sheet_speed_, sheet_notes_);
+    }
+  }
+  if (bestiary_active_) {
+    DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
+  }
   SDL_RenderPresent(renderer_);
 }
 

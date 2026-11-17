@@ -32,8 +32,8 @@ auto GameState::TokenCopy(TokenId id) const -> std::optional<Token> {
 }
 
 auto GameState::AddToken(std::string name, Cell cell, std::string owner,
-                         TokenKind kind, int max_hp, std::uint32_t color)
-    -> TokenId {
+                         TokenKind kind, int max_hp, std::uint32_t color,
+                         int ac, int speed, std::string notes) -> TokenId {
   const TokenId active = ActiveTokenId();
   const TokenId id = next_token_id_++;
   const int resolved_max_hp = std::max(1, max_hp);
@@ -42,6 +42,9 @@ auto GameState::AddToken(std::string name, Cell cell, std::string owner,
                           .owner = std::move(owner),
                           .hp = resolved_max_hp,
                           .max_hp = resolved_max_hp,
+                          .ac = ac,
+                          .speed = speed,
+                          .notes = std::move(notes),
                           .kind = kind,
                           .color = color,
                           .cell = cell});
@@ -146,6 +149,18 @@ auto GameState::SetTokenColor(TokenId id, std::uint32_t color)
     return std::nullopt;
   }
   token->color = color & 0xFFFFFFU;
+  return *token;
+}
+
+auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
+                                 std::string notes) -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->ac = ac;
+  token->speed = speed;
+  token->notes = std::move(notes);
   return *token;
 }
 

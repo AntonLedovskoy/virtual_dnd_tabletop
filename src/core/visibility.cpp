@@ -6,10 +6,10 @@
 namespace dnd {
 namespace {
 
-// Bresenham line of sight. Walls block the ray, but the wall tile itself stays
-// visible so players can see the boundary of a lit room. Diagonal steps also
-// check the two orthogonal neighbours: two walls that only touch by a corner
-// seal the passage and must not leak sight.
+// Линия видимости по Брезенхему. Стены блокируют луч, но сама клетка стены
+// остаётся видимой, чтобы игрок видел границу освещённой комнаты.
+// Диагональный шаг также проверяет двух ортогональных соседей: две стены,
+// соприкасающиеся углом, перекрывают проход и не должны пропускать обзор.
 auto LineOfSightClear(const GridMap& map, Cell from, Cell to) -> bool {
   int x = from.x;
   int y = from.y;

@@ -13,7 +13,7 @@
 
 namespace dnd {
 
-inline constexpr std::uint32_t kProtocolVersion = 9;
+inline constexpr std::uint32_t kProtocolVersion = 10;
 
 enum class MessageType : std::uint8_t {
   kHello = 1,
@@ -30,8 +30,7 @@ struct Hello {
   std::string password;
 };
 
-// Player list shown in the lobby and during the game. The host is always the
-// first entry and is marked as the DM.
+// Список игроков для лобби и игры. Хост всегда первый и помечен как DM.
 struct RosterEntry {
   std::string name;
   bool is_dm = false;
@@ -68,7 +67,7 @@ auto EncodeRoster(const std::vector<RosterEntry>& roster)
 auto DecodeRoster(const std::uint8_t* data, std::size_t size)
     -> std::optional<std::vector<RosterEntry>>;
 
-// Heartbeat: keeps the server-side idle timeout from expiring.
+// Heartbeat: не даёт серверу отключить соединение по таймауту.
 auto EncodePing() -> std::vector<std::uint8_t>;
 auto DecodePing(const std::uint8_t* data, std::size_t size) -> bool;
 

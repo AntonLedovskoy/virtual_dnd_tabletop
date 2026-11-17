@@ -9,41 +9,44 @@
 
 namespace dnd {
 
-// Client-to-server intents. The server validates and translates them into
-// events; commands never mutate the client directly.
+// Намерения клиента, отправляемые серверу. Сервер проверяет их и превращает
+// в события; команды никогда не меняют состояние клиента напрямую.
 struct MoveToken {
   TokenId id = 0;
   Cell target{};
 };
 
-// Plain chat line, shown in the shared log.
+// Обычная строка чата, отображаемая в общем логе.
 struct Say {
   std::string text;
 };
 
-// Dice request, e.g. {count = 2, sides = 6} for 2d6. Rolled on the server so
-// every client sees the same result.
+// Запрос броска, например {count = 2, sides = 6} для 2d6. Бросается на
+// сервере, чтобы все клиенты видели одинаковый результат.
 struct RollDice {
   int count = 1;
   int sides = 20;
 };
 
-// DM-only: spawn a token (empty name gets a generated one). Player tokens are
-// free by default and can then be claimed by a player.
+// Только DM: создать токен (пустое имя заменяется автоматическим). Токены
+// персонажей по умолчанию свободны, затем игрок может их забрать.
 struct AddToken {
   std::string name;
   Cell cell{};
   std::string owner;
   TokenKind kind = TokenKind::kMonster;
   int max_hp = 10;
+  int ac = 10;
+  int speed = 30;
+  std::string notes;
 };
 
-// DM-only: delete a token.
+// Только DM: удалить токен.
 struct RemoveToken {
   TokenId id = 0;
 };
 
-// Owner or DM: adjust a token.
+// Владелец или DM: изменить токен.
 struct SetTokenHp {
   TokenId id = 0;
   int hp = 0;
@@ -54,36 +57,44 @@ struct SetInitiative {
   int value = 0;
 };
 
-// Player: take a free player token. The server fills in the actor name.
+// Игрок: забрать свободного персонажа. Сервер подставляет имя игрока.
 struct ClaimToken {
   TokenId id = 0;
 };
 
-// DM-only: assign or clear (empty owner) a token's owner.
+// Только DM: назначить или очистить (пустой owner) владельца токена.
 struct SetTokenOwner {
   TokenId id = 0;
   std::string owner;
 };
 
-// Owner or DM: rename a token.
+// Владелец или DM: переименовать токен.
 struct RenameToken {
   TokenId id = 0;
   std::string name;
 };
 
-// Owner or DM: change the HP maximum; current HP is clamped to it.
+// Владелец или DM: изменить максимум HP; текущее HP ограничивается им.
 struct SetTokenMaxHp {
   TokenId id = 0;
   int max_hp = 10;
 };
 
-// Owner or DM: set a 0xRRGGBB token colour (0 restores the automatic colour).
+// Владелец или DM: задать цвет токена 0xRRGGBB (0 — автоматический цвет).
 struct SetTokenColor {
   TokenId id = 0;
   std::uint32_t color = 0;
 };
 
-// DM-only encounter control.
+// Владелец или DM: редактировать лист персонажа или монстра в интерфейсе.
+struct UpdateTokenSheet {
+  TokenId id = 0;
+  int ac = 10;
+  int speed = 30;
+  std::string notes;
+};
+
+// Управление боем, доступное только DM.
 struct StartEncounter {};
 struct EndEncounter {};
 struct NextTurn {};
@@ -91,7 +102,7 @@ struct NextTurn {};
 using Command =
     std::variant<MoveToken, Say, RollDice, AddToken, RemoveToken, SetTokenHp,
                  SetInitiative, ClaimToken, SetTokenOwner, RenameToken,
-                 SetTokenMaxHp, SetTokenColor, StartEncounter, EndEncounter,
-                 NextTurn>;
+                 SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, StartEncounter,
+                 EndEncounter, NextTurn>;
 
 }  // namespace dnd

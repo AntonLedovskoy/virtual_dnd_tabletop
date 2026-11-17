@@ -12,17 +12,17 @@
 
 namespace dnd {
 
-// Everything the client is allowed to know: its own copy of the world plus the
-// visibility slice received from the server. Rendering reads only from here.
+// Всё, что разрешено знать клиенту: собственная копия мира и срез
+// видимости, полученный от сервера. Рендеринг читает только отсюда.
 class ClientView {
  public:
   ClientView();
 
-  // Full (re)sync of world tokens and fog, e.g. on join or after loading a
-  // save. The log history is kept.
+  // Полная (пере)синхронизация токенов и тумана, например при входе или
+  // после загрузки сохранения. История лога сохраняется.
   auto Reset(GameSnapshot snapshot, const FogSnapshot& fog) -> void;
   auto Apply(const Event& event) -> void;
-  // Client-only feedback, never sent to other players.
+  // Локальная подсказка клиента, другим игрокам не отправляется.
   auto AddLocalLine(std::string text) -> void;
 
   [[nodiscard]] auto Map() const -> const GridMap& { return map_; }

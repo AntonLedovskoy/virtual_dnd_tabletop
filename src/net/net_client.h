@@ -22,8 +22,8 @@ struct NetClientUpdate {
   bool disconnected = false;
 };
 
-// Client half of the TCP protocol: sends Hello on connect, pings the host and
-// sends commands; the app feeds received events into its ClientView.
+// Клиентская половина TCP-протокола: отправляет Hello при подключении,
+// пингует хост и отправляет команды; приложение передаёт события в ClientView.
 class NetClient {
  public:
   NetClient() = default;
@@ -34,7 +34,7 @@ class NetClient {
   auto Connect(const std::string& host, std::uint16_t port,
                const std::string& player_name, const std::string& password = {})
       -> bool;
-  // Re-establishes the connection to the same endpoint after a drop.
+  // Переподключается к тому же адресу после разрыва.
   auto Reconnect() -> bool;
   auto Disconnect() -> void;
   [[nodiscard]] auto Connected() const -> bool;

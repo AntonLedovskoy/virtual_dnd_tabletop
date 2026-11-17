@@ -9,9 +9,9 @@ namespace dnd {
 
 using TokenId = std::uint32_t;
 
-// Player tokens provide party vision. NPCs and monsters are only visible where
-// a player can already see. The kind also decides which tokens players may
-// claim as their character.
+// Токены персонажей дают обзор партии. NPC и монстры видны только там,
+// где игрок уже может видеть. Тип также определяет, каких токенов игроки
+// могут забирать как своих персонажей.
 enum class TokenKind : std::uint8_t {
   kPlayer = 0,
   kNpc = 1,
@@ -21,14 +21,17 @@ enum class TokenKind : std::uint8_t {
 struct Token {
   TokenId id = 0;
   std::string name;
-  // Empty owner means a free/party token any player may move; the DM can
-  // always move every token.
+  // Пустой owner означает свободный/общий токен, который может двигать любой
+  // игрок; DM всегда может двигать любой токен.
   std::string owner;
   int hp = 10;
   int max_hp = 10;
   int initiative = 0;
+  int ac = 10;
+  int speed = 30;
+  std::string notes;
   TokenKind kind = TokenKind::kMonster;
-  // 0xRRGGBB, or 0 to derive the colour from the token id.
+  // 0xRRGGBB или 0, чтобы брать цвет из id токена.
   std::uint32_t color = 0;
   Cell cell{};
 };

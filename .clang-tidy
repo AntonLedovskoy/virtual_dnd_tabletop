@@ -1,5 +1,5 @@
 ---
-# Google C++ style: https://google.github.io/styleguide/cppguide.html
+# Стиль Google C++: https://google.github.io/styleguide/cppguide.html
 Checks: >
   -*,
   bugprone-*,

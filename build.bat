@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 setlocal
 
 if not defined MSYS2_ROOT set "MSYS2_ROOT=C:\msys64"
@@ -8,12 +9,12 @@ set "CHERE_INVOKING=1"
 
 set "BASH=%MSYS2_ROOT%\usr\bin\bash.exe"
 if not exist "%BASH%" (
-  echo error: MSYS2 bash not found at "%BASH%"
-  echo        set MSYS2_ROOT to your MSYS2 installation directory
+  echo РћС€РёР±РєР°: bash MSYS2 РЅРµ РЅР°Р№РґРµРЅ РІ "%BASH%"
+  echo         Р·Р°РґР°Р№С‚Рµ MSYS2_ROOT СЃ РїСѓС‚С‘Рј СѓСЃС‚Р°РЅРѕРІРєРё MSYS2
   exit /b 1
 )
 if not exist "%MSYS2_ROOT%\ucrt64\bin" (
-  echo error: UCRT64 environment not found at "%MSYS2_ROOT%\ucrt64"
+  echo РћС€РёР±РєР°: РѕРєСЂСѓР¶РµРЅРёРµ UCRT64 РЅРµ РЅР°Р№РґРµРЅРѕ РІ "%MSYS2_ROOT%\ucrt64"
   exit /b 1
 )
 
