@@ -51,6 +51,7 @@ constexpr std::array<std::uint32_t, 6> kTokenPalette{{
     0x9C6CC8U,
     0x46B8B8U,
 }};
+constexpr std::size_t kAutoTokenColorCount = 4;
 
 auto BuildSnapshot() -> GameSnapshot {
   GridMap map(kMapWidth, kMapHeight);
@@ -130,6 +131,30 @@ auto ParseSignedNumber(std::string_view text, int& value) -> bool {
   }
   value = parsed;
   return true;
+}
+
+auto AppendBoundedNumber(std::string& buffer, const char* text, int minimum,
+                         int maximum, bool allow_negative) -> void {
+  if (text == nullptr) {
+    return;
+  }
+  for (const char* it = text; *it != '\0'; ++it) {
+    if ((*it < '0' || *it > '9') &&
+        !(allow_negative && *it == '-' && buffer.empty())) {
+      continue;
+    }
+    std::string candidate = buffer;
+    candidate.push_back(*it);
+    if (candidate == "-") {
+      buffer = std::move(candidate);
+      continue;
+    }
+    int value = 0;
+    if (ParseSignedNumber(candidate, value) && value >= minimum &&
+        value <= maximum) {
+      buffer = std::move(candidate);
+    }
+  }
 }
 
 auto FormatBonus(int bonus) -> std::string {
@@ -1218,11 +1243,12 @@ auto App::SaveSheet() -> void {
   int speed = 0;
   int attack = 0;
   int save = 0;
-  if (!ParseNumber(sheet_ac_, ac) || !ParseNumber(sheet_speed_, speed) ||
-      !ParseSignedNumber(sheet_attack_, attack) ||
-      !ParseSignedNumber(sheet_save_, save)) {
-    view_.AddLocalLine(
-        "КД и скорость должны быть положительными, бонусы — целыми числами");
+  if (!ParseNumber(sheet_ac_, ac) || ac > 1000 ||
+      !ParseSignedNumber(sheet_speed_, speed) || speed < 0 || speed > 1000 ||
+      !ParseSignedNumber(sheet_attack_, attack) || attack < -100 ||
+      attack > 100 || !ParseSignedNumber(sheet_save_, save) || save < -100 ||
+      save > 100) {
+    view_.AddLocalLine("Некорректные значения полей листа");
     return;
   }
   if (!sheet_damage_.empty()) {
@@ -1299,39 +1325,30 @@ auto App::HandleSheetTextInput(const char* text) -> void {
   if (sheet_field_ == SheetField::kAc || sheet_field_ == SheetField::kSpeed ||
       sheet_field_ == SheetField::kAttack ||
       sheet_field_ == SheetField::kSave) {
-    std::string* buffer = nullptr;
     switch (sheet_field_) {
       case SheetField::kAc:
-        buffer = &sheet_ac_;
+        AppendBoundedNumber(sheet_ac_, text, 1, 1000, false);
         break;
       case SheetField::kSpeed:
-        buffer = &sheet_speed_;
+        AppendBoundedNumber(sheet_speed_, text, 0, 1000, false);
         break;
       case SheetField::kAttack:
-        buffer = &sheet_attack_;
+        AppendBoundedNumber(sheet_attack_, text, -100, 100, true);
         break;
       case SheetField::kSave:
-        buffer = &sheet_save_;
+        AppendBoundedNumber(sheet_save_, text, -100, 100, true);
         break;
       default:
         break;
     }
-    if (buffer == nullptr) {
-      return;
-    }
-    for (const char* it = text; *it != '\0'; ++it) {
-      if ((*it >= '0' && *it <= '9') || (*it == '-' && buffer->empty() &&
-                                         (sheet_field_ == SheetField::kAttack ||
-                                          sheet_field_ == SheetField::kSave))) {
-        buffer->push_back(*it);
-      }
-    }
-    TruncateUtf8(*buffer, 5);
     return;
   }
   if (sheet_field_ == SheetField::kDamage) {
-    sheet_damage_ += text;
-    TruncateUtf8(sheet_damage_, 64);
+    std::string candidate = sheet_damage_;
+    candidate += text;
+    if (IsDiceExpressionPrefix(candidate) && candidate.size() <= 64) {
+      sheet_damage_ = std::move(candidate);
+    }
     return;
   }
   sheet_notes_ += text;
@@ -1432,9 +1449,12 @@ auto App::CycleSelectedColor() -> void {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
+  const std::uint32_t current =
+      token->color != 0 ? token->color
+                        : kTokenPalette[(token->id - 1) % kAutoTokenColorCount];
   std::uint32_t next = kTokenPalette.front();
   for (std::size_t i = 0; i < kTokenPalette.size(); ++i) {
-    if (token->color == kTokenPalette[i]) {
+    if (current == kTokenPalette[i]) {
       next = kTokenPalette[(i + 1) % kTokenPalette.size()];
       break;
     }

@@ -448,6 +448,18 @@ auto TestDiceExpression() -> void {
   Expect(!dnd::ParseDiceExpression("d20+101", expression),
          "too large modifier fails");
 
+  Expect(dnd::IsDiceExpressionPrefix(""), "empty text is a valid prefix");
+  Expect(dnd::IsDiceExpressionPrefix("adv "), "adv prefix is valid");
+  Expect(dnd::IsDiceExpressionPrefix("d20+"), "incomplete modifier is valid");
+  Expect(dnd::IsDiceExpressionPrefix("2d6+3"),
+         "complete expression is a valid prefix");
+  Expect(!dnd::IsDiceExpressionPrefix("x"), "letters are rejected");
+  Expect(!dnd::IsDiceExpressionPrefix("advx"), "adv without space fails");
+  Expect(!dnd::IsDiceExpressionPrefix("d101"),
+         "too many sides is rejected while typing");
+  Expect(!dnd::IsDiceExpressionPrefix("d20+101"),
+         "too large modifier is rejected while typing");
+
   std::mt19937 rng(7);
   const dnd::DiceRollResult normal = dnd::RollDiceExpression(
       dnd::DiceExpression{.count = 2, .sides = 6, .modifier = 3}, rng);

@@ -63,6 +63,59 @@ auto ParseSignedInt(std::string_view text, int& value) -> bool {
   return ParseInt(text, value);
 }
 
+auto AllDigits(std::string_view text) -> bool {
+  if (text.empty()) {
+    return false;
+  }
+  for (const char value : text) {
+    if (value < '0' || value > '9') {
+      return false;
+    }
+  }
+  return true;
+}
+
+auto IsExpressionPrefix(std::string_view text) -> bool {
+  if (text.empty()) {
+    return true;
+  }
+  const auto separator = text.find_first_of("dD");
+  if (separator == std::string_view::npos) {
+    int count = 0;
+    return AllDigits(text) && ParseInt(text, count) && count >= 1 &&
+           count <= kMaxDiceCount;
+  }
+
+  if (separator > 0) {
+    int count = 0;
+    if (!AllDigits(text.substr(0, separator)) ||
+        !ParseInt(text.substr(0, separator), count) || count < 1 ||
+        count > kMaxDiceCount) {
+      return false;
+    }
+  }
+
+  std::string_view rest = text.substr(separator + 1);
+  const auto modifier_pos = rest.find_first_of("+-");
+  const std::string_view sides = rest.substr(0, modifier_pos);
+  if (!sides.empty()) {
+    int value = 0;
+    if (!AllDigits(sides) || !ParseInt(sides, value) || value > kMaxDiceSides) {
+      return false;
+    }
+  }
+  if (modifier_pos == std::string_view::npos) {
+    return true;
+  }
+  const std::string_view modifier = rest.substr(modifier_pos + 1);
+  if (modifier.empty()) {
+    return true;
+  }
+  int value = 0;
+  return AllDigits(modifier) && ParseInt(modifier, value) &&
+         value <= kMaxModifier;
+}
+
 auto ModifierText(int modifier) -> std::string {
   if (modifier > 0) {
     return " + " + std::to_string(modifier);
@@ -140,6 +193,38 @@ auto ParseDiceExpression(std::string_view text, DiceExpression& expression)
       .disadvantage = disadvantage,
   };
   return true;
+}
+
+auto IsDiceExpressionPrefix(std::string_view text) -> bool {
+  if (text.size() > 64) {
+    return false;
+  }
+  if (text.empty()) {
+    return true;
+  }
+  DiceExpression parsed;
+  if (ParseDiceExpression(text, parsed)) {
+    return true;
+  }
+
+  if (text == "a" || text == "ad" || text == "di") {
+    return true;
+  }
+  if (StartsWithIgnoreCase(text, "adv")) {
+    std::string_view rest = Trim(text.substr(3));
+    if (!rest.empty() && text[3] != ' ') {
+      return false;
+    }
+    return IsExpressionPrefix(rest);
+  }
+  if (StartsWithIgnoreCase(text, "dis")) {
+    std::string_view rest = Trim(text.substr(3));
+    if (!rest.empty() && text[3] != ' ') {
+      return false;
+    }
+    return IsExpressionPrefix(rest);
+  }
+  return IsExpressionPrefix(text);
 }
 
 auto RollDiceExpression(const DiceExpression& expression, std::mt19937& rng)

@@ -27,6 +27,10 @@ struct DiceRollResult {
 auto ParseDiceExpression(std::string_view text, DiceExpression& expression)
     -> bool;
 
+// Проверяет, может ли текст быть началом корректного выражения. Используется
+// для посимвольного ввода урона в листе персонажа.
+auto IsDiceExpressionPrefix(std::string_view text) -> bool;
+
 auto RollDiceExpression(const DiceExpression& expression, std::mt19937& rng)
     -> DiceRollResult;
 
