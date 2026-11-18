@@ -30,6 +30,12 @@ struct Hello {
   std::string password;
 };
 
+// Читает только начало Hello: тип сообщения и версию протокола. Раскладка
+// этих пяти байт не меняется между версиями, поэтому сервер может отличить
+// чужую версию от битого пакета и ответить понятным отказом.
+auto DecodeHelloVersion(const std::uint8_t* data, std::size_t size)
+    -> std::optional<std::uint32_t>;
+
 // Список игроков для лобби и игры. Хост всегда первый и помечен как DM.
 struct RosterEntry {
   std::string name;

@@ -73,6 +73,20 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
     if (peer.welcomed) {
       return;
     }
+    // Сначала проверяем версию: о несовпадении надо сказать прямо, иначе
+    // игрок со старой сборкой увидит только «некорректное приветствие».
+    const std::optional<std::uint32_t> version =
+        DecodeHelloVersion(frame.data(), frame.size());
+    if (!version.has_value()) {
+      Reject(peer.id, "некорректное приветствие");
+      return;
+    }
+    if (*version != kProtocolVersion) {
+      Reject(peer.id, "версия игры не совпадает: у хоста " +
+                          std::to_string(kProtocolVersion) + ", у клиента " +
+                          std::to_string(*version) + "; обновите игру");
+      return;
+    }
     const std::optional<Hello> hello = DecodeHello(frame.data(), frame.size());
     if (!hello.has_value()) {
       Reject(peer.id, "некорректное приветствие");

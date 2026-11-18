@@ -25,6 +25,19 @@ auto EncodeHello(const Hello& hello) -> std::vector<std::uint8_t> {
   return writer.Data();
 }
 
+auto DecodeHelloVersion(const std::uint8_t* data, std::size_t size)
+    -> std::optional<std::uint32_t> {
+  ByteReader reader(data, size);
+  std::uint8_t type = 0;
+  std::uint32_t version = 0;
+  if (!reader.U8(type) ||
+      type != static_cast<std::uint8_t>(MessageType::kHello) ||
+      !reader.U32(version)) {
+    return std::nullopt;
+  }
+  return version;
+}
+
 auto DecodeHello(const std::uint8_t* data, std::size_t size)
     -> std::optional<Hello> {
   ByteReader reader(data, size);

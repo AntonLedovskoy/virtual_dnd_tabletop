@@ -1,12 +1,15 @@
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
 #include <variant>
 #include <vector>
 
+#include "core/byte_io.h"
 #include "core/game_state.h"
 #include "core/grid_map.h"
 #include "core/visibility.h"
@@ -296,6 +299,76 @@ auto TestPlayerNameValidation() -> void {
   Expect(nameless_update.reject.has_value(), "empty player name is rejected");
 }
 
+auto TestVersionMismatchReject() -> void {
+  const std::vector<std::uint8_t> hello =
+      dnd::EncodeHello(dnd::Hello{.player_name = "tester"});
+  Expect(dnd::DecodeHelloVersion(hello.data(), hello.size()) ==
+             dnd::kProtocolVersion,
+         "hello header carries the protocol version");
+  Expect(!dnd::DecodeHelloVersion(hello.data(), 3).has_value(),
+         "truncated hello header is rejected");
+
+  dnd::NetServer server;
+  Expect(server.Start(0), "version test server listens");
+  const std::uint16_t port = server.Port();
+  if (port == 0) {
+    return;
+  }
+
+  const std::unique_ptr<dnd::TcpConnection> connection =
+      dnd::TcpConnection::Connect("127.0.0.1", port);
+  Expect(connection != nullptr, "foreign-version client connects");
+  if (connection == nullptr) {
+    return;
+  }
+
+  // Клиент другой версии шлёт обычный Hello, но с чужим номером протокола.
+  const std::uint32_t foreign_version = dnd::kProtocolVersion + 1;
+  dnd::ByteWriter writer;
+  writer.U8(static_cast<std::uint8_t>(dnd::MessageType::kHello));
+  writer.U32(foreign_version);
+  writer.String("tester");
+  writer.String("");
+  connection->QueueFrame(writer.Data());
+
+  std::vector<dnd::PeerJoined> joined;
+  std::vector<dnd::PeerCommand> commands;
+  std::vector<dnd::PeerId> dropped;
+  std::vector<std::vector<std::uint8_t>> frames;
+  std::optional<std::string> reason;
+  const auto deadline = Now() + std::chrono::seconds(3);
+  while (!reason.has_value() && Now() < deadline) {
+    server.Poll(joined, commands, dropped);
+    if (connection->Poll(frames)) {
+      for (const std::vector<std::uint8_t>& frame : frames) {
+        if (frame.empty() || static_cast<dnd::MessageType>(frame[0]) !=
+                                 dnd::MessageType::kReject) {
+          continue;
+        }
+        if (const std::optional<std::string> decoded =
+                dnd::DecodeReject(frame.data(), frame.size())) {
+          reason = decoded;
+        }
+      }
+      frames.clear();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  Expect(joined.empty(), "foreign version does not join");
+  Expect(reason.has_value(), "foreign version is rejected");
+  if (reason.has_value()) {
+    const std::string host_version = std::to_string(dnd::kProtocolVersion);
+    const std::string client_version = std::to_string(foreign_version);
+    Expect(reason->find(host_version) != std::string::npos,
+           "reject names the host version");
+    Expect(reason->find(client_version) != std::string::npos,
+           "reject names the client version");
+    Expect(reason->find("обновите игру") != std::string::npos,
+           "reject tells the player what to do");
+  }
+}
+
 auto TestPing() -> void {
   const std::vector<std::uint8_t> ping = dnd::EncodePing();
   Expect(dnd::DecodePing(ping.data(), ping.size()), "ping roundtrip");
@@ -313,6 +386,7 @@ auto main() -> int {
     TestViewUpdateRoundtrip();
     TestPasswordAndRoster();
     TestPlayerNameValidation();
+    TestVersionMismatchReject();
     TestTcpHandshakeAndEvents();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());
