@@ -86,7 +86,7 @@ inline constexpr std::string_view kEditorSceneMissing =
 
 inline constexpr std::string_view kSheetTitle = "Лист";
 inline constexpr std::string_view kSheetAc = "КД";
-inline constexpr std::string_view kSheetSpeed = "Скорость";
+inline constexpr std::string_view kSheetSpeed = "Скорость, м";
 inline constexpr std::string_view kSheetAttack = "Бонус атаки";
 inline constexpr std::string_view kSheetSave = "Бонус спасброска";
 inline constexpr std::string_view kSheetTempHp = "Временные HP";

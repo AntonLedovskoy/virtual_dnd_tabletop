@@ -31,7 +31,7 @@ class GameState {
                               std::string owner = {},
                               TokenKind kind = TokenKind::kPlayer,
                               int max_hp = 10, std::uint32_t color = 0,
-                              int ac = 10, int speed = 30,
+                              int ac = 10, int speed = 9,
                               std::string notes = {}, int attack_bonus = 0,
                               int save_bonus = 0, std::string damage = {})
       -> TokenId;

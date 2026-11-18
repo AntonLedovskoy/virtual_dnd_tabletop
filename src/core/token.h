@@ -30,7 +30,7 @@ struct Token {
   int temp_hp = 0;
   int initiative = 0;
   int ac = 10;
-  int speed = 30;
+  int speed = 9;
   std::string notes;
   int attack_bonus = 0;
   int save_bonus = 0;

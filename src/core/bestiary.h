@@ -11,7 +11,7 @@ struct MonsterTemplate {
   std::string name;
   int ac = 10;
   int max_hp = 10;
-  int speed = 30;
+  int speed = 9;
   int attack_bonus = 0;
   int save_bonus = 0;
   std::string damage;

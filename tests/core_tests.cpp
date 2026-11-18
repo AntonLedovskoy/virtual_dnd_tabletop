@@ -400,7 +400,7 @@ auto TestClaimAndTokenAdmin() -> void {
   const dnd::CommandOutcome sheet =
       server.HandleCommand(dnd::UpdateTokenSheet{.id = 1,
                                                  .ac = 16,
-                                                 .speed = 25,
+                                                 .speed = 9,
                                                  .notes = "Атака: +5, 1d8+3",
                                                  .attack_bonus = 5,
                                                  .save_bonus = 2,
@@ -409,7 +409,7 @@ auto TestClaimAndTokenAdmin() -> void {
                            "alice", false);
   Expect(sheet.accepted, "the owner can edit the character sheet");
   Expect(server.State().TokenCopy(1)->ac == 16, "КД сохраняется");
-  Expect(server.State().TokenCopy(1)->speed == 25, "speed is stored");
+  Expect(server.State().TokenCopy(1)->speed == 9, "speed is stored");
   Expect(server.State().TokenCopy(1)->notes == "Атака: +5, 1d8+3",
          "notes are stored");
   Expect(server.State().TokenCopy(1)->attack_bonus == 5,
@@ -420,21 +420,21 @@ auto TestClaimAndTokenAdmin() -> void {
   Expect(!server
               .HandleCommand(
                   dnd::UpdateTokenSheet{
-                      .id = 1, .ac = 12, .speed = 30, .notes = "чужое"},
+                      .id = 1, .ac = 12, .speed = 9, .notes = "чужое"},
                   "bob", false)
               .accepted,
          "other players cannot edit the sheet");
+  Expect(
+      !server
+           .HandleCommand(
+               dnd::UpdateTokenSheet{.id = 1, .ac = 0, .speed = 9, .notes = ""},
+               "alice", false)
+           .accepted,
+      "некорректный КД отвергается");
   Expect(!server
               .HandleCommand(
                   dnd::UpdateTokenSheet{
-                      .id = 1, .ac = 0, .speed = 30, .notes = ""},
-                  "alice", false)
-              .accepted,
-         "некорректный КД отвергается");
-  Expect(!server
-              .HandleCommand(
-                  dnd::UpdateTokenSheet{
-                      .id = 1, .ac = 12, .speed = 30, .temp_hp = 1001},
+                      .id = 1, .ac = 12, .speed = 9, .temp_hp = 1001},
                   "alice", false)
               .accepted,
          "too much temporary HP is rejected");
@@ -819,7 +819,7 @@ auto TestSaveLoadRoundtrip() -> void {
                          .temp_hp = 3,
                          .initiative = 15,
                          .ac = 16,
-                         .speed = 25,
+                         .speed = 9,
                          .notes = "Атака: +5, 1d8+3",
                          .attack_bonus = 5,
                          .save_bonus = 2,
@@ -863,7 +863,7 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().initiative == 15,
            "token initiative survives");
     Expect(loaded->tokens.front().ac == 16, "token AC survives");
-    Expect(loaded->tokens.front().speed == 25, "token speed survives");
+    Expect(loaded->tokens.front().speed == 9, "token speed survives");
     Expect(loaded->tokens.front().notes == "Атака: +5, 1d8+3",
            "token notes survive");
     Expect(loaded->tokens.front().attack_bonus == 5,
@@ -1049,7 +1049,7 @@ auto TestCommandEventSerialization() -> void {
       .kind = dnd::TokenKind::kMonster,
       .max_hp = 13,
       .ac = 14,
-      .speed = 40,
+      .speed = 12,
       .notes = "Дубина: +4, 1d8+2",
       .attack_bonus = 4,
       .save_bonus = 1,
@@ -1068,7 +1068,7 @@ auto TestCommandEventSerialization() -> void {
               dnd::TokenKind::kMonster &&
           std::get<dnd::AddToken>(*add_decoded).max_hp == 13 &&
           std::get<dnd::AddToken>(*add_decoded).ac == 14 &&
-          std::get<dnd::AddToken>(*add_decoded).speed == 40 &&
+          std::get<dnd::AddToken>(*add_decoded).speed == 12 &&
           std::get<dnd::AddToken>(*add_decoded).notes == "Дубина: +4, 1d8+2" &&
           std::get<dnd::AddToken>(*add_decoded).attack_bonus == 4 &&
           std::get<dnd::AddToken>(*add_decoded).save_bonus == 1 &&
@@ -1132,7 +1132,7 @@ auto TestCommandEventSerialization() -> void {
   const dnd::Command sheet_command{
       dnd::UpdateTokenSheet{.id = 4,
                             .ac = 15,
-                            .speed = 30,
+                            .speed = 9,
                             .notes = "Атака: +4, 1d6+2",
                             .attack_bonus = 4,
                             .save_bonus = 1,
@@ -1146,7 +1146,7 @@ auto TestCommandEventSerialization() -> void {
       sheet_decoded.has_value() &&
           std::holds_alternative<dnd::UpdateTokenSheet>(*sheet_decoded) &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).ac == 15 &&
-          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).speed == 30 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).speed == 9 &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).notes ==
               "Атака: +4, 1d6+2" &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).attack_bonus == 4 &&
@@ -1177,7 +1177,7 @@ auto TestCommandEventSerialization() -> void {
                           .temp_hp = 3,
                           .initiative = 11,
                           .ac = 14,
-                          .speed = 40,
+                          .speed = 12,
                           .notes = "Дубина: +4, 1d8+2",
                           .attack_bonus = 4,
                           .save_bonus = 1,
@@ -1197,7 +1197,7 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::TokenUpdated>(*updated_decoded).token.initiative ==
               11 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.ac == 14 &&
-          std::get<dnd::TokenUpdated>(*updated_decoded).token.speed == 40 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.speed == 12 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.notes ==
               "Дубина: +4, 1d8+2" &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.attack_bonus ==

@@ -44,7 +44,7 @@ struct AddToken {
   TokenKind kind = TokenKind::kMonster;
   int max_hp = 10;
   int ac = 10;
-  int speed = 30;
+  int speed = 9;
   std::string notes;
   int attack_bonus = 0;
   int save_bonus = 0;
@@ -105,7 +105,7 @@ struct SetTokenColor {
 struct UpdateTokenSheet {
   TokenId id = 0;
   int ac = 10;
-  int speed = 30;
+  int speed = 9;
   std::string notes;
   int attack_bonus = 0;
   int save_bonus = 0;

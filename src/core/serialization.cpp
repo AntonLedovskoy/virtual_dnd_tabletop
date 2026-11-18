@@ -80,7 +80,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::int32_t temp_hp = 0;
   std::int32_t initiative = 0;
   std::int32_t ac = 10;
-  std::int32_t speed = 30;
+  std::int32_t speed = 9;
   std::uint8_t kind = 0;
   std::uint32_t color = 0;
   std::int32_t x = 0;
@@ -266,7 +266,7 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
   std::uint8_t kind = 0;
   std::int32_t max_hp = 0;
   std::int32_t ac = 10;
-  std::int32_t speed = 30;
+  std::int32_t speed = 9;
   std::string notes;
   std::int32_t attack_bonus = 0;
   std::int32_t save_bonus = 0;
@@ -384,7 +384,7 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
     -> std::optional<Command> {
   std::uint32_t id = 0;
   std::int32_t ac = 10;
-  std::int32_t speed = 30;
+  std::int32_t speed = 9;
   std::string notes;
   std::int32_t attack_bonus = 0;
   std::int32_t save_bonus = 0;

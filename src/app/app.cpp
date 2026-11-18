@@ -159,6 +159,21 @@ auto AppendBoundedNumber(std::string& buffer, const char* text, int minimum,
   }
 }
 
+auto SpeedToCells(int meters) -> int {
+  if (meters <= 0) {
+    return 0;
+  }
+  return static_cast<int>(std::lround(static_cast<float>(meters) / 1.5F));
+}
+
+auto FormatMeters(int cells) -> std::string {
+  const int half_meters = cells * 3;
+  if (half_meters % 2 == 0) {
+    return std::to_string(half_meters / 2) + " м";
+  }
+  return std::to_string(half_meters / 2) + ",5 м";
+}
+
 auto FormatBonus(int bonus) -> std::string {
   if (bonus > 0) {
     return "+" + std::to_string(bonus);
@@ -1881,7 +1896,7 @@ auto App::Iterate() -> void {
   if (show_movement_range_) {
     const Token* range_token = FindSelectedToken();
     if (range_token != nullptr) {
-      const int radius = std::max(0, range_token->speed / 5);
+      const int radius = SpeedToCells(range_token->speed);
       DrawMovementRange(renderer_,
                         ReachableCells(view_.Map(), range_token->cell, radius),
                         cell_size_, camera_x_, camera_y_);
@@ -1902,7 +1917,7 @@ auto App::Iterate() -> void {
               camera_y_);
     const int dx = std::abs(measure_end_->x - measure_start_->x);
     const int dy = std::abs(measure_end_->y - measure_start_->y);
-    const int feet = std::max(dx, dy) * 5;
+    const int cells = std::max(dx, dy);
     const float label_x =
         camera_x_ +
         ((static_cast<float>(measure_start_->x + measure_end_->x) + 1.0F) *
@@ -1912,7 +1927,7 @@ auto App::Iterate() -> void {
         ((static_cast<float>(measure_start_->y + measure_end_->y) + 1.0F) *
          cell_size_ / 2.0F);
     text_->Draw(
-        std::to_string(feet) + " фт", label_x + 8.0F, label_y - 8.0F,
+        FormatMeters(cells), label_x + 8.0F, label_y - 8.0F,
         SDL_Color{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = SDL_ALPHA_OPAQUE},
         120.0F);
   }
