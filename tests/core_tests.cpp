@@ -7,6 +7,7 @@
 #include <variant>
 #include <vector>
 
+#include "core/aoe.h"
 #include "core/bestiary.h"
 #include "core/client_view.h"
 #include "core/conditions.h"
@@ -804,6 +805,163 @@ auto TestEncounterCommands() -> void {
   Expect(!server.State().EncounterState().active, "encounter is cleared");
 }
 
+auto TestAoe() -> void {
+  const dnd::GridMap map(10, 10);
+
+  const dnd::AoeTemplate circle{
+      .shape = dnd::AoeShape::kCircle,
+      .origin = CellAt(4, 4),
+      .direction = 0,
+      .radius = 2,
+      .width = 1,
+  };
+  const std::vector<dnd::Cell> circle_cells = dnd::AoeCells(map, circle);
+  Expect(circle_cells.size() == 13, "circle covers thirteen cells");
+  Expect(HasCell(circle_cells, CellAt(4, 4)) &&
+             HasCell(circle_cells, CellAt(6, 4)) &&
+             HasCell(circle_cells, CellAt(4, 2)),
+         "circle reaches its radius");
+  Expect(!HasCell(circle_cells, CellAt(7, 4)),
+         "circle stops outside the radius");
+
+  dnd::AoeTemplate cone = circle;
+  cone.shape = dnd::AoeShape::kCone;
+  const std::vector<dnd::Cell> cone_cells = dnd::AoeCells(map, cone);
+  Expect(!HasCell(cone_cells, CellAt(4, 4)),
+         "cone starts in front of the origin");
+  Expect(HasCell(cone_cells, CellAt(5, 4)) &&
+             HasCell(cone_cells, CellAt(6, 5)) &&
+             HasCell(cone_cells, CellAt(6, 3)),
+         "cone widens along its direction");
+  Expect(!HasCell(cone_cells, CellAt(3, 4)),
+         "cone does not spread behind the origin");
+
+  dnd::AoeTemplate line = circle;
+  line.shape = dnd::AoeShape::kLine;
+  line.width = 1;
+  const std::vector<dnd::Cell> line_cells = dnd::AoeCells(map, line);
+  Expect(line_cells.size() == 3 && HasCell(line_cells, CellAt(4, 4)) &&
+             HasCell(line_cells, CellAt(6, 4)) &&
+             !HasCell(line_cells, CellAt(5, 5)),
+         "narrow line follows one row");
+  line.width = 3;
+  const std::vector<dnd::Cell> wide_line = dnd::AoeCells(map, line);
+  Expect(wide_line.size() == 9 && HasCell(wide_line, CellAt(5, 3)) &&
+             HasCell(wide_line, CellAt(5, 5)),
+         "wide line covers three rows");
+
+  line.radius = 1;
+  line.width = 7;
+  const std::vector<dnd::Cell> short_wide_line = dnd::AoeCells(map, line);
+  Expect(short_wide_line.size() == 14 &&
+             HasCell(short_wide_line, CellAt(4, 1)) &&
+             HasCell(short_wide_line, CellAt(5, 7)),
+         "wide line is not clipped by a short radius");
+
+  Expect(dnd::RotateAoe(circle, -1).direction == 7, "rotation wraps backwards");
+  Expect(dnd::RotateAoe(circle, 9).direction == 1, "rotation wraps forwards");
+  Expect(dnd::ResizeAoe(circle, 100).radius == dnd::kMaxAoeRadius,
+         "radius is clamped at the top");
+  Expect(dnd::ResizeAoe(circle, -100).radius == 1,
+         "radius is clamped at the bottom");
+  Expect(dnd::WidenAoe(circle, 1).width == 3, "line widens by two");
+  Expect(dnd::WidenAoe(circle, -1).width == 1,
+         "line width never drops below one");
+  dnd::AoeTemplate max_width = circle;
+  max_width.width = dnd::kMaxAoeWidth;
+  Expect(dnd::WidenAoe(max_width, 1).width % 2 == 1 &&
+             dnd::WidenAoe(max_width, 1).width <= dnd::kMaxAoeWidth,
+         "line width stays odd and in range");
+  Expect(dnd::NextAoeShape(dnd::AoeShape::kCircle) == dnd::AoeShape::kCone &&
+             dnd::NextAoeShape(dnd::AoeShape::kCone) == dnd::AoeShape::kLine &&
+             dnd::NextAoeShape(dnd::AoeShape::kLine) == dnd::AoeShape::kCircle,
+         "shape cycles through all kinds");
+
+  dnd::AoeTemplate invalid = circle;
+  invalid.width = 2;
+  Expect(!dnd::IsValidAoe(invalid) && dnd::AoeCells(map, invalid).empty(),
+         "even width is rejected");
+  invalid = circle;
+  invalid.direction = dnd::kAoeDirections;
+  Expect(!dnd::IsValidAoe(invalid), "direction outside the range is rejected");
+  invalid = circle;
+  invalid.radius = 0;
+  Expect(!dnd::IsValidAoe(invalid), "zero radius is rejected");
+  invalid = circle;
+  invalid.origin = CellAt(20, 20);
+  Expect(dnd::AoeCells(map, invalid).empty(),
+         "template outside the map has no cells");
+  Expect(dnd::AoeCells(map, dnd::AoeTemplate{}).empty(),
+         "hidden template has no cells");
+}
+
+auto TestAoeCommands() -> void {
+  const dnd::GridMap map(10, 10);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 1)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 6, 1);
+
+  const dnd::SetAoe set{.aoe = dnd::AoeTemplate{
+                            .shape = dnd::AoeShape::kCircle,
+                            .origin = CellAt(3, 3),
+                            .direction = 0,
+                            .radius = 3,
+                            .width = 1,
+                        }};
+  Expect(!server.HandleCommand(set, "alice", false).accepted,
+         "players cannot place a template");
+
+  const dnd::CommandOutcome placed = server.HandleCommand(set, "", true);
+  Expect(placed.accepted, "DM places a template");
+  Expect(placed.events.size() == 1 &&
+             std::holds_alternative<dnd::AoeUpdated>(placed.events.front()),
+         "placing broadcasts AoeUpdated");
+  if (!placed.events.empty() &&
+      std::holds_alternative<dnd::AoeUpdated>(placed.events.front())) {
+    const auto& aoe = std::get<dnd::AoeUpdated>(placed.events.front()).aoe;
+    Expect(aoe == set.aoe, "event carries the template");
+    Expect(server.EventVisibleToPlayers(placed.events.front()),
+           "templates are visible to players");
+  }
+  Expect(server.State().Aoe() == set.aoe, "server keeps the template");
+  Expect(server.ClientSnapshot().aoe == set.aoe,
+         "template is part of the snapshot");
+
+  dnd::ClientView view;
+  for (const dnd::Event& event : placed.events) {
+    view.Apply(event);
+  }
+  Expect(view.Aoe() == set.aoe, "client view tracks the template");
+
+  dnd::SetAoe even_width = set;
+  even_width.aoe.width = 2;
+  Expect(!server.HandleCommand(even_width, "", true).accepted,
+         "even line width is rejected by the server");
+  dnd::SetAoe outside = set;
+  outside.aoe.origin = CellAt(50, 50);
+  Expect(!server.HandleCommand(outside, "", true).accepted,
+         "template outside the map is rejected by the server");
+
+  const dnd::CommandOutcome cleared =
+      server.HandleCommand(dnd::SetAoe{}, "", true);
+  Expect(cleared.accepted, "DM clears the template");
+  Expect(server.State().Aoe().shape == dnd::AoeShape::kNone,
+         "clearing hides the template");
+  if (!cleared.events.empty() &&
+      std::holds_alternative<dnd::AoeUpdated>(cleared.events.front())) {
+    view.Apply(cleared.events.front());
+  }
+  Expect(view.Aoe().shape == dnd::AoeShape::kNone,
+         "client view forgets the template");
+}
+
 auto TestSaveLoadRoundtrip() -> void {
   dnd::GridMap map(6, 4);
   map.SetBlocked(CellAt(2, 1), true);
@@ -841,6 +999,14 @@ auto TestSaveLoadRoundtrip() -> void {
               .round = 3,
               .order = {4, 6},
               .turn_index = 1,
+          },
+      .aoe =
+          dnd::AoeTemplate{
+              .shape = dnd::AoeShape::kCone,
+              .origin = CellAt(2, 2),
+              .direction = 5,
+              .radius = 4,
+              .width = 3,
           },
   };
 
@@ -883,6 +1049,7 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->encounter.order == std::vector<dnd::TokenId>{4, 6} &&
                loaded->encounter.turn_index == 1,
            "turn order survives the roundtrip");
+    Expect(loaded->aoe == original.aoe, "aoe template survives the roundtrip");
   }
 
   std::filesystem::remove(path);
@@ -1242,6 +1409,60 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::EncounterUpdated>(*encounter_decoded)
                   .encounter.turn_index == 1,
       "encounter event survives serialization");
+
+  const dnd::Command place_aoe{dnd::SetAoe{.aoe = dnd::AoeTemplate{
+                                               .shape = dnd::AoeShape::kLine,
+                                               .origin = CellAt(3, 5),
+                                               .direction = 2,
+                                               .radius = 6,
+                                               .width = 5,
+                                           }}};
+  const std::vector<std::uint8_t> place_aoe_bytes =
+      dnd::EncodeCommand(place_aoe);
+  const std::optional<dnd::Command> place_aoe_decoded =
+      dnd::DecodeCommand(place_aoe_bytes.data(), place_aoe_bytes.size());
+  Expect(place_aoe_decoded.has_value() &&
+             std::holds_alternative<dnd::SetAoe>(*place_aoe_decoded) &&
+             std::get<dnd::SetAoe>(*place_aoe_decoded).aoe ==
+                 std::get<dnd::SetAoe>(place_aoe).aoe,
+         "aoe command survives serialization");
+
+  const dnd::Event aoe_event{dnd::AoeUpdated{
+      .aoe =
+          dnd::AoeTemplate{
+              .shape = dnd::AoeShape::kCircle,
+              .origin = CellAt(1, 7),
+              .direction = 7,
+              .radius = 2,
+              .width = 1,
+          },
+  }};
+  const std::vector<std::uint8_t> aoe_event_bytes = dnd::EncodeEvent(aoe_event);
+  const std::optional<dnd::Event> aoe_event_decoded =
+      dnd::DecodeEvent(aoe_event_bytes.data(), aoe_event_bytes.size());
+  Expect(aoe_event_decoded.has_value() &&
+             std::holds_alternative<dnd::AoeUpdated>(*aoe_event_decoded) &&
+             std::get<dnd::AoeUpdated>(*aoe_event_decoded).aoe ==
+                 std::get<dnd::AoeUpdated>(aoe_event).aoe,
+         "aoe event survives serialization");
+
+  const dnd::Command clear_aoe{dnd::SetAoe{}};
+  const std::vector<std::uint8_t> clear_aoe_bytes =
+      dnd::EncodeCommand(clear_aoe);
+  const std::optional<dnd::Command> clear_aoe_decoded =
+      dnd::DecodeCommand(clear_aoe_bytes.data(), clear_aoe_bytes.size());
+  Expect(clear_aoe_decoded.has_value() &&
+             std::holds_alternative<dnd::SetAoe>(*clear_aoe_decoded) &&
+             std::get<dnd::SetAoe>(*clear_aoe_decoded).aoe.shape ==
+                 dnd::AoeShape::kNone,
+         "clearing the template survives serialization");
+
+  std::vector<std::uint8_t> even_width_bytes = place_aoe_bytes;
+  constexpr std::size_t kWidthOffset = 1 + 1 + 4 + 4 + 4 + 4;
+  even_width_bytes[kWidthOffset] = 4;
+  Expect(!dnd::DecodeCommand(even_width_bytes.data(), even_width_bytes.size())
+              .has_value(),
+         "decoder rejects an even line width");
 }
 
 }  // namespace
@@ -1263,6 +1484,8 @@ auto main() -> int {
     TestTokenManagement();
     TestEncounter();
     TestEncounterCommands();
+    TestAoe();
+    TestAoeCommands();
     TestChatAndDice();
     TestCommandEventSerialization();
     TestSaveLoadRoundtrip();

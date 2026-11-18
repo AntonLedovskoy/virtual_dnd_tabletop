@@ -103,6 +103,11 @@ class App {
   auto CloseConditions() -> void;
   auto ToggleCondition(int index) -> void;
   auto HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto ToggleAoeMode() -> void;
+  auto ClearAoe() -> void;
+  auto SendAoe(const AoeTemplate& aoe) -> void;
+  auto UpdateAoeFromCursor() -> void;
+  auto HandleAoeKeyDown(const SDL_KeyboardEvent& key) -> bool;
   auto ClaimSelectedToken() -> void;
   auto ReleaseSelectedToken() -> void;
   [[nodiscard]] auto PlayerHasCharacter() const -> bool;
@@ -160,6 +165,7 @@ class App {
   std::vector<std::string> conditions_draft_;
 
   bool show_movement_range_ = false;
+  bool aoe_mode_ = false;
   bool measuring_ = false;
   std::optional<Cell> measure_start_;
   std::optional<Cell> measure_end_;

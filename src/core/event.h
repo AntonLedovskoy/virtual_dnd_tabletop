@@ -2,6 +2,7 @@
 
 #include <variant>
 
+#include "core/aoe.h"
 #include "core/encounter.h"
 #include "core/grid_map.h"
 #include "core/log_line.h"
@@ -50,7 +51,13 @@ struct EncounterUpdated {
   Encounter encounter;
 };
 
-using Event = std::variant<TokenMoved, ViewUpdated, LogLineAdded, TokenAdded,
-                           TokenRemoved, TokenUpdated, EncounterUpdated>;
+// DM поставил или убрал шаблон области.
+struct AoeUpdated {
+  AoeTemplate aoe;
+};
+
+using Event =
+    std::variant<TokenMoved, ViewUpdated, LogLineAdded, TokenAdded,
+                 TokenRemoved, TokenUpdated, EncounterUpdated, AoeUpdated>;
 
 }  // namespace dnd

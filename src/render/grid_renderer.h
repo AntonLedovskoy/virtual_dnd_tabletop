@@ -36,4 +36,8 @@ auto DrawMovementRange(SDL_Renderer* renderer, const std::vector<Cell>& cells,
 auto DrawRuler(SDL_Renderer* renderer, Cell from, Cell to, float cell_size,
                float offset_x, float offset_y) -> void;
 
+// Шаблон области, который DM показывает столу.
+auto DrawAoe(SDL_Renderer* renderer, const std::vector<Cell>& cells,
+             float cell_size, float offset_x, float offset_y) -> void;
+
 }  // namespace dnd

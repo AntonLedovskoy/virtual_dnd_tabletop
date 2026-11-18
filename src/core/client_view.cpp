@@ -12,6 +12,7 @@ ClientView::ClientView() : map_(1, 1), fog_(1, 1) {}
 
 auto ClientView::Reset(GameSnapshot snapshot, const FogSnapshot& fog) -> void {
   encounter_ = std::move(snapshot.encounter);
+  aoe_ = snapshot.aoe;
   map_ = std::move(snapshot.map);
   tokens_ = std::move(snapshot.tokens);
   fog_.Restore(fog);
@@ -41,6 +42,8 @@ auto ClientView::Apply(const Event& event) -> void {
           }
         } else if constexpr (std::is_same_v<T, EncounterUpdated>) {
           encounter_ = ev.encounter;
+        } else if constexpr (std::is_same_v<T, AoeUpdated>) {
+          aoe_ = ev.aoe;
         } else if constexpr (std::is_same_v<T, LogLineAdded>) {
           log_.push_back(ev.line);
           if (log_.size() > kMaxLogLines) {

@@ -979,6 +979,7 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
       measuring_ = false;
       measure_start_.reset();
       measure_end_.reset();
+      ClearAoe();
     }
     return;
   }
@@ -986,6 +987,9 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     if (key.key == SDLK_BACKSPACE && !chat_input_.empty()) {
       chat_input_.resize(PreviousCodePointStart(chat_input_));
     }
+    return;
+  }
+  if (HandleAoeKeyDown(key)) {
     return;
   }
 
@@ -1016,6 +1020,13 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
         view_.AddLocalLine(std::string(strings::kSelectToken));
       } else {
         show_movement_range_ = !show_movement_range_;
+      }
+      break;
+    case SDLK_F:
+      if ((key.mod & SDL_KMOD_SHIFT) != 0) {
+        ClearAoe();
+      } else {
+        ToggleAoeMode();
       }
       break;
     case SDLK_R:
@@ -1109,6 +1120,12 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
 
 auto App::HandleMouseDown(const SDL_MouseButtonEvent& button) -> void {
   const Cell cell = CellFromPixel(button.x, button.y);
+  if (aoe_mode_) {
+    mouse_x_ = button.x;
+    mouse_y_ = button.y;
+    UpdateAoeFromCursor();
+    return;
+  }
   if ((SDL_GetModState() & SDL_KMOD_ALT) != 0) {
     measuring_ = true;
     measure_start_ = cell;
@@ -1151,6 +1168,10 @@ auto App::HandleMouseMotion(const SDL_MouseMotionEvent& motion) -> void {
   mouse_x_ = motion.x;
   mouse_y_ = motion.y;
   const Cell cell = CellFromPixel(motion.x, motion.y);
+  if (aoe_mode_) {
+    UpdateAoeFromCursor();
+    return;
+  }
   if (measuring_) {
     measure_end_ = cell;
     return;
@@ -1569,6 +1590,110 @@ auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
   }
 }
 
+auto App::SendAoe(const AoeTemplate& aoe) -> void {
+  SendCommand(SetAoe{.aoe = aoe});
+}
+
+auto App::UpdateAoeFromCursor() -> void {
+  if (!aoe_mode_) {
+    return;
+  }
+  const Cell cell = CellFromPixel(mouse_x_, mouse_y_);
+  if (!view_.Map().Contains(cell)) {
+    return;
+  }
+  AoeTemplate aoe = view_.Aoe();
+  if (aoe.shape == AoeShape::kNone) {
+    aoe.shape = AoeShape::kCircle;
+  }
+  if (aoe.origin == cell) {
+    return;
+  }
+  aoe.origin = cell;
+  SendAoe(aoe);
+}
+
+auto App::ToggleAoeMode() -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kAoeDmOnly));
+    return;
+  }
+  if (aoe_mode_) {
+    aoe_mode_ = false;
+    return;
+  }
+  AoeTemplate aoe = view_.Aoe();
+  if (aoe.shape == AoeShape::kNone) {
+    aoe = AoeTemplate{.shape = AoeShape::kCircle,
+                      .origin = CellFromPixel(mouse_x_, mouse_y_),
+                      .direction = 0,
+                      .radius = 2,
+                      .width = 1};
+    if (!view_.Map().Contains(aoe.origin)) {
+      aoe.origin = Cell{.x = 0, .y = 0};
+    }
+    SendAoe(aoe);
+  }
+  aoe_mode_ = true;
+}
+
+auto App::ClearAoe() -> void {
+  aoe_mode_ = false;
+  if (options_.mode != AppMode::kHost) {
+    return;
+  }
+  AoeTemplate aoe = view_.Aoe();
+  if (aoe.shape == AoeShape::kNone) {
+    return;
+  }
+  aoe.shape = AoeShape::kNone;
+  SendAoe(aoe);
+}
+
+auto App::HandleAoeKeyDown(const SDL_KeyboardEvent& key) -> bool {
+  if (!aoe_mode_ || options_.mode != AppMode::kHost) {
+    return false;
+  }
+  const AoeTemplate current = view_.Aoe();
+  if (current.shape == AoeShape::kNone) {
+    return false;
+  }
+  auto with_shape = [this, &current](AoeShape shape) -> bool {
+    AoeTemplate aoe = current;
+    aoe.shape = shape;
+    SendAoe(aoe);
+    return true;
+  };
+  switch (key.key) {
+    case SDLK_LEFT:
+      SendAoe(RotateAoe(current, -1));
+      return true;
+    case SDLK_RIGHT:
+      SendAoe(RotateAoe(current, 1));
+      return true;
+    case SDLK_UP:
+      SendAoe(ResizeAoe(current, 1));
+      return true;
+    case SDLK_DOWN:
+      SendAoe(ResizeAoe(current, -1));
+      return true;
+    case SDLK_COMMA:
+      SendAoe(WidenAoe(current, -1));
+      return true;
+    case SDLK_PERIOD:
+      SendAoe(WidenAoe(current, 1));
+      return true;
+    case SDLK_1:
+      return with_shape(AoeShape::kCircle);
+    case SDLK_2:
+      return with_shape(AoeShape::kCone);
+    case SDLK_3:
+      return with_shape(AoeShape::kLine);
+    default:
+      return false;
+  }
+}
+
 auto App::CycleSelectedColor() -> void {
   const Token* token = FindSelectedToken();
   if (token == nullptr) {
@@ -1842,6 +1967,7 @@ auto App::LoadGame() -> void {
   transport_ = LocalTransport{};
   selected_id_ = 0;
   dragging_ = false;
+  aoe_mode_ = false;
   drag_target_.reset();
   CenterCamera();
   SDL_Log("game loaded");
@@ -1905,6 +2031,11 @@ auto App::Iterate() -> void {
   if (!client_is_dm_) {
     DrawFog(renderer_, view_.Fog(), cell_size_, camera_x_, camera_y_);
   }
+  // Шаблон области рисуем поверх тумана: он показывает заклинание, а не рельеф.
+  if (view_.Aoe().shape != AoeShape::kNone) {
+    DrawAoe(renderer_, AoeCells(view_.Map(), view_.Aoe()), cell_size_,
+            camera_x_, camera_y_);
+  }
   const Encounter& encounter = view_.EncounterState();
   const TokenId active_id =
       encounter.active && encounter.turn_index < encounter.order.size()
@@ -1932,6 +2063,12 @@ auto App::Iterate() -> void {
         120.0F);
   }
   DrawInitiativePanel(renderer_, text_.get(), view_.Tokens(), encounter);
+  if (aoe_mode_) {
+    text_->Draw(
+        std::string(strings::kAoeHint), 16.0F, 16.0F,
+        SDL_Color{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = SDL_ALPHA_OPAQUE},
+        960.0F);
+  }
   const bool is_client = options_.mode == AppMode::kClient;
   const Token* selected = FindSelectedToken();
   const bool can_claim = is_client && selected != nullptr &&

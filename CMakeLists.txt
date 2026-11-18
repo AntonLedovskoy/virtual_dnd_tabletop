@@ -100,6 +100,7 @@ elseif(WIN32 AND TARGET SDL3_net-shared)
 endif()
 
 add_library(dnd_core STATIC
+  src/core/aoe.cpp
   src/core/bestiary.cpp
   src/core/byte_io.cpp
   src/core/client_view.cpp

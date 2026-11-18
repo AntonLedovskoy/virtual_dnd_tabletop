@@ -73,6 +73,10 @@ class GameState {
   auto EndEncounter() -> void;
   [[nodiscard]] auto NextTurn() -> bool;
 
+  // Шаблон области, который DM показывает столу.
+  [[nodiscard]] auto Aoe() const -> const AoeTemplate& { return aoe_; }
+  auto SetAoe(AoeTemplate aoe) -> bool;
+
  private:
   auto FindToken(TokenId id) -> Token*;
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;
@@ -82,6 +86,7 @@ class GameState {
   std::vector<Token> tokens_;
   TokenId next_token_id_ = 1;
   Encounter encounter_;
+  AoeTemplate aoe_;
 };
 
 }  // namespace dnd

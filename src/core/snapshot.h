@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "core/aoe.h"
 #include "core/encounter.h"
 #include "core/grid_map.h"
 #include "core/token.h"
@@ -15,6 +16,8 @@ struct GameSnapshot {
   std::vector<Token> tokens;
   TokenId next_token_id = 1;
   Encounter encounter;
+  // Шаблон области, который DM показывает столу.
+  AoeTemplate aoe;
 };
 
 }  // namespace dnd

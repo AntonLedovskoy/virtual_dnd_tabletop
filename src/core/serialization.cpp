@@ -38,6 +38,7 @@ constexpr std::uint8_t kCommandUpdateTokenSheet = 16;
 constexpr std::uint8_t kCommandReleaseToken = 17;
 constexpr std::uint8_t kCommandRollExpression = 18;
 constexpr std::uint8_t kCommandUpdateTokenCombat = 19;
+constexpr std::uint8_t kCommandSetAoe = 20;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -46,6 +47,7 @@ constexpr std::uint8_t kEventTokenAdded = 4;
 constexpr std::uint8_t kEventTokenRemoved = 5;
 constexpr std::uint8_t kEventTokenUpdated = 6;
 constexpr std::uint8_t kEventEncounterUpdated = 7;
+constexpr std::uint8_t kEventAoeUpdated = 8;
 
 auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.U32(token.id);
@@ -196,6 +198,51 @@ auto ReadEncounter(ByteReader& reader, Encounter& encounter) -> bool {
       .turn_index = turn_index,
   };
   return true;
+}
+
+auto WriteAoe(ByteWriter& writer, const AoeTemplate& aoe) -> void {
+  writer.U8(static_cast<std::uint8_t>(aoe.shape));
+  writer.I32(aoe.origin.x);
+  writer.I32(aoe.origin.y);
+  writer.I32(aoe.direction);
+  writer.I32(aoe.radius);
+  writer.I32(aoe.width);
+}
+
+auto ReadAoe(ByteReader& reader, AoeTemplate& aoe) -> bool {
+  std::uint8_t shape = 0;
+  std::int32_t x = 0;
+  std::int32_t y = 0;
+  std::int32_t direction = 0;
+  std::int32_t radius = 0;
+  std::int32_t width = 0;
+  if (!reader.U8(shape) || !reader.I32(x) || !reader.I32(y) ||
+      !reader.I32(direction) || !reader.I32(radius) || !reader.I32(width)) {
+    return false;
+  }
+  if (shape > static_cast<std::uint8_t>(AoeShape::kLine)) {
+    return false;
+  }
+  const AoeTemplate decoded{
+      .shape = static_cast<AoeShape>(shape),
+      .origin = Cell{.x = x, .y = y},
+      .direction = direction,
+      .radius = radius,
+      .width = width,
+  };
+  if (!IsValidAoe(decoded)) {
+    return false;
+  }
+  aoe = decoded;
+  return true;
+}
+
+auto DecodeSetAoeCommand(ByteReader& reader) -> std::optional<Command> {
+  AoeTemplate aoe;
+  if (!ReadAoe(reader, aoe) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{SetAoe{.aoe = aoe}};
 }
 
 auto DecodeStartEncounterCommand(ByteReader& reader) -> std::optional<Command> {
@@ -429,6 +476,14 @@ auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
       UpdateTokenCombat{.id = id, .conditions = std::move(conditions)}};
 }
 
+auto DecodeAoeUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
+  AoeTemplate aoe;
+  if (!ReadAoe(reader, aoe) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{AoeUpdated{.aoe = aoe}};
+}
+
 auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   Encounter encounter;
   if (!ReadEncounter(reader, encounter) || !reader.Done()) {
@@ -535,6 +590,7 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
   }
   writer.U32(snapshot.next_token_id);
   WriteEncounter(writer, snapshot.encounter);
+  WriteAoe(writer, snapshot.aoe);
   return writer.Data();
 }
 
@@ -583,7 +639,9 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
     return std::nullopt;
   }
   Encounter encounter;
-  if (!ReadEncounter(reader, encounter) || !reader.Done()) {
+  AoeTemplate aoe;
+  if (!ReadEncounter(reader, encounter) || !ReadAoe(reader, aoe) ||
+      !reader.Done()) {
     return std::nullopt;
   }
 
@@ -592,6 +650,7 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
       .tokens = std::move(tokens),
       .next_token_id = next_token_id,
       .encounter = std::move(encounter),
+      .aoe = aoe,
   };
 }
 
@@ -722,6 +781,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandEndEncounter);
         } else if constexpr (std::is_same_v<T, NextTurn>) {
           writer.U8(kCommandNextTurn);
+        } else if constexpr (std::is_same_v<T, SetAoe>) {
+          writer.U8(kCommandSetAoe);
+          WriteAoe(writer, cmd.aoe);
         }
       },
       command);
@@ -774,6 +836,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeEndEncounterCommand(reader);
     case kCommandNextTurn:
       return DecodeNextTurnCommand(reader);
+    case kCommandSetAoe:
+      return DecodeSetAoeCommand(reader);
     default:
       return std::nullopt;
   }
@@ -817,6 +881,9 @@ auto EncodeEvent(const Event& event) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, EncounterUpdated>) {
           writer.U8(kEventEncounterUpdated);
           WriteEncounter(writer, ev.encounter);
+        } else if constexpr (std::is_same_v<T, AoeUpdated>) {
+          writer.U8(kEventAoeUpdated);
+          WriteAoe(writer, ev.aoe);
         }
       },
       event);
@@ -845,6 +912,8 @@ auto DecodeEvent(const std::uint8_t* data, std::size_t size)
       return DecodeTokenUpdatedEvent(reader);
     case kEventEncounterUpdated:
       return DecodeEncounterUpdatedEvent(reader);
+    case kEventAoeUpdated:
+      return DecodeAoeUpdatedEvent(reader);
     default:
       return std::nullopt;
   }

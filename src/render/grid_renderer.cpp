@@ -43,6 +43,8 @@ constexpr SDL_Color kFogExplored{.r = 0x08, .g = 0x08, .b = 0x0a, .a = 0xc0};
 constexpr SDL_Color kMoveFill{.r = 0x6c, .g = 0xa8, .b = 0xff, .a = 0x40};
 constexpr SDL_Color kMoveBorder{.r = 0x9c, .g = 0xc8, .b = 0xff, .a = 0xb0};
 constexpr SDL_Color kRuler{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = 0xff};
+constexpr SDL_Color kAoeFill{.r = 0xff, .g = 0x6b, .b = 0x4a, .a = 0x48};
+constexpr SDL_Color kAoeBorder{.r = 0xff, .g = 0x9a, .b = 0x7a, .a = 0xc0};
 
 constexpr std::array<SDL_Color, 4> kTokenColors{{
     {.r = 0xc8, .g = 0x50, .b = 0x46, .a = SDL_ALPHA_OPAQUE},
@@ -252,6 +254,19 @@ auto DrawRuler(SDL_Renderer* renderer, Cell from, Cell to, float cell_size,
                           .h = radius * 2.0F};
   SDL_RenderFillRect(renderer, &start_dot);
   SDL_RenderFillRect(renderer, &end_dot);
+}
+
+auto DrawAoe(SDL_Renderer* renderer, const std::vector<Cell>& cells,
+             float cell_size, float offset_x, float offset_y) -> void {
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  for (const Cell cell : cells) {
+    const SDL_FRect rect = CellRect(cell, cell_size, offset_x, offset_y, 1.0F);
+    SetDrawColor(renderer, kAoeFill);
+    SDL_RenderFillRect(renderer, &rect);
+    SetDrawColor(renderer, kAoeBorder);
+    SDL_RenderRect(renderer, &rect);
+  }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
 auto DrawFog(SDL_Renderer* renderer, const FogOfWar& fog, float cell_size,

@@ -114,6 +114,8 @@ class GameServer {
   [[nodiscard]] auto HandleStartEncounter(bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleEndEncounter(bool can_control_all) -> CommandOutcome;
+  [[nodiscard]] auto HandleSetAoe(const SetAoe& command, bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleNextTurn(bool can_control_all) -> CommandOutcome;
 
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;

@@ -28,12 +28,17 @@ inline constexpr std::string_view kDmCommandHint =
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | /roll d20+5 | A атака | S спасбросок | B бестиарий | "
-    "K состояния | L лист | M дальность | Alt+ЛКМ линейка | "
+    "F шаблон | K состояния | L лист | M дальность | Alt+ЛКМ линейка | "
     "P персонаж, N монстр, Del удалить, +/- HP, [ ] иниц., T бой, G ход";
 inline constexpr std::string_view kChatHintPlayer =
     "Enter — чат | /roll d20+5 | A атака | S спасбросок | C забрать | "
     "R освободить | K состояния | L лист | M дальность | Alt+ЛКМ линейка | "
     "V цвет";
+inline constexpr std::string_view kAoeHint =
+    "F — выйти | ЛКМ/курсор — место | ←/→ поворот | ↑/↓ размер | "
+    "1–3 вид | , . ширина | Esc убрать";
+inline constexpr std::string_view kAoeDmOnly =
+    "Шаблон области ставит только DM";
 inline constexpr std::string_view kRejected = "Отклонено: ";
 inline constexpr std::string_view kSelectToken = "Сначала выберите токен";
 inline constexpr std::string_view kSelectTokenForCommand =

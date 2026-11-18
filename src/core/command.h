@@ -3,6 +3,7 @@
 #include <string>
 #include <variant>
 
+#include "core/aoe.h"
 #include "core/encounter.h"
 #include "core/grid_map.h"
 #include "core/token.h"
@@ -124,11 +125,16 @@ struct StartEncounter {};
 struct EndEncounter {};
 struct NextTurn {};
 
+// DM показывает столу шаблон области; kNone убирает его с карты.
+struct SetAoe {
+  AoeTemplate aoe;
+};
+
 using Command =
     std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
                  RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
                  ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
                  SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
-                 StartEncounter, EndEncounter, NextTurn>;
+                 StartEncounter, EndEncounter, NextTurn, SetAoe>;
 
 }  // namespace dnd

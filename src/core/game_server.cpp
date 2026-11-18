@@ -102,6 +102,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleStartEncounter(can_control_all);
         } else if constexpr (std::is_same_v<T, EndEncounter>) {
           return HandleEndEncounter(can_control_all);
+        } else if constexpr (std::is_same_v<T, SetAoe>) {
+          return HandleSetAoe(cmd, can_control_all);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -605,6 +607,20 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  return outcome;
+}
+
+auto GameServer::HandleSetAoe(const SetAoe& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "шаблон области ставит только DM"};
+  }
+  if (!state_.SetAoe(command.aoe)) {
+    return CommandOutcome{.reject_reason = "некорректный шаблон области"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(AoeUpdated{.aoe = state_.Aoe()});
   return outcome;
 }
 

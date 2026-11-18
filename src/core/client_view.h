@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "core/aoe.h"
 #include "core/encounter.h"
 #include "core/event.h"
 #include "core/grid_map.h"
@@ -34,6 +35,7 @@ class ClientView {
   [[nodiscard]] auto EncounterState() const -> const Encounter& {
     return encounter_;
   }
+  [[nodiscard]] auto Aoe() const -> const AoeTemplate& { return aoe_; }
 
  private:
   static constexpr std::size_t kMaxLogLines = 200;
@@ -45,6 +47,7 @@ class ClientView {
   FogOfWar fog_;
   std::vector<LogLine> log_;
   Encounter encounter_;
+  AoeTemplate aoe_;
 };
 
 }  // namespace dnd

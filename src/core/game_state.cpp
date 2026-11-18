@@ -12,7 +12,8 @@ GameState::GameState(GameSnapshot snapshot)
     : map_(std::move(snapshot.map)),
       tokens_(std::move(snapshot.tokens)),
       next_token_id_(snapshot.next_token_id),
-      encounter_(std::move(snapshot.encounter)) {}
+      encounter_(std::move(snapshot.encounter)),
+      aoe_(snapshot.aoe) {}
 
 auto GameState::Snapshot() const -> GameSnapshot {
   return GameSnapshot{
@@ -20,6 +21,7 @@ auto GameState::Snapshot() const -> GameSnapshot {
       .tokens = tokens_,
       .next_token_id = next_token_id_,
       .encounter = encounter_,
+      .aoe = aoe_,
   };
 }
 
@@ -204,6 +206,15 @@ auto GameState::StartEncounter() -> bool {
 }
 
 auto GameState::EndEncounter() -> void { encounter_ = Encounter{}; }
+
+auto GameState::SetAoe(AoeTemplate aoe) -> bool {
+  if (!IsValidAoe(aoe) ||
+      (aoe.shape != AoeShape::kNone && !map_.Contains(aoe.origin))) {
+    return false;
+  }
+  aoe_ = aoe;
+  return true;
+}
 
 auto GameState::NextTurn() -> bool {
   if (!encounter_.active || encounter_.order.empty()) {
