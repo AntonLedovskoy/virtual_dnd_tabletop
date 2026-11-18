@@ -24,12 +24,19 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
                          const std::vector<Token>& tokens,
                          const Encounter& encounter) -> void;
 
+// Что писать о запасе движения: игрок вне боя не ограничен, DM — тоже.
+enum class MovementInfo : std::uint8_t {
+  kHidden = 0,
+  kFree = 1,
+  kBudget = 2,
+};
+
 // Сведения о выбранном токене слева сверху, включая подсказки о владельце.
 // Возвращает нижнюю границу панели или 0, если ничего не нарисовано.
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
                     bool is_client, bool can_claim, bool can_release,
-                    bool show_movement) -> float;
+                    MovementInfo movement) -> float;
 
 // Список игроков слева из ростера хоста, размещается на заданной координате y.
 auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,

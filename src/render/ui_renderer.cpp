@@ -236,7 +236,7 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
                     bool is_client, bool can_claim, bool can_release,
-                    bool show_movement) -> float {
+                    MovementInfo movement) -> float {
   if (renderer == nullptr || text == nullptr || token == nullptr) {
     return 0.0F;
   }
@@ -269,12 +269,14 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                      std::to_string(token->ac) + "   " +
                      std::string(strings::kSheetSpeed) + ": " +
                      std::to_string(token->speed));
-  if (show_movement) {
+  if (movement == MovementInfo::kBudget) {
     const int budget = SpeedToCells(token->speed);
     const int left = std::max(0, budget - token->movement_used);
     lines.emplace_back(
         std::string(strings::kMovementLeft) + ": " + FormatMeters(left) + " " +
         std::string(strings::kMovementOf) + " " + FormatMeters(budget));
+  } else if (movement == MovementInfo::kFree) {
+    lines.emplace_back(strings::kMovementFree);
   }
   if (!token->conditions.empty()) {
     std::string condition_line = std::string(strings::kConditions) + ": ";

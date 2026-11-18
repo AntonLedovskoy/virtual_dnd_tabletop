@@ -98,6 +98,7 @@ inline constexpr std::string_view kSheetTempHp = "Временные HP";
 inline constexpr std::string_view kConditions = "Состояния";
 inline constexpr std::string_view kMovementLeft = "Осталось хода";
 inline constexpr std::string_view kMovementOf = "из";
+inline constexpr std::string_view kMovementFree = "Вне боя движение свободное";
 inline constexpr std::string_view kSheetDamage = "Урон";
 inline constexpr std::string_view kSheetNotes = "Заметки";
 inline constexpr std::string_view kSheetHint =

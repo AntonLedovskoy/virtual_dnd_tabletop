@@ -2068,7 +2068,9 @@ auto App::Iterate() -> void {
                            selected->owner == options_.player_name;
   const float token_bottom = DrawTokenPanel(
       renderer_, text_.get(), selected, options_.player_name, is_client,
-      can_claim, can_release, encounter.active && !is_dm);
+      can_claim, can_release,
+      is_dm ? MovementInfo::kHidden
+            : (encounter.active ? MovementInfo::kBudget : MovementInfo::kFree));
   const float players_y = token_bottom > 0.0F ? token_bottom + 12.0F : 280.0F;
   DrawPlayersPanel(renderer_, text_.get(), players_, players_y);
   if (dragging_ && drag_target_.has_value()) {
