@@ -187,6 +187,15 @@ auto GameState::UpdateTokenCombat(TokenId id,
   return *token;
 }
 
+auto GameState::SpendMovement(TokenId id, int steps) -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->movement_used += std::max(0, steps);
+  return *token;
+}
+
 auto GameState::ActiveTokenId() const -> TokenId {
   if (!encounter_.active || encounter_.turn_index >= encounter_.order.size()) {
     return 0;
@@ -201,11 +210,19 @@ auto GameState::StartEncounter() -> bool {
   encounter_ = Encounter{};
   encounter_.active = true;
   encounter_.round = 1;
+  for (Token& token : tokens_) {
+    token.movement_used = 0;
+  }
   RebuildOrder(0);
   return true;
 }
 
-auto GameState::EndEncounter() -> void { encounter_ = Encounter{}; }
+auto GameState::EndEncounter() -> void {
+  encounter_ = Encounter{};
+  for (Token& token : tokens_) {
+    token.movement_used = 0;
+  }
+}
 
 auto GameState::SetAoe(AoeTemplate aoe) -> bool {
   if (!IsValidAoe(aoe) ||
@@ -224,6 +241,10 @@ auto GameState::NextTurn() -> bool {
   if (encounter_.turn_index >= encounter_.order.size()) {
     encounter_.turn_index = 0;
     ++encounter_.round;
+  }
+  // Новый активный токен начинает ход с полным запасом движения.
+  if (Token* token = FindToken(ActiveTokenId())) {
+    token->movement_used = 0;
   }
   return true;
 }

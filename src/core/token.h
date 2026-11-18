@@ -36,6 +36,9 @@ struct Token {
   int save_bonus = 0;
   std::string damage;
   std::vector<std::string> conditions;
+  // Израсходованный за ход запас движения в клетках. Сбрасывается в начале
+  // хода токена и вне боя не накапливается.
+  int movement_used = 0;
   TokenKind kind = TokenKind::kMonster;
   // 0xRRGGBB или 0, чтобы брать цвет из id токена.
   std::uint32_t color = 0;

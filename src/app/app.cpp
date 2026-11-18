@@ -22,6 +22,7 @@
 #include "core/conditions.h"
 #include "core/dice.h"
 #include "core/scene_io.h"
+#include "core/units.h"
 #include "core/utf8.h"
 #include "net/tcp_socket.h"
 #include "render/grid_renderer.h"
@@ -157,21 +158,6 @@ auto AppendBoundedNumber(std::string& buffer, const char* text, int minimum,
       buffer = std::move(candidate);
     }
   }
-}
-
-auto SpeedToCells(int meters) -> int {
-  if (meters <= 0) {
-    return 0;
-  }
-  return static_cast<int>(std::lround(static_cast<float>(meters) / 1.5F));
-}
-
-auto FormatMeters(int cells) -> std::string {
-  const int half_meters = cells * 3;
-  if (half_meters % 2 == 0) {
-    return std::to_string(half_meters / 2) + " м";
-  }
-  return std::to_string(half_meters / 2) + ",5 м";
 }
 
 auto FormatBonus(int bonus) -> std::string {
@@ -2017,12 +2003,17 @@ auto App::Iterate() -> void {
     }
   }
 
+  const bool is_dm = options_.mode == AppMode::kHost || client_is_dm_;
   DrawGrid(renderer_, view_.Map(), cell_size_, camera_x_, camera_y_);
   DrawWalls(renderer_, view_.Map(), cell_size_, camera_x_, camera_y_);
+  const Encounter& encounter = view_.EncounterState();
   if (show_movement_range_) {
     const Token* range_token = FindSelectedToken();
     if (range_token != nullptr) {
-      const int radius = SpeedToCells(range_token->speed);
+      int radius = SpeedToCells(range_token->speed);
+      if (encounter.active && !is_dm) {
+        radius = std::max(0, radius - range_token->movement_used);
+      }
       DrawMovementRange(renderer_,
                         ReachableCells(view_.Map(), range_token->cell, radius),
                         cell_size_, camera_x_, camera_y_);
@@ -2036,7 +2027,6 @@ auto App::Iterate() -> void {
     DrawAoe(renderer_, AoeCells(view_.Map(), view_.Aoe()), cell_size_,
             camera_x_, camera_y_);
   }
-  const Encounter& encounter = view_.EncounterState();
   const TokenId active_id =
       encounter.active && encounter.turn_index < encounter.order.size()
           ? encounter.order[encounter.turn_index]
@@ -2076,9 +2066,9 @@ auto App::Iterate() -> void {
                          selected->owner.empty() && !PlayerHasCharacter();
   const bool can_release = is_client && selected != nullptr &&
                            selected->owner == options_.player_name;
-  const float token_bottom =
-      DrawTokenPanel(renderer_, text_.get(), selected, options_.player_name,
-                     is_client, can_claim, can_release);
+  const float token_bottom = DrawTokenPanel(
+      renderer_, text_.get(), selected, options_.player_name, is_client,
+      can_claim, can_release, encounter.active && !is_dm);
   const float players_y = token_bottom > 0.0F ? token_bottom + 12.0F : 280.0F;
   DrawPlayersPanel(renderer_, text_.get(), players_, players_y);
   if (dragging_ && drag_target_.has_value()) {

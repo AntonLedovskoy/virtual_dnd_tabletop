@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace dnd {
@@ -36,5 +37,10 @@ class GridMap {
 // Стены непроходимы; диагональ стоит один шаг.
 [[nodiscard]] auto ReachableCells(const GridMap& map, Cell origin, int radius)
     -> std::vector<Cell>;
+
+// Стоимость пути из from в to в шагах клеток. Пусто, если клетка недостижима,
+// за стеной или вне карты.
+[[nodiscard]] auto PathCostCells(const GridMap& map, Cell from, Cell to)
+    -> std::optional<int>;
 
 }  // namespace dnd

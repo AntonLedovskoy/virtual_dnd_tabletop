@@ -8,6 +8,7 @@
 
 #include "core/clock.h"
 #include "core/dice.h"
+#include "core/units.h"
 
 namespace dnd {
 namespace {
@@ -42,6 +43,17 @@ auto ControlRejectReason(const Token& token) -> const char* {
     return "сначала заберите персонажа";
   }
   return "токен контролирует другой игрок";
+}
+
+// Токены, чей запас движения нужно показать клиентам после сброса.
+auto TokensWithSpentMovement(const GameState& state) -> std::vector<TokenId> {
+  std::vector<TokenId> ids;
+  for (const Token& token : state.Tokens()) {
+    if (token.movement_used != 0) {
+      ids.push_back(token.id);
+    }
+  }
+  return ids;
 }
 
 }  // namespace
@@ -137,6 +149,21 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
     return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
   }
 
+  // В бою игрок тратит запас движения за ход; DM двигает токены свободно.
+  const bool budgeted = state_.EncounterState().active && !can_control_all;
+  int steps = 0;
+  if (budgeted) {
+    const std::optional<int> path =
+        PathCostCells(state_.Map(), token->cell, command.target);
+    if (!path.has_value()) {
+      return CommandOutcome{.reject_reason = "нет пути к клетке"};
+    }
+    steps = *path;
+    if (token->movement_used + steps > SpeedToCells(token->speed)) {
+      return CommandOutcome{.reject_reason = "не хватает движения на ход"};
+    }
+  }
+
   const std::optional<Event> event = state_.ApplyCommand(command);
   if (!event.has_value()) {
     return CommandOutcome{.reject_reason = "недопустимый ход"};
@@ -146,6 +173,11 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(*event);
+  if (budgeted) {
+    if (std::optional<Token> moved = state_.SpendMovement(command.id, steps)) {
+      outcome.events.emplace_back(TokenUpdated{.token = std::move(*moved)});
+    }
+  }
   outcome.events.emplace_back(ViewUpdated{
       .snapshot = ClientSnapshot(),
       .fog = fog_.Snapshot(),
@@ -628,6 +660,7 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
   if (!can_control_all) {
     return CommandOutcome{.reject_reason = "бой начинает только DM"};
   }
+  const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
   if (!state_.StartEncounter()) {
     return CommandOutcome{.reject_reason = "нет токенов для инициативы"};
   }
@@ -635,6 +668,11 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
   outcome.accepted = true;
   outcome.events.emplace_back(
       EncounterUpdated{.encounter = state_.EncounterState()});
+  for (TokenId id : spent) {
+    if (std::optional<Token> token = state_.TokenCopy(id)) {
+      outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
+    }
+  }
   return outcome;
 }
 
@@ -645,11 +683,17 @@ auto GameServer::HandleEndEncounter(bool can_control_all) -> CommandOutcome {
   if (!state_.EncounterState().active) {
     return CommandOutcome{.reject_reason = "нет активного боя"};
   }
+  const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
   state_.EndEncounter();
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(
       EncounterUpdated{.encounter = state_.EncounterState()});
+  for (TokenId id : spent) {
+    if (std::optional<Token> token = state_.TokenCopy(id)) {
+      outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
+    }
+  }
   return outcome;
 }
 
@@ -657,6 +701,7 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
   if (!can_control_all) {
     return CommandOutcome{.reject_reason = "ход переключает только DM"};
   }
+  const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
   if (!state_.NextTurn()) {
     return CommandOutcome{.reject_reason = "нет активного боя"};
   }
@@ -664,6 +709,11 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
   outcome.accepted = true;
   outcome.events.emplace_back(
       EncounterUpdated{.encounter = state_.EncounterState()});
+  for (TokenId id : spent) {
+    if (std::optional<Token> token = state_.TokenCopy(id)) {
+      outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
+    }
+  }
   return outcome;
 }
 

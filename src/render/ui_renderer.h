@@ -28,7 +28,8 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
 // Возвращает нижнюю границу панели или 0, если ничего не нарисовано.
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
-                    bool is_client, bool can_claim, bool can_release) -> float;
+                    bool is_client, bool can_claim, bool can_release,
+                    bool show_movement) -> float;
 
 // Список игроков слева из ростера хоста, размещается на заданной координате y.
 auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,

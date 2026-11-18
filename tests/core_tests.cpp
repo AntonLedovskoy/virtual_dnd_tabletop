@@ -3,6 +3,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <random>
 #include <variant>
 #include <vector>
@@ -70,6 +71,15 @@ auto TestGridMap() -> void {
   const auto corner_range = dnd::ReachableCells(corner_map, CellAt(0, 0), 2);
   Expect(!HasCell(corner_range, CellAt(1, 1)),
          "movement range does not cut through a sealed corner");
+
+  Expect(dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(2, 0)) == 2,
+         "path cost counts straight steps");
+  Expect(dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(0, 0)) == 0,
+         "path cost to the same cell is zero");
+  Expect(!dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(2, 2)),
+         "path cost skips walls");
+  Expect(!dnd::PathCostCells(corner_map, CellAt(0, 0), CellAt(1, 1)),
+         "path cost does not cut through a sealed corner");
 }
 
 auto TestMoveRules() -> void {
@@ -805,6 +815,141 @@ auto TestEncounterCommands() -> void {
   Expect(!server.State().EncounterState().active, "encounter is cleared");
 }
 
+auto TestMovementBudget() -> void {
+  const dnd::GridMap map(12, 3);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .initiative = 15,
+                         .speed = 9,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+          },
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 6, 1);
+  Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "DM starts the encounter for movement");
+
+  const dnd::CommandOutcome full = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(7, 1)}, "alice", false);
+  Expect(full.accepted, "player spends the whole turn of movement");
+  const std::optional<dnd::Token> after_full = server.State().TokenCopy(1);
+  Expect(after_full.has_value() && after_full->movement_used == 6,
+         "six cells are charged for the move");
+
+  bool movement_broadcast = false;
+  for (const dnd::Event& event : full.events) {
+    if (std::holds_alternative<dnd::TokenUpdated>(event)) {
+      movement_broadcast =
+          std::get<dnd::TokenUpdated>(event).token.movement_used == 6;
+    }
+  }
+  Expect(movement_broadcast, "spent movement travels with TokenUpdated");
+
+  dnd::ClientView view;
+  for (const dnd::Event& event : full.events) {
+    view.Apply(event);
+  }
+  Expect(view.Tokens().size() == 1 &&
+             view.Tokens().front().cell == CellAt(7, 1) &&
+             view.Tokens().front().movement_used == 6,
+         "client view tracks the spent movement");
+
+  Expect(!server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(7, 1)},
+                             "alice", false)
+              .accepted,
+         "standing still is not a move");
+  Expect(!server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(8, 1)},
+                             "alice", false)
+              .accepted,
+         "player cannot move past the movement budget");
+
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(8, 1)}, "",
+                            true)
+             .accepted,
+         "DM ignores the movement budget");
+  const std::optional<dnd::Token> after_dm = server.State().TokenCopy(1);
+  Expect(after_dm.has_value() && after_dm->movement_used == 6,
+         "DM moves do not spend movement");
+
+  Expect(server.HandleCommand(dnd::EndEncounter{}, "", true).accepted,
+         "DM ends the encounter");
+  const std::optional<dnd::Token> after_end = server.State().TokenCopy(1);
+  Expect(after_end.has_value() && after_end->movement_used == 0,
+         "ending the encounter clears spent movement");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(11, 1)},
+                            "alice", false)
+             .accepted,
+         "movement is unlimited out of combat");
+
+  Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "DM restarts the encounter");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(10, 1)},
+                            "alice", false)
+             .accepted,
+         "restarting the encounter restores the budget");
+  const dnd::CommandOutcome turn =
+      server.HandleCommand(dnd::NextTurn{}, "", true);
+  Expect(turn.accepted, "DM advances the turn");
+  bool reset_broadcast = false;
+  for (const dnd::Event& event : turn.events) {
+    if (std::holds_alternative<dnd::TokenUpdated>(event)) {
+      reset_broadcast =
+          std::get<dnd::TokenUpdated>(event).token.movement_used == 0;
+    }
+  }
+  Expect(reset_broadcast, "a new turn broadcasts the reset movement");
+  const std::optional<dnd::Token> after_turn = server.State().TokenCopy(1);
+  Expect(after_turn.has_value() && after_turn->movement_used == 0,
+         "a new turn restores the spent movement");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(4, 1)},
+                            "alice", false)
+             .accepted,
+         "the new turn allows a fresh move");
+
+  // Клетка внутри глухой стены недостижима, хотя сама она свободна.
+  dnd::GridMap walled(8, 8);
+  for (int i = 3; i <= 5; ++i) {
+    walled.SetBlocked(CellAt(i, 3), true);
+    walled.SetBlocked(CellAt(i, 5), true);
+    walled.SetBlocked(CellAt(3, i), true);
+    walled.SetBlocked(CellAt(5, i), true);
+  }
+  const dnd::GameSnapshot walled_snapshot{
+      .map = walled,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .initiative = 15,
+                         .speed = 9,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+          },
+      .next_token_id = 2,
+  };
+  dnd::GameServer walled_server(walled_snapshot, 6, 1);
+  Expect(walled_server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "DM starts the encounter in the walled map");
+  Expect(!walled_server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(4, 4)},
+                             "alice", false)
+              .accepted,
+         "player cannot jump over a sealed wall");
+}
+
 auto TestAoe() -> void {
   const dnd::GridMap map(10, 10);
 
@@ -983,6 +1128,7 @@ auto TestSaveLoadRoundtrip() -> void {
                          .save_bonus = 2,
                          .damage = "1d8+3",
                          .conditions = {"сбит с ног", "концентрация"},
+                         .movement_used = 4,
                          .kind = dnd::TokenKind::kPlayer,
                          .color = 0x507AC8U,
                          .cell = CellAt(1, 1)},
@@ -1039,6 +1185,8 @@ auto TestSaveLoadRoundtrip() -> void {
            "token damage expression survives");
     Expect(loaded->tokens.front().conditions.size() == 2,
            "token conditions survive");
+    Expect(loaded->tokens.front().movement_used == 4,
+           "token spent movement survives");
     Expect(loaded->tokens.front().kind == dnd::TokenKind::kPlayer,
            "token kind survives");
     Expect(loaded->tokens.front().color == 0x507AC8U, "token colour survives");
@@ -1350,6 +1498,7 @@ auto TestCommandEventSerialization() -> void {
                           .save_bonus = 1,
                           .damage = "1d8+2",
                           .conditions = {"оглушён"},
+                          .movement_used = 5,
                           .kind = dnd::TokenKind::kMonster,
                           .color = 0x46A864U,
                           .cell = CellAt(1, 1)},
@@ -1375,6 +1524,8 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::TokenUpdated>(*updated_decoded).token.temp_hp == 3 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)
                   .token.conditions.size() == 1 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.movement_used ==
+              5 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
               dnd::TokenKind::kMonster &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.color ==
@@ -1484,6 +1635,7 @@ auto main() -> int {
     TestTokenManagement();
     TestEncounter();
     TestEncounterCommands();
+    TestMovementBudget();
     TestAoe();
     TestAoeCommands();
     TestChatAndDice();

@@ -71,6 +71,7 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   for (const std::string& condition : token.conditions) {
     writer.String(condition);
   }
+  writer.I32(token.movement_used);
 }
 
 auto ReadToken(ByteReader& reader, Token& token) -> bool {
@@ -93,6 +94,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::string damage;
   std::uint32_t condition_count = 0;
   std::vector<std::string> conditions;
+  std::int32_t movement_used = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -111,10 +113,14 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
     }
     conditions.push_back(std::move(condition));
   }
+  if (!reader.I32(movement_used)) {
+    return false;
+  }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
       initiative < -1000000 || initiative > 1000000 || ac <= 0 || ac > 1000 ||
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
-      save_bonus < -100 || save_bonus > 100 ||
+      save_bonus < -100 || save_bonus > 100 || movement_used < 0 ||
+      movement_used > 1000 ||
       kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0) {
     return false;
@@ -134,6 +140,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .save_bonus = save_bonus,
       .damage = std::move(damage),
       .conditions = std::move(conditions),
+      .movement_used = movement_used,
       .kind = static_cast<TokenKind>(kind),
       .color = color,
       .cell = Cell{.x = x, .y = y},

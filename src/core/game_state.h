@@ -64,6 +64,10 @@ class GameState {
                                        std::vector<std::string> conditions)
       -> std::optional<Token>;
 
+  // Добавляет к израсходованному запасу движения токена steps клеток.
+  [[nodiscard]] auto SpendMovement(TokenId id, int steps)
+      -> std::optional<Token>;
+
   // Боевой порядок.
   [[nodiscard]] auto EncounterState() const -> const Encounter& {
     return encounter_;

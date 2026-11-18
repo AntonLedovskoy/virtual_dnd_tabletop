@@ -4,6 +4,59 @@
 #include <vector>
 
 namespace dnd {
+namespace {
+
+constexpr int kDirections[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0},
+                                   {1, 0},   {-1, 1}, {0, 1},  {1, 1}};
+
+// Расстояния в шагах от origin по восьми направлениям; -1 — недостижимо.
+// max_steps < 0 означает поиск без ограничения дальности.
+auto StepDistances(const GridMap& map, Cell origin, int max_steps)
+    -> std::vector<int> {
+  const auto width = static_cast<std::size_t>(map.Width());
+  std::vector<int> distance(width * static_cast<std::size_t>(map.Height()), -1);
+  if (!map.Contains(origin) || map.IsBlocked(origin)) {
+    return distance;
+  }
+  std::queue<Cell> queue;
+  distance[static_cast<std::size_t>(origin.y) * width +
+           static_cast<std::size_t>(origin.x)] = 0;
+  queue.push(origin);
+
+  while (!queue.empty()) {
+    const Cell cell = queue.front();
+    queue.pop();
+    const int current = distance[static_cast<std::size_t>(cell.y) * width +
+                                 static_cast<std::size_t>(cell.x)];
+    if (max_steps >= 0 && current >= max_steps) {
+      continue;
+    }
+    for (const auto& direction : kDirections) {
+      const Cell next{.x = cell.x + direction[0], .y = cell.y + direction[1]};
+      if (!map.Contains(next) || map.IsBlocked(next)) {
+        continue;
+      }
+      // Угол между двумя стенами не прорезаем.
+      if (direction[0] != 0 && direction[1] != 0) {
+        const Cell horizontal{.x = cell.x + direction[0], .y = cell.y};
+        const Cell vertical{.x = cell.x, .y = cell.y + direction[1]};
+        if (map.IsBlocked(horizontal) && map.IsBlocked(vertical)) {
+          continue;
+        }
+      }
+      const auto index = static_cast<std::size_t>(next.y) * width +
+                         static_cast<std::size_t>(next.x);
+      if (distance[index] != -1) {
+        continue;
+      }
+      distance[index] = current + 1;
+      queue.push(next);
+    }
+  }
+  return distance;
+}
+
+}  // namespace
 
 GridMap::GridMap(int width, int height)
     : width_(width),
@@ -35,48 +88,37 @@ auto ReachableCells(const GridMap& map, Cell origin, int radius)
   if (radius < 0 || !map.Contains(origin) || map.IsBlocked(origin)) {
     return {};
   }
+  const std::vector<int> distance = StepDistances(map, origin, radius);
   const auto width = static_cast<std::size_t>(map.Width());
-  const auto height = static_cast<std::size_t>(map.Height());
-  std::vector<int> distance(width * height, -1);
-  std::queue<Cell> queue;
-  distance[static_cast<std::size_t>(origin.y) * width +
-           static_cast<std::size_t>(origin.x)] = 0;
-  queue.push(origin);
-
   std::vector<Cell> result;
-  constexpr int kDirections[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0},
-                                     {1, 0},   {-1, 1}, {0, 1},  {1, 1}};
-  while (!queue.empty()) {
-    const Cell cell = queue.front();
-    queue.pop();
-    result.push_back(cell);
-    const int current = distance[static_cast<std::size_t>(cell.y) * width +
-                                 static_cast<std::size_t>(cell.x)];
-    if (current >= radius) {
-      continue;
-    }
-    for (const auto& direction : kDirections) {
-      const Cell next{.x = cell.x + direction[0], .y = cell.y + direction[1]};
-      if (!map.Contains(next) || map.IsBlocked(next)) {
-        continue;
+  for (int y = 0; y < map.Height(); ++y) {
+    for (int x = 0; x < map.Width(); ++x) {
+      const auto index =
+          static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x);
+      if (distance[index] >= 0) {
+        result.push_back(Cell{.x = x, .y = y});
       }
-      if (direction[0] != 0 && direction[1] != 0) {
-        const Cell horizontal{.x = cell.x + direction[0], .y = cell.y};
-        const Cell vertical{.x = cell.x, .y = cell.y + direction[1]};
-        if (map.IsBlocked(horizontal) && map.IsBlocked(vertical)) {
-          continue;
-        }
-      }
-      const auto index = static_cast<std::size_t>(next.y) * width +
-                         static_cast<std::size_t>(next.x);
-      if (distance[index] != -1) {
-        continue;
-      }
-      distance[index] = current + 1;
-      queue.push(next);
     }
   }
   return result;
+}
+
+auto PathCostCells(const GridMap& map, Cell from, Cell to)
+    -> std::optional<int> {
+  if (!map.Contains(from) || !map.Contains(to) || map.IsBlocked(to)) {
+    return std::nullopt;
+  }
+  if (from == to) {
+    return 0;
+  }
+  const std::vector<int> distance = StepDistances(map, from, -1);
+  const int steps = distance[static_cast<std::size_t>(to.y) *
+                                 static_cast<std::size_t>(map.Width()) +
+                             static_cast<std::size_t>(to.x)];
+  if (steps < 0) {
+    return std::nullopt;
+  }
+  return steps;
 }
 
 }  // namespace dnd
