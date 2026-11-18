@@ -169,6 +169,19 @@ auto AppendBoundedNumber(std::string& buffer, const char* text, int minimum,
   }
 }
 
+// Подпись броска с именем того, кто бросает: в общем логе видно, к кому
+// относится бросок. Предел совпадает с kMaxRollLabel в game_server.cpp.
+auto RollLabel(std::string_view kind, std::string_view token_name)
+    -> std::string {
+  constexpr std::size_t kMaxLabelBytes = 64;
+  const std::string prefix = std::string(kind) + " (";
+  std::string name(token_name);
+  if (prefix.size() + name.size() + 1 > kMaxLabelBytes) {
+    TruncateUtf8(name, kMaxLabelBytes - prefix.size() - 1);
+  }
+  return prefix + name + ")";
+}
+
 auto FormatBonus(int bonus) -> std::string {
   if (bonus > 0) {
     return "+" + std::to_string(bonus);
@@ -1401,10 +1414,12 @@ auto App::RollAttack(bool advantage) -> void {
   }
   SendCommand(RollExpression{
       .expression = expression,
-      .label = advantage ? "Атака с преимуществом" : "Атака",
+      .label =
+          RollLabel(advantage ? "Атака с преимуществом" : "Атака", token->name),
   });
   if (!token->damage.empty()) {
-    SendCommand(RollExpression{.expression = token->damage, .label = "Урон"});
+    SendCommand(RollExpression{.expression = token->damage,
+                               .label = RollLabel("Урон", token->name)});
   }
 }
 
@@ -1416,16 +1431,18 @@ auto App::RollSave() -> void {
   }
   SendCommand(RollExpression{
       .expression = "d20" + FormatBonus(token->save_bonus),
-      .label = "Спасбросок",
+      .label = RollLabel("Спасбросок", token->name),
   });
 }
 
 auto App::RollInitiative() -> void {
-  if (FindSelectedToken() == nullptr) {
+  const Token* token = FindSelectedToken();
+  if (token == nullptr) {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
-  SendCommand(RollExpression{.expression = "d20", .label = "Инициатива"});
+  SendCommand(RollExpression{.expression = "d20",
+                             .label = RollLabel("Инициатива", token->name)});
 }
 
 auto App::HandleSheetTextInput(const char* text) -> void {
