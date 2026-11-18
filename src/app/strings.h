@@ -29,7 +29,8 @@ inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | /roll d20+5 | A атака | S спасбросок | B бестиарий | "
     "F шаблон | K состояния | L лист | M дальность | Alt+ЛКМ линейка | "
-    "P персонаж, N монстр, Del удалить, +/- HP, [ ] иниц., T бой, G ход";
+    "Tab сцены | P персонаж, N монстр, Del удалить, +/- HP, [ ] иниц., "
+    "T бой, G ход";
 inline constexpr std::string_view kChatHintPlayer =
     "Enter — чат | /roll d20+5 | A атака | S спасбросок | C забрать | "
     "R освободить | K состояния | L лист | M дальность | Alt+ЛКМ линейка | "
@@ -110,5 +111,12 @@ inline constexpr std::string_view kBestiaryHint =
     "1–5 — поставить под курсор | Esc — закрыть";
 inline constexpr std::string_view kBestiaryDmOnly =
     "Бестиарий доступен только DM";
+
+inline constexpr std::string_view kScenesTitle = "Сцены";
+inline constexpr std::string_view kScenesHint =
+    "1–9 — переключить | ↑ ↓ и Enter — выбрать | N — новая копия | "
+    "Del — удалить | Esc — закрыть";
+inline constexpr std::string_view kScenesDmOnly = "Сцены переключает только DM";
+inline constexpr std::string_view kScenesEmpty = "Сцена не найдена";
 
 }  // namespace dnd::strings

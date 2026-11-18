@@ -7,6 +7,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <ranges>
@@ -19,6 +20,7 @@
 
 #include "app/strings.h"
 #include "core/bestiary.h"
+#include "core/clock.h"
 #include "core/conditions.h"
 #include "core/dice.h"
 #include "core/scene_io.h"
@@ -105,6 +107,13 @@ auto ScenePath() -> std::filesystem::path {
     return std::filesystem::path(base) / "scene.dndscene";
   }
   return {"scene.dndscene"};
+}
+
+auto CampaignPath() -> std::filesystem::path {
+  if (const char* base = SDL_GetBasePath()) {
+    return std::filesystem::path(base) / "campaign.dndcamp";
+  }
+  return {"campaign.dndcamp"};
 }
 
 auto ParseNumber(std::string_view text, int& value) -> bool {
@@ -247,13 +256,21 @@ auto App::Initialize() -> bool {
   }
   local_addresses_ = LocalIpv4Addresses();
 
-  const std::optional<GameSnapshot> loaded = ReadSnapshot(ScenePath());
-  if (loaded.has_value()) {
-    scene_ = *loaded;
-    scene_.encounter = Encounter{};
-    server_.Reset(scene_);
-    view_.Reset(server_.DmSnapshot(), server_.FullFogState());
+  const std::optional<Campaign> loaded_campaign = ReadCampaign(CampaignPath());
+  if (loaded_campaign.has_value()) {
+    campaign_ = *loaded_campaign;
+  } else {
+    const std::optional<GameSnapshot> loaded_scene = ReadSnapshot(ScenePath());
+    if (loaded_scene.has_value()) {
+      scene_ = *loaded_scene;
+    }
+    campaign_ = MakeCampaign(scene_, "Сцена 1");
   }
+  // Кампания — источник стартового мира; бой в новой сессии не продолжается.
+  scene_ = campaign_.scenes[campaign_.active].snapshot;
+  scene_.encounter = Encounter{};
+  server_.Reset(scene_);
+  view_.Reset(server_.DmSnapshot(), server_.FullFogState());
 
   if (options_.start_editor) {
     StartEditor();
@@ -306,8 +323,14 @@ auto App::StartHost() -> bool {
 
   options_.mode = AppMode::kHost;
   options_.port = port;
+  // Из редактора хостится отредактированная сцена, из меню — активная сцена
+  // кампании.
+  if (!in_editor_) {
+    scene_ = campaign_.scenes[campaign_.active].snapshot;
+  }
   GameSnapshot start = scene_;
   start.encounter = Encounter{};
+  scene_ = start;
   server_.Reset(std::move(start));
   in_game_ = true;
   in_editor_ = false;
@@ -325,6 +348,8 @@ auto App::StartHost() -> bool {
   local_addresses_ = LocalIpv4Addresses();
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   CenterCamera();
+  StoreActiveScene();
+  SaveCampaign();
   SDL_Log("hosting on port %u", static_cast<unsigned>(port));
   return true;
 }
@@ -410,9 +435,14 @@ auto App::SubmitMenu() -> void {
 }
 
 auto App::SaveScene() -> void {
-  editor_status_ = WriteSnapshot(scene_, ScenePath())
-                       ? std::string(strings::kEditorSceneSaved)
-                       : "Не удалось сохранить сцену";
+  if (!WriteSnapshot(scene_, ScenePath())) {
+    editor_status_ = "Не удалось сохранить сцену";
+    return;
+  }
+  // Редактор правит активную сцену кампании: она же уходит в файл кампании.
+  campaign_.scenes[campaign_.active].snapshot = scene_;
+  SaveCampaign();
+  editor_status_ = std::string(strings::kEditorSceneSaved);
 }
 
 auto App::LoadScene() -> void {
@@ -862,6 +892,13 @@ auto App::HandleEvent(const SDL_Event& event) -> void {
     return;
   }
 
+  if (scenes_active_) {
+    if (event.type == SDL_EVENT_KEY_DOWN) {
+      HandleScenesKeyDown(event.key);
+    }
+    return;
+  }
+
   if (in_editor_) {
     switch (event.type) {
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -1029,6 +1066,9 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SDLK_HOME:
       CenterCamera();
+      break;
+    case SDLK_TAB:
+      OpenScenes();
       break;
     default:
       HandleDmHotkey(key.key);
@@ -1730,6 +1770,21 @@ auto App::SubmitChat() -> void {
     }
     return;
   }
+  if (text == "/scene" || text.starts_with("/scene ")) {
+    if (options_.mode != AppMode::kHost) {
+      view_.AddLocalLine(std::string(strings::kScenesDmOnly));
+      return;
+    }
+    const std::string name = text.size() > 7 ? text.substr(7) : std::string{};
+    if (name.empty()) {
+      OpenScenes();
+    } else if (name == "new") {
+      CreateScene();
+    } else {
+      SwitchSceneByName(name);
+    }
+    return;
+  }
 
   const Token* token = FindSelectedToken();
   if (text == "/owner" || text.starts_with("/owner ")) {
@@ -1932,6 +1987,9 @@ auto App::SaveGame() -> void {
     return;
   }
   if (WriteSnapshot(server_.Snapshot(), SavePath())) {
+    // Кампания хранит тот же мир, что и сохранение хоста.
+    StoreActiveScene();
+    SaveCampaign();
     SDL_Log("game saved");
   } else {
     SDL_Log("save failed");
@@ -1948,15 +2006,201 @@ auto App::LoadGame() -> void {
     SDL_Log("load failed");
     return;
   }
-  server_.Reset(*snapshot);
-  view_.Reset(server_.DmSnapshot(), server_.FullFogState());
+  ResetWorld(*snapshot);
+  // Загруженный мир становится активной сценой кампании.
+  StoreActiveScene();
+  SaveCampaign();
+  SDL_Log("game loaded");
+}
+
+auto App::SaveCampaign() -> void {
+  if (!WriteCampaign(campaign_, CampaignPath())) {
+    SDL_Log("campaign save failed");
+  }
+}
+
+auto App::StoreActiveScene() -> void {
+  if (campaign_.scenes.empty() || campaign_.active >= campaign_.scenes.size()) {
+    return;
+  }
+  campaign_.scenes[campaign_.active].snapshot = server_.Snapshot();
+}
+
+auto App::BroadcastWorld() -> void {
+  net_server_.BroadcastEvent(ViewUpdated{
+      .snapshot = server_.ClientSnapshot(),
+      .fog = server_.FogState(),
+  });
+}
+
+auto App::Announce(std::string text) -> void {
+  const LogLineAdded event{
+      .line =
+          LogLine{
+              .author = "DM",
+              .text = std::move(text),
+              .timestamp = CurrentTimeSeconds(),
+          },
+  };
+  view_.Apply(event);
+  net_server_.BroadcastEvent(event);
+}
+
+auto App::ResetWorld(GameSnapshot snapshot) -> void {
+  // Бой принадлежит прошлому миру: в новой сцене он начинается заново.
+  snapshot.encounter = Encounter{};
+  server_.Reset(std::move(snapshot));
+  scene_ = server_.Snapshot();
   transport_ = LocalTransport{};
   selected_id_ = 0;
   dragging_ = false;
-  aoe_mode_ = false;
   drag_target_.reset();
+  measuring_ = false;
+  measure_start_.reset();
+  measure_end_.reset();
+  show_movement_range_ = false;
+  aoe_mode_ = false;
+  chat_active_ = false;
+  chat_input_.clear();
+  sheet_active_ = false;
+  conditions_active_ = false;
+  bestiary_active_ = false;
+  view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   CenterCamera();
-  SDL_Log("game loaded");
+  BroadcastWorld();
+}
+
+auto App::SwitchScene(std::size_t index) -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
+    return;
+  }
+  if (index >= campaign_.scenes.size()) {
+    view_.AddLocalLine(std::string(strings::kScenesEmpty));
+    return;
+  }
+  StoreActiveScene();
+  if (index == campaign_.active) {
+    SaveCampaign();
+    return;
+  }
+  campaign_.active = index;
+  const std::string name = campaign_.scenes[index].name;
+  ResetWorld(campaign_.scenes[index].snapshot);
+  SDL_Log("scene '%s' is active", name.c_str());
+  Announce("Сцена: " + name);
+  SaveCampaign();
+}
+
+auto App::SwitchSceneByName(std::string_view name) -> void {
+  for (std::size_t index = 0; index < campaign_.scenes.size(); ++index) {
+    if (campaign_.scenes[index].name == name) {
+      SwitchScene(index);
+      return;
+    }
+  }
+  view_.AddLocalLine(std::string(strings::kScenesEmpty));
+}
+
+auto App::CreateScene() -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
+    return;
+  }
+  if (campaign_.scenes.size() >= kMaxCampaignScenes) {
+    view_.AddLocalLine("Достигнут предел числа сцен");
+    return;
+  }
+  StoreActiveScene();
+  // Новая сцена — копия текущей: DM сразу расставляет в ней монстров.
+  Scene scene{.name = NextSceneName(campaign_),
+              .snapshot = campaign_.scenes[campaign_.active].snapshot};
+  const std::string name = scene.name;
+  campaign_.scenes.push_back(std::move(scene));
+  campaign_.active = campaign_.scenes.size() - 1;
+  scenes_selected_ = campaign_.active;
+  SaveCampaign();
+  Announce("Новая сцена: " + name);
+}
+
+auto App::DeleteActiveScene() -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
+    return;
+  }
+  if (campaign_.scenes.size() <= 1) {
+    view_.AddLocalLine("Нельзя удалить последнюю сцену");
+    return;
+  }
+  const std::size_t removed = campaign_.active;
+  const std::string name = campaign_.scenes[removed].name;
+  campaign_.scenes.erase(campaign_.scenes.begin() +
+                         static_cast<std::ptrdiff_t>(removed));
+  const std::size_t next = removed == 0 ? 0 : removed - 1;
+  campaign_.active = next;
+  scenes_selected_ = next;
+  ResetWorld(campaign_.scenes[next].snapshot);
+  SDL_Log("scene '%s' deleted", name.c_str());
+  Announce("Сцена удалена: " + name);
+  SaveCampaign();
+}
+
+auto App::OpenScenes() -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
+    return;
+  }
+  scenes_active_ = true;
+  scenes_selected_ = campaign_.active;
+  bestiary_active_ = false;
+  sheet_active_ = false;
+  conditions_active_ = false;
+  chat_active_ = false;
+  chat_input_.clear();
+}
+
+auto App::CloseScenes() -> void { scenes_active_ = false; }
+
+auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
+  switch (key.key) {
+    case SDLK_ESCAPE:
+    case SDLK_TAB:
+      CloseScenes();
+      return;
+    case SDLK_UP:
+      if (scenes_selected_ > 0) {
+        --scenes_selected_;
+      }
+      return;
+    case SDLK_DOWN:
+      if (scenes_selected_ + 1 < campaign_.scenes.size()) {
+        ++scenes_selected_;
+      }
+      return;
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER: {
+      const std::size_t index = scenes_selected_;
+      CloseScenes();
+      SwitchScene(index);
+      return;
+    }
+    case SDLK_N:
+      CreateScene();
+      return;
+    case SDLK_DELETE:
+      DeleteActiveScene();
+      return;
+    default:
+      break;
+  }
+  if (key.key >= SDLK_1 && key.key <= SDLK_9) {
+    const auto index = static_cast<std::size_t>(key.key - SDLK_1);
+    if (index < campaign_.scenes.size()) {
+      scenes_selected_ = index;
+      CloseScenes();
+      SwitchScene(index);
+    }
+  }
 }
 
 auto App::Iterate() -> void {
@@ -2097,6 +2341,15 @@ auto App::Iterate() -> void {
   }
   if (bestiary_active_) {
     DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
+  }
+  if (scenes_active_) {
+    std::vector<std::string> scene_names;
+    scene_names.reserve(campaign_.scenes.size());
+    for (const Scene& scene : campaign_.scenes) {
+      scene_names.push_back(scene.name);
+    }
+    DrawScenesPanel(renderer_, text_.get(), scene_names, campaign_.active,
+                    scenes_selected_);
   }
   if (conditions_active_) {
     const Token* condition_token = nullptr;

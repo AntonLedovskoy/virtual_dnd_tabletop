@@ -70,4 +70,9 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
                          const std::vector<std::string>& conditions) -> void;
 
+// Модальный список сцен кампании для DM: активная и выбранная подсвечены.
+auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
+                     const std::vector<std::string>& names, std::size_t active,
+                     std::size_t selected) -> void;
+
 }  // namespace dnd

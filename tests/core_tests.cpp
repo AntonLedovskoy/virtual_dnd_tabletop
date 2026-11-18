@@ -10,6 +10,8 @@
 
 #include "core/aoe.h"
 #include "core/bestiary.h"
+#include "core/campaign.h"
+#include "core/campaign_io.h"
 #include "core/client_view.h"
 #include "core/conditions.h"
 #include "core/dice.h"
@@ -1213,6 +1215,73 @@ auto TestSaveLoadRoundtrip() -> void {
   std::filesystem::remove(bad_path);
 }
 
+auto TestCampaign() -> void {
+  dnd::GridMap first_map(5, 4);
+  first_map.SetBlocked(CellAt(1, 1), true);
+  const dnd::GameSnapshot first{
+      .map = first_map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+          },
+      .next_token_id = 2,
+  };
+  const dnd::GameSnapshot second{
+      .map = dnd::GridMap(3, 3),
+      .next_token_id = 1,
+  };
+
+  dnd::Campaign campaign = dnd::MakeCampaign(first, "");
+  Expect(
+      campaign.scenes.size() == 1 && campaign.scenes.front().name == "Сцена 1",
+      "empty scene name gets a default");
+  Expect(campaign.active == 0, "campaign starts on its only scene");
+  Expect(dnd::NextSceneName(campaign) == "Сцена 2",
+         "next scene name avoids used ones");
+
+  campaign.scenes.push_back(dnd::Scene{.name = "Сцена 2", .snapshot = second});
+  campaign.active = 1;
+  Expect(dnd::NextSceneName(campaign) == "Сцена 3",
+         "next scene name counts existing scenes");
+
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_campaign.bin";
+  Expect(dnd::WriteCampaign(campaign, path), "campaign writes");
+  const std::optional<dnd::Campaign> loaded = dnd::ReadCampaign(path);
+  Expect(loaded.has_value(), "campaign reads back");
+  if (loaded.has_value()) {
+    Expect(loaded->scenes.size() == 2, "scene count survives the roundtrip");
+    Expect(loaded->active == 1, "active scene survives the roundtrip");
+    Expect(loaded->scenes.front().name == "Сцена 1" &&
+               loaded->scenes.back().name == "Сцена 2",
+           "scene names survive the roundtrip");
+    Expect(loaded->scenes.front().snapshot.map.Width() == 5 &&
+               loaded->scenes.front().snapshot.map.IsBlocked(CellAt(1, 1)),
+           "scene walls survive the roundtrip");
+    Expect(loaded->scenes.front().snapshot.tokens.size() == 1 &&
+               loaded->scenes.front().snapshot.tokens.front().name == "hero",
+           "scene tokens survive the roundtrip");
+    Expect(loaded->scenes.back().snapshot.map.Width() == 3,
+           "second scene keeps its own map");
+  }
+  std::filesystem::remove(path);
+  Expect(!dnd::ReadCampaign(path).has_value(), "missing campaign is rejected");
+
+  const std::filesystem::path bad_path =
+      std::filesystem::temp_directory_path() /
+      "dnd_core_tests_campaign_bad.bin";
+  {
+    std::ofstream out(bad_path, std::ios::binary | std::ios::trunc);
+    out.write("DNDC", 4);
+  }
+  Expect(!dnd::ReadCampaign(bad_path).has_value(),
+         "truncated campaign is rejected");
+  std::filesystem::remove(bad_path);
+}
+
 auto TestChatAndDice() -> void {
   const dnd::GridMap map(10, 10);
   const dnd::GameSnapshot snapshot{
@@ -1641,6 +1710,7 @@ auto main() -> int {
     TestChatAndDice();
     TestCommandEventSerialization();
     TestSaveLoadRoundtrip();
+    TestCampaign();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());
     return 1;

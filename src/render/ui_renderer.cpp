@@ -565,4 +565,59 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
              y + height - 30.0F, kHintText, content_width);
 }
 
+auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
+                     const std::vector<std::string>& names, std::size_t active,
+                     std::size_t selected) -> void {
+  if (renderer == nullptr || text == nullptr || names.empty()) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+    return;
+  }
+  constexpr float width = 620.0F;
+  constexpr float height = 380.0F;
+  constexpr std::size_t kVisibleRows = 9;
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const auto left = x + 30.0F;
+  const auto content_width = width - 60.0F;
+  auto cursor_y = y + 18.0F;
+  text->Draw(std::string(strings::kScenesTitle), left, cursor_y, kAuthorText,
+             content_width);
+  cursor_y += text->LineHeight() + 10.0F;
+
+  // Окно прокрутки держит выбранную сцену в середине списка.
+  std::size_t first = 0;
+  if (names.size() > kVisibleRows) {
+    first = selected > kVisibleRows / 2 ? selected - (kVisibleRows / 2) : 0;
+    first = std::min(first, names.size() - kVisibleRows);
+  }
+  for (std::size_t row = 0; row < kVisibleRows; ++row) {
+    const std::size_t index = first + row;
+    if (index >= names.size()) {
+      break;
+    }
+    const bool is_active = index == active;
+    const bool is_selected = index == selected;
+    const std::string line = std::to_string(index + 1) +
+                             (is_active ? ". * " : ".   ") +
+                             (is_selected ? "> " : "  ") + names[index];
+    text->Draw(line, left, cursor_y, is_selected ? kAuthorText : kLogText,
+               content_width);
+    cursor_y += text->LineHeight() + 2.0F;
+  }
+  text->DrawWrapped(strings::kScenesHint, left, y + height - 56.0F, kHintText,
+                    content_width);
+}
+
 }  // namespace dnd

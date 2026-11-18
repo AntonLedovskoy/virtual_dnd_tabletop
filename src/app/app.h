@@ -7,8 +7,11 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "core/campaign.h"
+#include "core/campaign_io.h"
 #include "core/client_view.h"
 #include "core/game_server.h"
 #include "core/local_transport.h"
@@ -116,6 +119,21 @@ class App {
   auto AdjustSelectedInitiative(int delta) -> void;
   auto SaveGame() -> void;
   auto LoadGame() -> void;
+  auto SaveCampaign() -> void;
+  // Сохраняет мир хоста в активную сцену кампании.
+  auto StoreActiveScene() -> void;
+  // Заменяет мир и пересобирает вид хоста, клиентам уходит ViewUpdated.
+  auto ResetWorld(GameSnapshot snapshot) -> void;
+  auto BroadcastWorld() -> void;
+  // Пишет строку лога всем за столом (смена сцены и подобное).
+  auto Announce(std::string text) -> void;
+  auto SwitchScene(std::size_t index) -> void;
+  auto CreateScene() -> void;
+  auto DeleteActiveScene() -> void;
+  auto OpenScenes() -> void;
+  auto CloseScenes() -> void;
+  auto HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto SwitchSceneByName(std::string_view name) -> void;
   auto LoadFont() -> void;
 
   [[nodiscard]] auto CellFromPixel(float x, float y) const -> Cell;
@@ -131,6 +149,7 @@ class App {
   bool ttf_initialized_ = false;
 
   GameSnapshot scene_;
+  Campaign campaign_;
   GameServer server_;
   ClientView view_;
   LocalTransport transport_;
@@ -163,6 +182,9 @@ class App {
   bool conditions_active_ = false;
   TokenId conditions_token_id_ = 0;
   std::vector<std::string> conditions_draft_;
+
+  bool scenes_active_ = false;
+  std::size_t scenes_selected_ = 0;
 
   bool show_movement_range_ = false;
   bool aoe_mode_ = false;

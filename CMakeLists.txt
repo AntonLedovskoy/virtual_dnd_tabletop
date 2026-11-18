@@ -103,6 +103,8 @@ add_library(dnd_core STATIC
   src/core/aoe.cpp
   src/core/bestiary.cpp
   src/core/byte_io.cpp
+  src/core/campaign.cpp
+  src/core/campaign_io.cpp
   src/core/client_view.cpp
   src/core/conditions.cpp
   src/core/dice.cpp
