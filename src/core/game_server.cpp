@@ -24,6 +24,9 @@ constexpr int kMaxHp = 1000000;
 constexpr int kMaxAc = 1000;
 constexpr int kMaxSpeed = 1000;
 constexpr int kMaxBonus = 100;
+constexpr int kMaxTempHp = 1000;
+constexpr std::size_t kMaxConditions = 16;
+constexpr std::size_t kMaxConditionLength = 32;
 
 auto AuthorName(const std::string& actor) -> std::string {
   return actor.empty() ? "DM" : actor;
@@ -93,6 +96,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleSetTokenColor(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, UpdateTokenSheet>) {
           return HandleUpdateTokenSheet(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
+          return HandleUpdateTokenCombat(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           return HandleStartEncounter(can_control_all);
         } else if constexpr (std::is_same_v<T, EndEncounter>) {
@@ -557,11 +562,45 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
       return CommandOutcome{.reject_reason = "некорректное выражение урона"};
     }
   }
+  if (command.temp_hp < 0 || command.temp_hp > kMaxTempHp) {
+    return CommandOutcome{.reject_reason = "некорректные временные HP"};
+  }
   const std::optional<Token> updated = state_.UpdateTokenSheet(
       command.id, command.ac, command.speed, command.notes,
-      command.attack_bonus, command.save_bonus, command.damage);
+      command.attack_bonus, command.save_bonus, command.damage,
+      command.temp_hp);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  return outcome;
+}
+
+auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
+                                         const std::string& actor,
+                                         bool can_control_all)
+    -> CommandOutcome {
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!CanControl(*token, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  if (command.conditions.size() > kMaxConditions) {
+    return CommandOutcome{.reject_reason = "слишком много состояний"};
+  }
+  for (const std::string& condition : command.conditions) {
+    if (condition.empty() || condition.size() > kMaxConditionLength) {
+      return CommandOutcome{.reject_reason = "некорректное состояние"};
+    }
+  }
+  const std::optional<Token> updated =
+      state_.UpdateTokenCombat(command.id, command.conditions);
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "не удалось обновить состояния"};
   }
   CommandOutcome outcome;
   outcome.accepted = true;

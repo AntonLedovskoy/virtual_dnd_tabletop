@@ -7,9 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <ranges>
 #include <string>
 
 #include "app/strings.h"
+#include "core/conditions.h"
 #include "render/text_renderer.h"
 
 namespace dnd {
@@ -252,15 +254,29 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
   lines.emplace_back(std::string(strings::kKind) + ": " +
                      std::string(KindLabel(token->kind)));
   lines.emplace_back(std::string(strings::kOwner) + ": " + owner);
-  lines.emplace_back(std::string(strings::kHp) + ": " +
-                     std::to_string(token->hp) + "/" +
-                     std::to_string(token->max_hp) + "   " +
-                     std::string(strings::kInitiativeShort) + " " +
-                     std::to_string(token->initiative));
+  std::string hp_line = std::string(strings::kHp) + ": " +
+                        std::to_string(token->hp) + "/" +
+                        std::to_string(token->max_hp);
+  if (token->temp_hp > 0) {
+    hp_line += " (+" + std::to_string(token->temp_hp) + ")";
+  }
+  hp_line += "   " + std::string(strings::kInitiativeShort) + " " +
+             std::to_string(token->initiative);
+  lines.push_back(std::move(hp_line));
   lines.emplace_back(std::string(strings::kSheetAc) + ": " +
                      std::to_string(token->ac) + "   " +
                      std::string(strings::kSheetSpeed) + ": " +
                      std::to_string(token->speed));
+  if (!token->conditions.empty()) {
+    std::string condition_line = std::string(strings::kConditions) + ": ";
+    for (std::size_t i = 0; i < token->conditions.size(); ++i) {
+      if (i > 0) {
+        condition_line += ", ";
+      }
+      condition_line += token->conditions[i];
+    }
+    lines.push_back(std::move(condition_line));
+  }
 
   std::vector<std::string> hints;
   if (is_client && can_claim) {
@@ -390,8 +406,8 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token& token, SheetField active,
                     const std::string& ac, const std::string& speed,
                     const std::string& attack, const std::string& save,
-                    const std::string& damage, const std::string& notes)
-    -> void {
+                    const std::string& temp_hp, const std::string& damage,
+                    const std::string& notes) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -401,7 +417,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
     return;
   }
   constexpr float width = 640.0F;
-  constexpr float height = 480.0F;
+  constexpr float height = 520.0F;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -427,8 +443,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   const SDL_FRect speed_field{left + 260.0F, y + 114.0F, 220.0F, 40.0F};
   const SDL_FRect attack_field{left, y + 194.0F, 220.0F, 40.0F};
   const SDL_FRect save_field{left + 260.0F, y + 194.0F, 220.0F, 40.0F};
-  const SDL_FRect damage_field{left, y + 274.0F, content_width, 40.0F};
-  const SDL_FRect notes_field{left, y + 354.0F, content_width, 40.0F};
+  const SDL_FRect temp_hp_field{left, y + 274.0F, 220.0F, 40.0F};
+  const SDL_FRect damage_field{left, y + 354.0F, content_width, 40.0F};
+  const SDL_FRect notes_field{left, y + 434.0F, content_width, 40.0F};
 
   DrawModalField(renderer, text, ac_field, std::string(strings::kSheetAc), ac,
                  active == SheetField::kAc);
@@ -439,6 +456,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                  active == SheetField::kAttack);
   DrawModalField(renderer, text, save_field, std::string(strings::kSheetSave),
                  save, active == SheetField::kSave);
+  DrawModalField(renderer, text, temp_hp_field,
+                 std::string(strings::kSheetTempHp), temp_hp,
+                 active == SheetField::kTempHp);
   DrawModalField(renderer, text, damage_field,
                  std::string(strings::kSheetDamage), damage,
                  active == SheetField::kDamage);
@@ -488,6 +508,50 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   text->Draw(std::string(strings::kBestiaryHint), left, y + height - 30.0F,
              kHintText, content_width);
+}
+
+auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
+                         const Token& token,
+                         const std::vector<std::string>& conditions) -> void {
+  if (renderer == nullptr || text == nullptr) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+    return;
+  }
+  constexpr float width = 520.0F;
+  constexpr float height = 360.0F;
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const auto left = x + 30.0F;
+  const auto content_width = width - 60.0F;
+  auto cursor_y = y + 18.0F;
+  text->Draw(std::string(strings::kConditions) + ": " + token.name, left,
+             cursor_y, kAuthorText, content_width);
+  cursor_y += text->LineHeight() + 10.0F;
+
+  const auto& standard = DefaultConditions();
+  for (std::size_t i = 0; i < standard.size(); ++i) {
+    const bool active =
+        std::ranges::find(conditions, standard[i]) != conditions.end();
+    const std::string line =
+        std::to_string(i + 1) + ". " + (active ? "[x] " : "[ ] ") + standard[i];
+    text->Draw(line, left, cursor_y, active ? kAuthorText : kLogText,
+               content_width);
+    cursor_y += text->LineHeight() + 2.0F;
+  }
+  text->Draw("1–8 — переключить | 0 — очистить | Esc — закрыть", left,
+             y + height - 30.0F, kHintText, content_width);
 }
 
 }  // namespace dnd

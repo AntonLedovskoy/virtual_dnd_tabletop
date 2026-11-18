@@ -7,6 +7,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <ranges>
 #include <string>
@@ -18,6 +19,7 @@
 
 #include "app/strings.h"
 #include "core/bestiary.h"
+#include "core/conditions.h"
 #include "core/dice.h"
 #include "core/scene_io.h"
 #include "core/utf8.h"
@@ -833,6 +835,17 @@ auto App::HandleEvent(const SDL_Event& event) -> void {
     return;
   }
 
+  if (conditions_active_) {
+    switch (event.type) {
+      case SDL_EVENT_KEY_DOWN:
+        HandleConditionsKeyDown(event.key);
+        break;
+      default:
+        break;
+    }
+    return;
+  }
+
   if (bestiary_active_) {
     switch (event.type) {
       case SDL_EVENT_MOUSE_MOTION:
@@ -948,6 +961,9 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     } else {
       dragging_ = false;
       drag_target_.reset();
+      measuring_ = false;
+      measure_start_.reset();
+      measure_end_.reset();
     }
     return;
   }
@@ -976,6 +992,16 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SDLK_B:
       OpenBestiary();
+      break;
+    case SDLK_K:
+      OpenConditions();
+      break;
+    case SDLK_M:
+      if (FindSelectedToken() == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectToken));
+      } else {
+        show_movement_range_ = !show_movement_range_;
+      }
       break;
     case SDLK_R:
       ReleaseSelectedToken();
@@ -1068,6 +1094,14 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
 
 auto App::HandleMouseDown(const SDL_MouseButtonEvent& button) -> void {
   const Cell cell = CellFromPixel(button.x, button.y);
+  if ((SDL_GetModState() & SDL_KMOD_ALT) != 0) {
+    measuring_ = true;
+    measure_start_ = cell;
+    measure_end_ = cell;
+    return;
+  }
+  measure_start_.reset();
+  measure_end_.reset();
   selected_id_ = TokenAt(cell);
   const Token* token = FindSelectedToken();
   const bool locked = token != nullptr && token->kind == TokenKind::kPlayer &&
@@ -1081,6 +1115,10 @@ auto App::HandleMouseDown(const SDL_MouseButtonEvent& button) -> void {
 }
 
 auto App::HandleMouseUp(const SDL_MouseButtonEvent& button) -> void {
+  if (measuring_) {
+    measuring_ = false;
+    return;
+  }
   if (!dragging_) {
     return;
   }
@@ -1098,6 +1136,10 @@ auto App::HandleMouseMotion(const SDL_MouseMotionEvent& motion) -> void {
   mouse_x_ = motion.x;
   mouse_y_ = motion.y;
   const Cell cell = CellFromPixel(motion.x, motion.y);
+  if (measuring_) {
+    measure_end_ = cell;
+    return;
+  }
   if (!dragging_) {
     return;
   }
@@ -1223,12 +1265,15 @@ auto App::OpenSheet() -> void {
     return;
   }
   sheet_active_ = true;
+  conditions_active_ = false;
+  bestiary_active_ = false;
   sheet_token_id_ = token->id;
   sheet_field_ = SheetField::kAc;
   sheet_ac_ = std::to_string(token->ac);
   sheet_speed_ = std::to_string(token->speed);
   sheet_attack_ = std::to_string(token->attack_bonus);
   sheet_save_ = std::to_string(token->save_bonus);
+  sheet_temp_hp_ = std::to_string(token->temp_hp);
   sheet_damage_ = token->damage;
   sheet_notes_ = token->notes;
 }
@@ -1243,11 +1288,13 @@ auto App::SaveSheet() -> void {
   int speed = 0;
   int attack = 0;
   int save = 0;
+  int temp_hp = 0;
   if (!ParseNumber(sheet_ac_, ac) || ac > 1000 ||
       !ParseSignedNumber(sheet_speed_, speed) || speed < 0 || speed > 1000 ||
       !ParseSignedNumber(sheet_attack_, attack) || attack < -100 ||
       attack > 100 || !ParseSignedNumber(sheet_save_, save) || save < -100 ||
-      save > 100) {
+      save > 100 || !ParseSignedNumber(sheet_temp_hp_, temp_hp) ||
+      temp_hp < 0 || temp_hp > 1000) {
     view_.AddLocalLine("Некорректные значения полей листа");
     return;
   }
@@ -1275,7 +1322,8 @@ auto App::SaveSheet() -> void {
                                .notes = sheet_notes_,
                                .attack_bonus = attack,
                                .save_bonus = save,
-                               .damage = sheet_damage_});
+                               .damage = sheet_damage_,
+                               .temp_hp = temp_hp});
   CloseSheet();
 }
 
@@ -1338,6 +1386,9 @@ auto App::HandleSheetTextInput(const char* text) -> void {
       case SheetField::kSave:
         AppendBoundedNumber(sheet_save_, text, -100, 100, true);
         break;
+      case SheetField::kTempHp:
+        AppendBoundedNumber(sheet_temp_hp_, text, 0, 1000, false);
+        break;
       default:
         break;
     }
@@ -1365,7 +1416,7 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
     return;
   }
   if (key.key == SDLK_TAB) {
-    const int next = (static_cast<int>(sheet_field_) + 1) % 6;
+    const int next = (static_cast<int>(sheet_field_) + 1) % 7;
     sheet_field_ = static_cast<SheetField>(next);
     return;
   }
@@ -1386,6 +1437,9 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SheetField::kSave:
       buffer = &sheet_save_;
       break;
+    case SheetField::kTempHp:
+      buffer = &sheet_temp_hp_;
+      break;
     case SheetField::kDamage:
       buffer = &sheet_damage_;
       break;
@@ -1404,6 +1458,8 @@ auto App::OpenBestiary() -> void {
     return;
   }
   bestiary_active_ = true;
+  sheet_active_ = false;
+  conditions_active_ = false;
 }
 
 auto App::HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void {
@@ -1441,6 +1497,61 @@ auto App::SpawnBestiary(int index) -> void {
       .damage = monster.damage,
   });
   bestiary_active_ = false;
+}
+
+auto App::OpenConditions() -> void {
+  const Token* token = FindSelectedToken();
+  if (token == nullptr) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  if (!CanEditToken(*token)) {
+    view_.AddLocalLine(std::string(strings::kSheetNoAccess));
+    return;
+  }
+  conditions_active_ = true;
+  conditions_token_id_ = token->id;
+  conditions_draft_ = token->conditions;
+  sheet_active_ = false;
+  bestiary_active_ = false;
+}
+
+auto App::CloseConditions() -> void {
+  conditions_active_ = false;
+  conditions_token_id_ = 0;
+  conditions_draft_.clear();
+}
+
+auto App::ToggleCondition(int index) -> void {
+  const auto& standard = DefaultConditions();
+  if (index < 0 || index >= static_cast<int>(standard.size())) {
+    return;
+  }
+  const std::string& condition = standard[static_cast<std::size_t>(index)];
+  const auto it = std::ranges::find(conditions_draft_, condition);
+  if (it == conditions_draft_.end()) {
+    conditions_draft_.push_back(condition);
+  } else {
+    conditions_draft_.erase(it);
+  }
+  SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
+                                .conditions = conditions_draft_});
+}
+
+auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (key.key == SDLK_ESCAPE || key.key == SDLK_K) {
+    CloseConditions();
+    return;
+  }
+  if (key.key == SDLK_0) {
+    conditions_draft_.clear();
+    SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
+                                  .conditions = conditions_draft_});
+    return;
+  }
+  if (key.key >= SDLK_1 && key.key <= SDLK_8) {
+    ToggleCondition(static_cast<int>(key.key - SDLK_1));
+  }
 }
 
 auto App::CycleSelectedColor() -> void {
@@ -1767,6 +1878,15 @@ auto App::Iterate() -> void {
 
   DrawGrid(renderer_, view_.Map(), cell_size_, camera_x_, camera_y_);
   DrawWalls(renderer_, view_.Map(), cell_size_, camera_x_, camera_y_);
+  if (show_movement_range_) {
+    const Token* range_token = FindSelectedToken();
+    if (range_token != nullptr) {
+      const int radius = std::max(0, range_token->speed / 5);
+      DrawMovementRange(renderer_,
+                        ReachableCells(view_.Map(), range_token->cell, radius),
+                        cell_size_, camera_x_, camera_y_);
+    }
+  }
   if (!client_is_dm_) {
     DrawFog(renderer_, view_.Fog(), cell_size_, camera_x_, camera_y_);
   }
@@ -1777,6 +1897,25 @@ auto App::Iterate() -> void {
           : 0;
   DrawTokens(renderer_, shown, cell_size_, camera_x_, camera_y_, text_.get(),
              selected_id_, active_id);
+  if (measure_start_.has_value() && measure_end_.has_value()) {
+    DrawRuler(renderer_, *measure_start_, *measure_end_, cell_size_, camera_x_,
+              camera_y_);
+    const int dx = std::abs(measure_end_->x - measure_start_->x);
+    const int dy = std::abs(measure_end_->y - measure_start_->y);
+    const int feet = std::max(dx, dy) * 5;
+    const float label_x =
+        camera_x_ +
+        ((static_cast<float>(measure_start_->x + measure_end_->x) + 1.0F) *
+         cell_size_ / 2.0F);
+    const float label_y =
+        camera_y_ +
+        ((static_cast<float>(measure_start_->y + measure_end_->y) + 1.0F) *
+         cell_size_ / 2.0F);
+    text_->Draw(
+        std::to_string(feet) + " фт", label_x + 8.0F, label_y - 8.0F,
+        SDL_Color{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = SDL_ALPHA_OPAQUE},
+        120.0F);
+  }
   DrawInitiativePanel(renderer_, text_.get(), view_.Tokens(), encounter);
   const bool is_client = options_.mode == AppMode::kClient;
   const Token* selected = FindSelectedToken();
@@ -1809,11 +1948,26 @@ auto App::Iterate() -> void {
     } else {
       DrawSheetPanel(renderer_, text_.get(), *sheet_token, sheet_field_,
                      sheet_ac_, sheet_speed_, sheet_attack_, sheet_save_,
-                     sheet_damage_, sheet_notes_);
+                     sheet_temp_hp_, sheet_damage_, sheet_notes_);
     }
   }
   if (bestiary_active_) {
     DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
+  }
+  if (conditions_active_) {
+    const Token* condition_token = nullptr;
+    for (const Token& token : view_.Tokens()) {
+      if (token.id == conditions_token_id_) {
+        condition_token = &token;
+        break;
+      }
+    }
+    if (condition_token == nullptr) {
+      CloseConditions();
+    } else {
+      DrawConditionsPanel(renderer_, text_.get(), *condition_token,
+                          conditions_draft_);
+    }
   }
   SDL_RenderPresent(renderer_);
 }

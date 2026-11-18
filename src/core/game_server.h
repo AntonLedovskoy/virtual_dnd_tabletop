@@ -107,6 +107,10 @@ class GameServer {
                                             const std::string& actor,
                                             bool can_control_all)
       -> CommandOutcome;
+  [[nodiscard]] auto HandleUpdateTokenCombat(const UpdateTokenCombat& command,
+                                             const std::string& actor,
+                                             bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleStartEncounter(bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleEndEncounter(bool can_control_all) -> CommandOutcome;

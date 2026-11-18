@@ -32,4 +32,9 @@ class GridMap {
   std::vector<std::uint8_t> blocked_;
 };
 
+// Клетки, достижимые из origin за radius шагов по восьми направлениям.
+// Стены непроходимы; диагональ стоит один шаг.
+[[nodiscard]] auto ReachableCells(const GridMap& map, Cell origin, int radius)
+    -> std::vector<Cell>;
+
 }  // namespace dnd

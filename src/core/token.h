@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "core/grid_map.h"
 
@@ -26,6 +27,7 @@ struct Token {
   std::string owner;
   int hp = 10;
   int max_hp = 10;
+  int temp_hp = 0;
   int initiative = 0;
   int ac = 10;
   int speed = 30;
@@ -33,6 +35,7 @@ struct Token {
   int attack_bonus = 0;
   int save_bonus = 0;
   std::string damage;
+  std::vector<std::string> conditions;
   TokenKind kind = TokenKind::kMonster;
   // 0xRRGGBB или 0, чтобы брать цвет из id токена.
   std::uint32_t color = 0;

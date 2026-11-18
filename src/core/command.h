@@ -110,6 +110,13 @@ struct UpdateTokenSheet {
   int attack_bonus = 0;
   int save_bonus = 0;
   std::string damage;
+  int temp_hp = 0;
+};
+
+// Владелец или DM: заменить список состояний токена.
+struct UpdateTokenCombat {
+  TokenId id = 0;
+  std::vector<std::string> conditions;
 };
 
 // Управление боем, доступное только DM.
@@ -117,10 +124,11 @@ struct StartEncounter {};
 struct EndEncounter {};
 struct NextTurn {};
 
-using Command = std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
-                             RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
-                             ReleaseToken, SetTokenOwner, RenameToken,
-                             SetTokenMaxHp, SetTokenColor, UpdateTokenSheet,
-                             StartEncounter, EndEncounter, NextTurn>;
+using Command =
+    std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
+                 RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
+                 ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
+                 SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
+                 StartEncounter, EndEncounter, NextTurn>;
 
 }  // namespace dnd

@@ -16,6 +16,8 @@ constexpr std::uint32_t kMaxChatText = 256;
 constexpr std::uint32_t kMaxLogText = 512;
 constexpr std::uint32_t kMaxLogAuthor = 64;
 constexpr std::uint32_t kMaxNotes = 512;
+constexpr std::uint32_t kMaxConditions = 16;
+constexpr std::uint32_t kMaxConditionLength = 32;
 
 constexpr std::uint8_t kCommandMoveToken = 1;
 constexpr std::uint8_t kCommandSay = 2;
@@ -35,6 +37,7 @@ constexpr std::uint8_t kCommandSetTokenColor = 15;
 constexpr std::uint8_t kCommandUpdateTokenSheet = 16;
 constexpr std::uint8_t kCommandReleaseToken = 17;
 constexpr std::uint8_t kCommandRollExpression = 18;
+constexpr std::uint8_t kCommandUpdateTokenCombat = 19;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -50,6 +53,7 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.String(token.owner);
   writer.I32(token.hp);
   writer.I32(token.max_hp);
+  writer.I32(token.temp_hp);
   writer.I32(token.initiative);
   writer.I32(token.ac);
   writer.I32(token.speed);
@@ -61,6 +65,10 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.attack_bonus);
   writer.I32(token.save_bonus);
   writer.String(token.damage);
+  writer.U32(static_cast<std::uint32_t>(token.conditions.size()));
+  for (const std::string& condition : token.conditions) {
+    writer.String(condition);
+  }
 }
 
 auto ReadToken(ByteReader& reader, Token& token) -> bool {
@@ -69,6 +77,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::string owner;
   std::int32_t hp = 0;
   std::int32_t max_hp = 0;
+  std::int32_t temp_hp = 0;
   std::int32_t initiative = 0;
   std::int32_t ac = 10;
   std::int32_t speed = 30;
@@ -80,18 +89,29 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::int32_t attack_bonus = 0;
   std::int32_t save_bonus = 0;
   std::string damage;
+  std::uint32_t condition_count = 0;
+  std::vector<std::string> conditions;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
-      !reader.I32(max_hp) || !reader.I32(initiative) || !reader.I32(ac) ||
-      !reader.I32(speed) || !reader.U8(kind) || !reader.U32(color) ||
-      !reader.I32(x) || !reader.I32(y) || !reader.String(notes, kMaxNotes) ||
-      !reader.I32(attack_bonus) || !reader.I32(save_bonus) ||
-      !reader.String(damage, kMaxNotes)) {
+      !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
+      !reader.I32(ac) || !reader.I32(speed) || !reader.U8(kind) ||
+      !reader.U32(color) || !reader.I32(x) || !reader.I32(y) ||
+      !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
+      !reader.I32(save_bonus) || !reader.String(damage, kMaxNotes) ||
+      !reader.U32(condition_count) || condition_count > kMaxConditions) {
     return false;
   }
-  if (max_hp < 0 || max_hp > 1000000 || initiative < -1000000 ||
-      initiative > 1000000 || ac <= 0 || ac > 1000 || speed < 0 ||
-      speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
+  conditions.reserve(condition_count);
+  for (std::uint32_t i = 0; i < condition_count; ++i) {
+    std::string condition;
+    if (!reader.String(condition, kMaxConditionLength)) {
+      return false;
+    }
+    conditions.push_back(std::move(condition));
+  }
+  if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
+      initiative < -1000000 || initiative > 1000000 || ac <= 0 || ac > 1000 ||
+      speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
       save_bonus < -100 || save_bonus > 100 ||
       kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0) {
@@ -103,6 +123,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .owner = std::move(owner),
       .hp = hp,
       .max_hp = max_hp,
+      .temp_hp = temp_hp,
       .initiative = initiative,
       .ac = ac,
       .speed = speed,
@@ -110,6 +131,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .attack_bonus = attack_bonus,
       .save_bonus = save_bonus,
       .damage = std::move(damage),
+      .conditions = std::move(conditions),
       .kind = static_cast<TokenKind>(kind),
       .color = color,
       .cell = Cell{.x = x, .y = y},
@@ -367,10 +389,11 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
   std::int32_t attack_bonus = 0;
   std::int32_t save_bonus = 0;
   std::string damage;
+  std::int32_t temp_hp = 0;
   if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.String(damage, kMaxNotes) ||
-      !reader.Done()) {
+      !reader.I32(temp_hp) || !reader.Done()) {
     return std::nullopt;
   }
   return Command{UpdateTokenSheet{.id = id,
@@ -379,7 +402,31 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
                                   .notes = std::move(notes),
                                   .attack_bonus = attack_bonus,
                                   .save_bonus = save_bonus,
-                                  .damage = std::move(damage)}};
+                                  .damage = std::move(damage),
+                                  .temp_hp = temp_hp}};
+}
+
+auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
+    -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::uint32_t count = 0;
+  if (!reader.U32(id) || !reader.U32(count) || count > kMaxConditions) {
+    return std::nullopt;
+  }
+  std::vector<std::string> conditions;
+  conditions.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    std::string condition;
+    if (!reader.String(condition, kMaxConditionLength)) {
+      return std::nullopt;
+    }
+    conditions.push_back(std::move(condition));
+  }
+  if (!reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{
+      UpdateTokenCombat{.id = id, .conditions = std::move(conditions)}};
 }
 
 auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
@@ -661,6 +708,14 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.attack_bonus);
           writer.I32(cmd.save_bonus);
           writer.String(cmd.damage);
+          writer.I32(cmd.temp_hp);
+        } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
+          writer.U8(kCommandUpdateTokenCombat);
+          writer.U32(cmd.id);
+          writer.U32(static_cast<std::uint32_t>(cmd.conditions.size()));
+          for (const std::string& condition : cmd.conditions) {
+            writer.String(condition);
+          }
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           writer.U8(kCommandStartEncounter);
         } else if constexpr (std::is_same_v<T, EndEncounter>) {
@@ -711,6 +766,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeSetTokenColorCommand(reader);
     case kCommandUpdateTokenSheet:
       return DecodeUpdateTokenSheetCommand(reader);
+    case kCommandUpdateTokenCombat:
+      return DecodeUpdateTokenCombatCommand(reader);
     case kCommandStartEncounter:
       return DecodeStartEncounterCommand(reader);
     case kCommandEndEncounter:

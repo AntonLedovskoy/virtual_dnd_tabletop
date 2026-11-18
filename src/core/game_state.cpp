@@ -158,8 +158,8 @@ auto GameState::SetTokenColor(TokenId id, std::uint32_t color)
 
 auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
                                  std::string notes, int attack_bonus,
-                                 int save_bonus, std::string damage)
-    -> std::optional<Token> {
+                                 int save_bonus, std::string damage,
+                                 int temp_hp) -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -170,6 +170,18 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
   token->attack_bonus = attack_bonus;
   token->save_bonus = save_bonus;
   token->damage = std::move(damage);
+  token->temp_hp = temp_hp;
+  return *token;
+}
+
+auto GameState::UpdateTokenCombat(TokenId id,
+                                  std::vector<std::string> conditions)
+    -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->conditions = std::move(conditions);
   return *token;
 }
 

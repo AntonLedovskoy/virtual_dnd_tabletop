@@ -103,6 +103,7 @@ add_library(dnd_core STATIC
   src/core/bestiary.cpp
   src/core/byte_io.cpp
   src/core/client_view.cpp
+  src/core/conditions.cpp
   src/core/dice.cpp
   src/core/game_server.cpp
   src/core/game_state.cpp

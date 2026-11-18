@@ -28,4 +28,12 @@ auto DrawTokens(SDL_Renderer* renderer, const std::vector<Token>& tokens,
 auto DrawFog(SDL_Renderer* renderer, const FogOfWar& fog, float cell_size,
              float offset_x, float offset_y) -> void;
 
+// Подсветка клеток, доступных для перемещения.
+auto DrawMovementRange(SDL_Renderer* renderer, const std::vector<Cell>& cells,
+                       float cell_size, float offset_x, float offset_y) -> void;
+
+// Линия измерения между двумя клетками.
+auto DrawRuler(SDL_Renderer* renderer, Cell from, Cell to, float cell_size,
+               float offset_x, float offset_y) -> void;
+
 }  // namespace dnd

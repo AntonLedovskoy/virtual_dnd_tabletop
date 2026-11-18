@@ -99,6 +99,10 @@ class App {
   auto OpenBestiary() -> void;
   auto HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto SpawnBestiary(int index) -> void;
+  auto OpenConditions() -> void;
+  auto CloseConditions() -> void;
+  auto ToggleCondition(int index) -> void;
+  auto HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto ClaimSelectedToken() -> void;
   auto ReleaseSelectedToken() -> void;
   [[nodiscard]] auto PlayerHasCharacter() const -> bool;
@@ -146,10 +150,19 @@ class App {
   std::string sheet_speed_;
   std::string sheet_attack_;
   std::string sheet_save_;
+  std::string sheet_temp_hp_;
   std::string sheet_damage_;
   std::string sheet_notes_;
 
   bool bestiary_active_ = false;
+  bool conditions_active_ = false;
+  TokenId conditions_token_id_ = 0;
+  std::vector<std::string> conditions_draft_;
+
+  bool show_movement_range_ = false;
+  bool measuring_ = false;
+  std::optional<Cell> measure_start_;
+  std::optional<Cell> measure_end_;
   float cell_size_ = 48.0F;
   float camera_x_ = 0.0F;
   float camera_y_ = 0.0F;

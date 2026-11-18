@@ -58,7 +58,10 @@ class GameState {
       -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenSheet(TokenId id, int ac, int speed,
                                       std::string notes, int attack_bonus,
-                                      int save_bonus, std::string damage)
+                                      int save_bonus, std::string damage,
+                                      int temp_hp) -> std::optional<Token>;
+  [[nodiscard]] auto UpdateTokenCombat(TokenId id,
+                                       std::vector<std::string> conditions)
       -> std::optional<Token>;
 
   // Боевой порядок.

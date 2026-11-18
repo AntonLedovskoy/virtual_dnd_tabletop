@@ -9,6 +9,7 @@
 
 #include "core/bestiary.h"
 #include "core/client_view.h"
+#include "core/conditions.h"
 #include "core/dice.h"
 #include "core/game_server.h"
 #include "core/game_state.h"
@@ -32,6 +33,10 @@ auto Expect(bool condition, const char* name) -> void {
 
 auto CellAt(int x, int y) -> dnd::Cell { return dnd::Cell{.x = x, .y = y}; }
 
+auto HasCell(const std::vector<dnd::Cell>& cells, dnd::Cell cell) -> bool {
+  return std::find(cells.begin(), cells.end(), cell) != cells.end();
+}
+
 auto FogVisibleAt(const dnd::FogSnapshot& fog, int x, int y) -> bool {
   return fog.visible[static_cast<std::size_t>(y) *
                          static_cast<std::size_t>(fog.width) +
@@ -48,6 +53,22 @@ auto TestGridMap() -> void {
   map.SetBlocked(CellAt(1, 1), true);
   Expect(map.IsBlocked(CellAt(1, 1)), "cell becomes blocked");
   Expect(!map.IsBlocked(CellAt(9, 9)), "outside cell is not blocked");
+
+  dnd::GridMap reachable_map(5, 5);
+  reachable_map.SetBlocked(CellAt(2, 2), true);
+  const auto reachable = dnd::ReachableCells(reachable_map, CellAt(0, 0), 2);
+  Expect(HasCell(reachable, CellAt(0, 0)), "movement range includes origin");
+  Expect(HasCell(reachable, CellAt(2, 0)),
+         "movement range includes open cells");
+  Expect(!HasCell(reachable, CellAt(2, 2)), "movement range excludes walls");
+  Expect(!HasCell(reachable, CellAt(3, 3)), "movement range respects radius");
+
+  dnd::GridMap corner_map(3, 3);
+  corner_map.SetBlocked(CellAt(1, 0), true);
+  corner_map.SetBlocked(CellAt(0, 1), true);
+  const auto corner_range = dnd::ReachableCells(corner_map, CellAt(0, 0), 2);
+  Expect(!HasCell(corner_range, CellAt(1, 1)),
+         "movement range does not cut through a sealed corner");
 }
 
 auto TestMoveRules() -> void {
@@ -383,7 +404,8 @@ auto TestClaimAndTokenAdmin() -> void {
                                                  .notes = "Атака: +5, 1d8+3",
                                                  .attack_bonus = 5,
                                                  .save_bonus = 2,
-                                                 .damage = "1d8+3"},
+                                                 .damage = "1d8+3",
+                                                 .temp_hp = 4},
                            "alice", false);
   Expect(sheet.accepted, "the owner can edit the character sheet");
   Expect(server.State().TokenCopy(1)->ac == 16, "КД сохраняется");
@@ -394,6 +416,7 @@ auto TestClaimAndTokenAdmin() -> void {
          "attack bonus is stored");
   Expect(server.State().TokenCopy(1)->save_bonus == 2, "save bonus is stored");
   Expect(server.State().TokenCopy(1)->damage == "1d8+3", "damage is stored");
+  Expect(server.State().TokenCopy(1)->temp_hp == 4, "temporary HP are stored");
   Expect(!server
               .HandleCommand(
                   dnd::UpdateTokenSheet{
@@ -408,6 +431,32 @@ auto TestClaimAndTokenAdmin() -> void {
                   "alice", false)
               .accepted,
          "некорректный КД отвергается");
+  Expect(!server
+              .HandleCommand(
+                  dnd::UpdateTokenSheet{
+                      .id = 1, .ac = 12, .speed = 30, .temp_hp = 1001},
+                  "alice", false)
+              .accepted,
+         "too much temporary HP is rejected");
+
+  const dnd::CommandOutcome conditions = server.HandleCommand(
+      dnd::UpdateTokenCombat{.id = 1, .conditions = {"сбит с ног", "отравлен"}},
+      "alice", false);
+  Expect(conditions.accepted, "the owner can update conditions");
+  Expect(server.State().TokenCopy(1)->conditions.size() == 2,
+         "conditions are stored");
+  Expect(!server
+              .HandleCommand(
+                  dnd::UpdateTokenCombat{.id = 1, .conditions = {"чужое"}},
+                  "bob", false)
+              .accepted,
+         "other players cannot update conditions");
+  Expect(
+      !server
+           .HandleCommand(dnd::UpdateTokenCombat{.id = 1, .conditions = {""}},
+                          "alice", false)
+           .accepted,
+      "empty condition is rejected");
 
   Expect(
       !server.HandleCommand(dnd::ReleaseToken{.id = 1}, "bob", false).accepted,
@@ -489,6 +538,8 @@ auto TestBestiary() -> void {
     Expect(!bestiary.front().damage.empty(),
            "bestiary entries have damage expressions");
   }
+  Expect(dnd::DefaultConditions().size() >= 8,
+         "default conditions are available");
 }
 
 auto TestDynamicFogObservers() -> void {
@@ -765,6 +816,7 @@ auto TestSaveLoadRoundtrip() -> void {
                          .owner = "alice",
                          .hp = 7,
                          .max_hp = 12,
+                         .temp_hp = 3,
                          .initiative = 15,
                          .ac = 16,
                          .speed = 25,
@@ -772,6 +824,7 @@ auto TestSaveLoadRoundtrip() -> void {
                          .attack_bonus = 5,
                          .save_bonus = 2,
                          .damage = "1d8+3",
+                         .conditions = {"сбит с ног", "концентрация"},
                          .kind = dnd::TokenKind::kPlayer,
                          .color = 0x507AC8U,
                          .cell = CellAt(1, 1)},
@@ -806,6 +859,7 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().owner == "alice", "token owner survives");
     Expect(loaded->tokens.front().hp == 7, "token hp survives");
     Expect(loaded->tokens.front().max_hp == 12, "token max hp survives");
+    Expect(loaded->tokens.front().temp_hp == 3, "token temporary hp survives");
     Expect(loaded->tokens.front().initiative == 15,
            "token initiative survives");
     Expect(loaded->tokens.front().ac == 16, "token AC survives");
@@ -817,6 +871,8 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().save_bonus == 2, "token save bonus survives");
     Expect(loaded->tokens.front().damage == "1d8+3",
            "token damage expression survives");
+    Expect(loaded->tokens.front().conditions.size() == 2,
+           "token conditions survive");
     Expect(loaded->tokens.front().kind == dnd::TokenKind::kPlayer,
            "token kind survives");
     Expect(loaded->tokens.front().color == 0x507AC8U, "token colour survives");
@@ -1080,7 +1136,8 @@ auto TestCommandEventSerialization() -> void {
                             .notes = "Атака: +4, 1d6+2",
                             .attack_bonus = 4,
                             .save_bonus = 1,
-                            .damage = "1d6+2"}};
+                            .damage = "1d6+2",
+                            .temp_hp = 5}};
   const std::vector<std::uint8_t> sheet_bytes =
       dnd::EncodeCommand(sheet_command);
   const std::optional<dnd::Command> sheet_decoded =
@@ -1094,8 +1151,22 @@ auto TestCommandEventSerialization() -> void {
               "Атака: +4, 1d6+2" &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).attack_bonus == 4 &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).save_bonus == 1 &&
-          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).damage == "1d6+2",
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).damage == "1d6+2" &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).temp_hp == 5,
       "sheet command survives serialization");
+
+  const dnd::Command combat_command{dnd::UpdateTokenCombat{
+      .id = 4, .conditions = {"сбит с ног", "отравлен"}}};
+  const std::vector<std::uint8_t> combat_bytes =
+      dnd::EncodeCommand(combat_command);
+  const std::optional<dnd::Command> combat_decoded =
+      dnd::DecodeCommand(combat_bytes.data(), combat_bytes.size());
+  Expect(
+      combat_decoded.has_value() &&
+          std::holds_alternative<dnd::UpdateTokenCombat>(*combat_decoded) &&
+          std::get<dnd::UpdateTokenCombat>(*combat_decoded).conditions.size() ==
+              2,
+      "combat command survives serialization");
 
   const dnd::Event updated{dnd::TokenUpdated{
       .token = dnd::Token{.id = 3,
@@ -1103,6 +1174,7 @@ auto TestCommandEventSerialization() -> void {
                           .owner = "dm",
                           .hp = 2,
                           .max_hp = 9,
+                          .temp_hp = 3,
                           .initiative = 11,
                           .ac = 14,
                           .speed = 40,
@@ -1110,6 +1182,7 @@ auto TestCommandEventSerialization() -> void {
                           .attack_bonus = 4,
                           .save_bonus = 1,
                           .damage = "1d8+2",
+                          .conditions = {"оглушён"},
                           .kind = dnd::TokenKind::kMonster,
                           .color = 0x46A864U,
                           .cell = CellAt(1, 1)},
@@ -1132,6 +1205,9 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::TokenUpdated>(*updated_decoded).token.save_bonus == 1 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.damage ==
               "1d8+2" &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.temp_hp == 3 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded)
+                  .token.conditions.size() == 1 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
               dnd::TokenKind::kMonster &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.color ==
