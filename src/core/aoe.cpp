@@ -1,6 +1,7 @@
 #include "core/aoe.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace dnd {
@@ -11,9 +12,16 @@ struct Direction {
   int dy = 0;
 };
 
-constexpr Direction kDirections[kAoeDirections] = {
-    {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1},
-};
+constexpr std::array<Direction, kAoeDirections> kDirections{{
+    {1, 0},
+    {1, 1},
+    {0, 1},
+    {-1, 1},
+    {-1, 0},
+    {-1, -1},
+    {0, -1},
+    {1, -1},
+}};
 
 auto ClampDirection(int direction) -> int {
   return ((direction % kAoeDirections) + kAoeDirections) % kAoeDirections;
@@ -33,7 +41,8 @@ auto ClampWidth(int width) -> int {
 }  // namespace
 
 auto AoeDirectionOffset(int direction) -> Cell {
-  const Direction dir = kDirections[ClampDirection(direction)];
+  const Direction dir =
+      kDirections[static_cast<std::size_t>(ClampDirection(direction))];
   return Cell{.x = dir.dx, .y = dir.dy};
 }
 
@@ -93,16 +102,19 @@ auto AoeCells(const GridMap& map, const AoeTemplate& aoe) -> std::vector<Cell> {
     return cells;
   }
 
-  const Direction dir = kDirections[ClampDirection(aoe.direction)];
+  const Direction dir =
+      kDirections[static_cast<std::size_t>(ClampDirection(aoe.direction))];
   const float length =
       std::sqrt(static_cast<float>(dir.dx * dir.dx + dir.dy * dir.dy));
   const float dir_x = static_cast<float>(dir.dx) / length;
   const float dir_y = static_cast<float>(dir.dy) / length;
-  const float half_width = static_cast<float>((aoe.width - 1) / 2) + 0.75F;
-  const float radius_squared = static_cast<float>(aoe.radius * aoe.radius);
+  // Полуширина линии в целых клетках.
+  const int half_cells = (aoe.width - 1) / 2;
+  const auto half_width = static_cast<float>(half_cells) + 0.75F;
+  const auto radius_squared = static_cast<float>(aoe.radius * aoe.radius);
   // Широкая линия выходит за радиус по поперечной оси, поэтому обход клеток
   // расширяем до полуширины.
-  const int extent = std::max(aoe.radius, ((aoe.width - 1) / 2) + 1);
+  const int extent = std::max(aoe.radius, half_cells + 1);
 
   for (int dy = -extent; dy <= extent; ++dy) {
     for (int dx = -extent; dx <= extent; ++dx) {
@@ -110,8 +122,8 @@ auto AoeCells(const GridMap& map, const AoeTemplate& aoe) -> std::vector<Cell> {
       if (!map.Contains(cell)) {
         continue;
       }
-      const float offset_x = static_cast<float>(dx);
-      const float offset_y = static_cast<float>(dy);
+      const auto offset_x = static_cast<float>(dx);
+      const auto offset_y = static_cast<float>(dy);
       bool inside = false;
       switch (aoe.shape) {
         case AoeShape::kCircle:

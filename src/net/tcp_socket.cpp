@@ -65,26 +65,27 @@ auto LocalIpv4Addresses() -> std::vector<std::string> {
   if (!InitializeSockets()) {
     return {};
   }
-  char hostname[256] = {};
-  if (gethostname(hostname, sizeof(hostname)) != 0) {
+  std::array<char, 256> hostname{};
+  if (gethostname(hostname.data(), hostname.size()) != 0) {
     return {};
   }
   addrinfo hints{};
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
   addrinfo* results = nullptr;
-  if (getaddrinfo(hostname, nullptr, &hints, &results) != 0) {
+  if (getaddrinfo(hostname.data(), nullptr, &hints, &results) != 0) {
     return {};
   }
   std::vector<std::string> addresses;
   for (const addrinfo* entry = results; entry != nullptr;
        entry = entry->ai_next) {
     const auto* address = reinterpret_cast<const sockaddr_in*>(entry->ai_addr);
-    char text[INET_ADDRSTRLEN] = {};
-    if (inet_ntop(AF_INET, &address->sin_addr, text, sizeof(text)) == nullptr) {
+    std::array<char, INET_ADDRSTRLEN> text{};
+    if (inet_ntop(AF_INET, &address->sin_addr, text.data(), text.size()) ==
+        nullptr) {
       continue;
     }
-    std::string value(text);
+    std::string value(text.data());
     if (value == "127.0.0.1" || value.starts_with("169.254.")) {
       continue;
     }

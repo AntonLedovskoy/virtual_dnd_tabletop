@@ -14,11 +14,11 @@ constexpr int kMaxModifier = 100;
 
 auto Trim(std::string_view text) -> std::string_view {
   while (!text.empty() &&
-         std::isspace(static_cast<unsigned char>(text.front()))) {
+         std::isspace(static_cast<unsigned char>(text.front())) != 0) {
     text.remove_prefix(1);
   }
   while (!text.empty() &&
-         std::isspace(static_cast<unsigned char>(text.back()))) {
+         std::isspace(static_cast<unsigned char>(text.back())) != 0) {
     text.remove_suffix(1);
   }
   return text;
@@ -64,15 +64,9 @@ auto ParseSignedInt(std::string_view text, int& value) -> bool {
 }
 
 auto AllDigits(std::string_view text) -> bool {
-  if (text.empty()) {
-    return false;
-  }
-  for (const char value : text) {
-    if (value < '0' || value > '9') {
-      return false;
-    }
-  }
-  return true;
+  return !text.empty() && std::ranges::all_of(text, [](char value) -> bool {
+    return value >= '0' && value <= '9';
+  });
 }
 
 auto IsExpressionPrefix(std::string_view text) -> bool {
@@ -95,7 +89,7 @@ auto IsExpressionPrefix(std::string_view text) -> bool {
     }
   }
 
-  std::string_view rest = text.substr(separator + 1);
+  const std::string_view rest = text.substr(separator + 1);
   const auto modifier_pos = rest.find_first_of("+-");
   const std::string_view sides = rest.substr(0, modifier_pos);
   if (!sides.empty()) {
@@ -161,9 +155,9 @@ auto ParseDiceExpression(std::string_view text, DiceExpression& expression)
     return false;
   }
 
-  std::string_view sides_text = text.substr(separator + 1);
-  std::size_t modifier_pos = sides_text.find_first_of("+-");
-  std::string_view sides_part = sides_text.substr(0, modifier_pos);
+  const std::string_view sides_text = text.substr(separator + 1);
+  const std::size_t modifier_pos = sides_text.find_first_of("+-");
+  const std::string_view sides_part = sides_text.substr(0, modifier_pos);
   int sides = 0;
   if (!ParseInt(sides_part, sides) || sides < kMinDiceSides ||
       sides > kMaxDiceSides) {
@@ -211,14 +205,14 @@ auto IsDiceExpressionPrefix(std::string_view text) -> bool {
     return true;
   }
   if (StartsWithIgnoreCase(text, "adv")) {
-    std::string_view rest = Trim(text.substr(3));
+    const std::string_view rest = Trim(text.substr(3));
     if (!rest.empty() && text[3] != ' ') {
       return false;
     }
     return IsExpressionPrefix(rest);
   }
   if (StartsWithIgnoreCase(text, "dis")) {
-    std::string_view rest = Trim(text.substr(3));
+    const std::string_view rest = Trim(text.substr(3));
     if (!rest.empty() && text[3] != ' ') {
       return false;
     }

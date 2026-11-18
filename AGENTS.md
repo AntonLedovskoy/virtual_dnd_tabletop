@@ -10,10 +10,11 @@
 
 ## Сборка и тесты
 
-- Windows: `.\build.bat` (по умолчанию debug). Профили: `-p debug|release|relwithdebinfo|minsize`; `-c` принудительно перенастраивает; `-j N` задаёт число задач.
+- Windows: `.\build.bat` (по умолчанию debug). Профили: `-p debug|release|relwithdebinfo|minsize`; `-c` принудительно перенастраивает; `-j N` задаёт число задач; `-t` (или `--tidy`) после сборки прогоняет `clang-tidy` по своим файлам `.cpp` и падает на любом замечании.
 - `build.bat` запускает `build.sh` в MSYS2 UCRT64. Ожидает MSYS2 в `C:\msys64` или `%MSYS2_ROOT%`; не запускайте `build.sh` напрямую из PowerShell.
 - Бинарники лежат в `.build/<profile>/` (например, `.build/debug/dnd.exe`).
-- Первая конфигурация скачивает SDL3, SDL3_ttf, SDL3_image и SDL3_net через CMake FetchContent (нужна сеть, несколько минут). Дальше `.build/<profile>` переиспользуется, если не передан `-c`.
+- Первая конфигурация скачивает SDL3, SDL3_ttf и SDL3_image через CMake FetchContent (нужна сеть, несколько минут). Дальше `.build/<profile>` переиспользуется, если не передан `-c`.
+- Свои цели собираются с `-Wall -Wextra -Wpedantic`; зависимости — со своими настройками. Новые предупреждения в своём коде считаются ошибкой.
 - Все тесты: `ctest --test-dir .build/debug --output-on-failure`
 - Один набор: `ctest --test-dir .build/debug -R core_tests` или запуск `.build/debug/dnd_core_tests.exe` напрямую.
 - Тесты — обычные `main()` с хелпером `Expect`, без фреймворка. Фильтра по отдельному тесту нет; чтобы изолировать случай, добавьте `TestX()` и вызовите его из `main()` в `tests/core_tests.cpp` или `tests/net_tests.cpp`.

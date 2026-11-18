@@ -57,6 +57,9 @@ constexpr std::array<std::uint32_t, 6> kTokenPalette{{
     0x46B8B8U,
 }};
 constexpr std::size_t kAutoTokenColorCount = 4;
+// Предел подписи броска с именем токена: совпадает с kMaxRollLabel
+// в game_server.cpp.
+constexpr std::size_t kMaxLabelBytes = 64;
 
 auto BuildSnapshot() -> GameSnapshot {
   GridMap map(kMapWidth, kMapHeight);
@@ -145,14 +148,17 @@ auto ParseSignedNumber(std::string_view text, int& value) -> bool {
   return true;
 }
 
+// Добавляет цифры (и минус, если он разрешён) из text в buffer, пропуская
+// всё остальное и не выпуская значение за пределы minimum..maximum.
 auto AppendBoundedNumber(std::string& buffer, const char* text, int minimum,
                          int maximum, bool allow_negative) -> void {
   if (text == nullptr) {
     return;
   }
   for (const char* it = text; *it != '\0'; ++it) {
-    if ((*it < '0' || *it > '9') &&
-        !(allow_negative && *it == '-' && buffer.empty())) {
+    const bool digit = *it >= '0' && *it <= '9';
+    const bool sign = allow_negative && *it == '-' && buffer.empty();
+    if (!digit && !sign) {
       continue;
     }
     std::string candidate = buffer;
@@ -170,10 +176,9 @@ auto AppendBoundedNumber(std::string& buffer, const char* text, int minimum,
 }
 
 // Подпись броска с именем того, кто бросает: в общем логе видно, к кому
-// относится бросок. Предел совпадает с kMaxRollLabel в game_server.cpp.
+// относится бросок.
 auto RollLabel(std::string_view kind, std::string_view token_name)
     -> std::string {
-  constexpr std::size_t kMaxLabelBytes = 64;
   const std::string prefix = std::string(kind) + " (";
   std::string name(token_name);
   if (prefix.size() + name.size() + 1 > kMaxLabelBytes) {
@@ -357,7 +362,7 @@ auto App::StartHost() -> bool {
   chat_active_ = false;
   chat_input_.clear();
   players_.clear();
-  players_.push_back("DM (хост)");
+  players_.emplace_back("DM (хост)");
   local_addresses_ = LocalIpv4Addresses();
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   CenterCamera();
@@ -1268,13 +1273,11 @@ auto App::FindSelectedToken() const -> const Token* {
 }
 
 auto App::PlayerHasCharacter() const -> bool {
-  for (const Token& token : view_.Tokens()) {
-    if (token.kind == TokenKind::kPlayer &&
-        token.owner == options_.player_name) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(view_.Tokens(),
+                             [this](const Token& token) -> bool {
+                               return token.kind == TokenKind::kPlayer &&
+                                      token.owner == options_.player_name;
+                             });
 }
 
 auto App::ClaimSelectedToken() -> void {
@@ -1553,7 +1556,7 @@ auto App::HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void {
 
 auto App::SpawnBestiary(int index) -> void {
   const auto& bestiary = DefaultBestiary();
-  if (index < 0 || index >= static_cast<int>(bestiary.size())) {
+  if (std::cmp_greater_equal(index, bestiary.size())) {
     return;
   }
   const Cell cell = CellFromPixel(mouse_x_, mouse_y_);
@@ -1603,7 +1606,7 @@ auto App::CloseConditions() -> void {
 
 auto App::ToggleCondition(int index) -> void {
   const auto& standard = DefaultConditions();
-  if (index < 0 || index >= static_cast<int>(standard.size())) {
+  if (std::cmp_greater_equal(index, standard.size())) {
     return;
   }
   const std::string& condition = standard[static_cast<std::size_t>(index)];
@@ -1924,7 +1927,7 @@ auto App::PumpHost() -> void {
   }
 
   players_.clear();
-  players_.push_back("DM (хост)");
+  players_.emplace_back("DM (хост)");
   for (const PeerInfo& peer : net_server_.Peers()) {
     players_.push_back(peer.name);
   }
@@ -2327,11 +2330,15 @@ auto App::Iterate() -> void {
                          selected->owner.empty() && !PlayerHasCharacter();
   const bool can_release = is_client && selected != nullptr &&
                            selected->owner == options_.player_name;
-  const float token_bottom = DrawTokenPanel(
-      renderer_, text_.get(), selected, options_.player_name, is_client,
-      can_claim, can_release,
-      is_dm ? MovementInfo::kHidden
-            : (encounter.active ? MovementInfo::kBudget : MovementInfo::kFree));
+  MovementInfo movement = MovementInfo::kFree;
+  if (is_dm) {
+    movement = MovementInfo::kHidden;
+  } else if (encounter.active) {
+    movement = MovementInfo::kBudget;
+  }
+  const float token_bottom =
+      DrawTokenPanel(renderer_, text_.get(), selected, options_.player_name,
+                     is_client, can_claim, can_release, movement);
   const float players_y = token_bottom > 0.0F ? token_bottom + 12.0F : 280.0F;
   DrawPlayersPanel(renderer_, text_.get(), players_, players_y);
   if (dragging_ && drag_target_.has_value()) {

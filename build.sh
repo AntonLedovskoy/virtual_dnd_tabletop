@@ -12,6 +12,7 @@ usage() {
                         relwithdebinfo, minsize
   -c, --configure       Принудительно настроить CMake перед сборкой
   -j, --jobs <n>        Число параллельных задач (по умолчанию: число CPU)
+  -t, --tidy            После сборки прогнать clang-tidy по своим файлам
   -h, --help            Показать эту справку
 
 Каталог сборки: .build/<profile>
@@ -26,6 +27,7 @@ EOF
 
 PROFILE=debug
 FORCE_CONFIGURE=0
+RUN_TIDY=0
 JOBS=""
 EXTRA_ARGS=()
 
@@ -51,6 +53,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --jobs=*)
       JOBS=${1#*=}
+      shift
+      ;;
+    -t|--tidy)
+      RUN_TIDY=1
       shift
       ;;
     -h|--help)
@@ -182,5 +188,54 @@ cmake --build "$BUILD_DIR" --config "$BUILD_TYPE" --parallel "$JOBS" \
 
 # CMake мог перегенерировать compile_commands.json во время сборки.
 update_compile_db
+
+find_tidy() {
+  local candidate
+  candidate=$(command -v clang-tidy 2>/dev/null || true)
+  if [[ -n "$candidate" ]]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  for candidate in /ucrt64/bin/clang-tidy.exe /mingw64/bin/clang-tidy.exe; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_tidy() {
+  local tidy_bin
+  if ! tidy_bin=$(find_tidy); then
+    echo "error: clang-tidy не найден; установите пакет mingw-w64-ucrt-x86_64-clang-tools" >&2
+    exit 1
+  fi
+
+  local files=()
+  local file
+  while IFS= read -r file; do
+    files+=("$file")
+  done < <(find "$SCRIPT_DIR/src" "$SCRIPT_DIR/tests" -name '*.cpp' | sort)
+
+  local log="$BUILD_DIR/clang-tidy.log"
+  echo "==> clang-tidy: ${#files[@]} файлов, лог в .build/$PROFILE/clang-tidy.log"
+  printf '%s\0' "${files[@]}" |
+    xargs -0 -n 1 -P "$JOBS" "$tidy_bin" -p "$BUILD_DIR" --quiet >"$log" 2>&1 || true
+
+  local warnings
+  warnings=$(grep -c 'warning:' "$log" 2>/dev/null || true)
+  warnings=${warnings:-0}
+  if [[ "$warnings" -gt 0 ]]; then
+    grep 'warning:' "$log" | sed 's|^.*/projects/dnd/||' | head -n 40
+    echo "error: clang-tidy нашёл замечаний: $warnings (полный лог: .build/$PROFILE/clang-tidy.log)" >&2
+    exit 1
+  fi
+  echo "==> clang-tidy: замечаний нет"
+}
+
+if (( RUN_TIDY )); then
+  run_tidy
+fi
 
 echo "==> Done: .build/$PROFILE"

@@ -3,6 +3,9 @@
 namespace dnd {
 
 auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
+  // Константа названа по стилю проекта (kCamelCase), хотя clang-tidy для
+  // локальных констант ждёт lower_case.
+  // NOLINTNEXTLINE(readability-identifier-naming)
   static const std::vector<MonsterTemplate> kBestiary{
       MonsterTemplate{
           .name = "Гоблин",

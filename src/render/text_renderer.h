@@ -55,9 +55,9 @@ class TextRenderer {
   };
 
   auto Acquire() -> Slot&;
-  auto Update(Slot& slot, std::string_view text, int wrap_width,
-              SDL_Color color) -> void;
-  auto MeasureText(TTF_Text* text) -> TextMetrics;
+  static auto Update(Slot& slot, std::string_view text, int wrap_width,
+                     SDL_Color color) -> void;
+  static auto MeasureText(TTF_Text* text) -> TextMetrics;
 
   SDL_Renderer* renderer_ = nullptr;
   TTF_Font* font_ = nullptr;

@@ -38,7 +38,15 @@ auto Expect(bool condition, const char* name) -> void {
 auto CellAt(int x, int y) -> dnd::Cell { return dnd::Cell{.x = x, .y = y}; }
 
 auto HasCell(const std::vector<dnd::Cell>& cells, dnd::Cell cell) -> bool {
-  return std::find(cells.begin(), cells.end(), cell) != cells.end();
+  return std::ranges::find(cells, cell) != cells.end();
+}
+
+// Токен для проверок: отсутствие токена — уже ошибка теста, поэтому вместо
+// разыменования optional возвращается пустой токен.
+auto TokenOf(const dnd::GameState& state, dnd::TokenId id) -> dnd::Token {
+  const std::optional<dnd::Token> token = state.TokenCopy(id);
+  Expect(token.has_value(), "the token exists");
+  return token.value_or(dnd::Token{});
 }
 
 auto FogVisibleAt(const dnd::FogSnapshot& fog, int x, int y) -> bool {
@@ -330,7 +338,7 @@ auto TestClaimAndTokenAdmin() -> void {
   Expect(!claim.events.empty() &&
              std::holds_alternative<dnd::TokenUpdated>(claim.events.front()),
          "claim broadcasts a token update");
-  Expect(server.State().TokenCopy(1)->owner == "alice",
+  Expect(TokenOf(server.State(), 1).owner == "alice",
          "claim stores the player name");
   Expect(
       !server.HandleCommand(dnd::ClaimToken{.id = 3}, "alice", false).accepted,
@@ -374,7 +382,7 @@ auto TestClaimAndTokenAdmin() -> void {
   const dnd::CommandOutcome rename = server.HandleCommand(
       dnd::RenameToken{.id = 1, .name = "Алиса"}, "alice", false);
   Expect(rename.accepted, "the owner can rename the token");
-  Expect(server.State().TokenCopy(1)->name == "Алиса",
+  Expect(TokenOf(server.State(), 1).name == "Алиса",
          "the renamed value is stored");
   Expect(!server
               .HandleCommand(dnd::RenameToken{.id = 1, .name = "Боб"}, "bob",
@@ -396,7 +404,7 @@ auto TestClaimAndTokenAdmin() -> void {
                             false)
              .accepted,
          "the owner can set max hp");
-  Expect(server.State().TokenCopy(1)->hp == 5,
+  Expect(TokenOf(server.State(), 1).hp == 5,
          "hp is clamped to the new maximum");
   Expect(!server
               .HandleCommand(dnd::SetTokenMaxHp{.id = 1, .max_hp = 0}, "alice",
@@ -407,8 +415,7 @@ auto TestClaimAndTokenAdmin() -> void {
   const dnd::CommandOutcome color = server.HandleCommand(
       dnd::SetTokenColor{.id = 1, .color = 0xC85046U}, "alice", false);
   Expect(color.accepted, "the owner can set the colour");
-  Expect(server.State().TokenCopy(1)->color == 0xC85046U,
-         "the colour is stored");
+  Expect(TokenOf(server.State(), 1).color == 0xC85046U, "the colour is stored");
 
   const dnd::CommandOutcome sheet =
       server.HandleCommand(dnd::UpdateTokenSheet{.id = 1,
@@ -421,15 +428,15 @@ auto TestClaimAndTokenAdmin() -> void {
                                                  .temp_hp = 4},
                            "alice", false);
   Expect(sheet.accepted, "the owner can edit the character sheet");
-  Expect(server.State().TokenCopy(1)->ac == 16, "КД сохраняется");
-  Expect(server.State().TokenCopy(1)->speed == 9, "speed is stored");
-  Expect(server.State().TokenCopy(1)->notes == "Атака: +5, 1d8+3",
+  Expect(TokenOf(server.State(), 1).ac == 16, "КД сохраняется");
+  Expect(TokenOf(server.State(), 1).speed == 9, "speed is stored");
+  Expect(TokenOf(server.State(), 1).notes == "Атака: +5, 1d8+3",
          "notes are stored");
-  Expect(server.State().TokenCopy(1)->attack_bonus == 5,
+  Expect(TokenOf(server.State(), 1).attack_bonus == 5,
          "attack bonus is stored");
-  Expect(server.State().TokenCopy(1)->save_bonus == 2, "save bonus is stored");
-  Expect(server.State().TokenCopy(1)->damage == "1d8+3", "damage is stored");
-  Expect(server.State().TokenCopy(1)->temp_hp == 4, "temporary HP are stored");
+  Expect(TokenOf(server.State(), 1).save_bonus == 2, "save bonus is stored");
+  Expect(TokenOf(server.State(), 1).damage == "1d8+3", "damage is stored");
+  Expect(TokenOf(server.State(), 1).temp_hp == 4, "temporary HP are stored");
   Expect(!server
               .HandleCommand(
                   dnd::UpdateTokenSheet{
@@ -456,7 +463,7 @@ auto TestClaimAndTokenAdmin() -> void {
       dnd::UpdateTokenCombat{.id = 1, .conditions = {"сбит с ног", "отравлен"}},
       "alice", false);
   Expect(conditions.accepted, "the owner can update conditions");
-  Expect(server.State().TokenCopy(1)->conditions.size() == 2,
+  Expect(TokenOf(server.State(), 1).conditions.size() == 2,
          "conditions are stored");
   Expect(!server
               .HandleCommand(
@@ -477,7 +484,7 @@ auto TestClaimAndTokenAdmin() -> void {
   Expect(
       server.HandleCommand(dnd::ReleaseToken{.id = 1}, "alice", false).accepted,
       "the owner can release the character");
-  Expect(server.State().TokenCopy(1)->owner.empty(),
+  Expect(TokenOf(server.State(), 1).owner.empty(),
          "released character becomes free");
   Expect(
       server.HandleCommand(dnd::ClaimToken{.id = 3}, "alice", false).accepted,
@@ -522,6 +529,9 @@ auto TestDiceExpression() -> void {
   Expect(!dnd::IsDiceExpressionPrefix("d20+101"),
          "too large modifier is rejected while typing");
 
+  // Фиксированное зерно: тест проверяет диапазоны и арифметику, а не
+  // случайность как таковую.
+  // NOLINTNEXTLINE(bugprone-random-generator-seed)
   std::mt19937 rng(7);
   const dnd::DiceRollResult normal = dnd::RollDiceExpression(
       dnd::DiceExpression{.count = 2, .sides = 6, .modifier = 3}, rng);
@@ -1282,6 +1292,91 @@ auto TestCampaign() -> void {
   std::filesystem::remove(bad_path);
 }
 
+// Испорченные байты — обычное дело при обрыве связи или битом файле.
+// Декодеры должны отвечать отказом, а не падать и не читать за границей
+// буфера; случайно принятые данные обязаны переживать повторное кодирование.
+auto TestDamagedPayloads() -> void {
+  dnd::GridMap map(6, 4);
+  map.SetBlocked(CellAt(2, 2), true);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 1)}},
+      .next_token_id = 2,
+  };
+  const std::vector<std::uint8_t> snapshot_bytes =
+      dnd::EncodeSnapshot(snapshot);
+  const std::vector<std::uint8_t> command_bytes = dnd::EncodeCommand(
+      dnd::Command{dnd::MoveToken{.id = 1, .target = CellAt(2, 1)}});
+  const std::vector<std::uint8_t> event_bytes =
+      dnd::EncodeEvent(dnd::Event{dnd::TokenRemoved{.id = 1}});
+
+  // Зерно фиксировано, чтобы поломка воспроизводилась.
+  // NOLINTNEXTLINE(bugprone-random-generator-seed)
+  std::mt19937 rng(2024);
+  const auto mutate =
+      [&rng](std::vector<std::uint8_t> bytes) -> std::vector<std::uint8_t> {
+    const int edits = 1 + static_cast<int>(rng() % 4);
+    for (int i = 0; i < edits && !bytes.empty(); ++i) {
+      bytes[rng() % bytes.size()] = static_cast<std::uint8_t>(rng());
+    }
+    if (rng() % 2 == 0) {
+      bytes.resize(rng() % (bytes.size() + 1));
+    }
+    return bytes;
+  };
+
+  std::size_t accepted_snapshots = 0;
+  for (int round = 0; round < 300; ++round) {
+    const std::vector<std::uint8_t> damaged = mutate(snapshot_bytes);
+    const std::optional<dnd::GameSnapshot> decoded =
+        dnd::DecodeSnapshot(damaged.data(), damaged.size());
+    if (decoded.has_value()) {
+      ++accepted_snapshots;
+      const std::vector<std::uint8_t> again = dnd::EncodeSnapshot(*decoded);
+      Expect(dnd::DecodeSnapshot(again.data(), again.size()).has_value(),
+             "accepted snapshot survives re-encoding");
+    }
+
+    const std::vector<std::uint8_t> broken_command = mutate(command_bytes);
+    if (const std::optional<dnd::Command> command =
+            dnd::DecodeCommand(broken_command.data(), broken_command.size())) {
+      const std::vector<std::uint8_t> again = dnd::EncodeCommand(*command);
+      Expect(dnd::DecodeCommand(again.data(), again.size()).has_value(),
+             "accepted command survives re-encoding");
+    }
+
+    const std::vector<std::uint8_t> broken_event = mutate(event_bytes);
+    if (const std::optional<dnd::Event> event =
+            dnd::DecodeEvent(broken_event.data(), broken_event.size())) {
+      const std::vector<std::uint8_t> again = dnd::EncodeEvent(*event);
+      Expect(dnd::DecodeEvent(again.data(), again.size()).has_value(),
+             "accepted event survives re-encoding");
+    }
+  }
+  Expect(accepted_snapshots < 300,
+         "damaged snapshots are almost always rejected");
+
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_garbage.bin";
+  for (int round = 0; round < 50; ++round) {
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(rng() % 96));
+    for (std::uint8_t& value : bytes) {
+      value = static_cast<std::uint8_t>(rng());
+    }
+    {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      out.write(reinterpret_cast<const char*>(bytes.data()),
+                static_cast<std::streamsize>(bytes.size()));
+    }
+    Expect(!dnd::ReadCampaign(path).has_value(),
+           "garbage campaign file is rejected");
+  }
+  std::filesystem::remove(path);
+}
+
 auto TestChatAndDice() -> void {
   const dnd::GridMap map(10, 10);
   const dnd::GameSnapshot snapshot{
@@ -1678,8 +1773,8 @@ auto TestCommandEventSerialization() -> void {
          "clearing the template survives serialization");
 
   std::vector<std::uint8_t> even_width_bytes = place_aoe_bytes;
-  constexpr std::size_t kWidthOffset = 1 + 1 + 4 + 4 + 4 + 4;
-  even_width_bytes[kWidthOffset] = 4;
+  constexpr std::size_t width_offset = 1 + 1 + 4 + 4 + 4 + 4;
+  even_width_bytes[width_offset] = 4;
   Expect(!dnd::DecodeCommand(even_width_bytes.data(), even_width_bytes.size())
               .has_value(),
          "decoder rejects an even line width");
@@ -1711,6 +1806,7 @@ auto main() -> int {
     TestCommandEventSerialization();
     TestSaveLoadRoundtrip();
     TestCampaign();
+    TestDamagedPayloads();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());
     return 1;

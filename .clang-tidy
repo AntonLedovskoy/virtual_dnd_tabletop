@@ -1,5 +1,13 @@
 ---
 # Стиль Google C++: https://google.github.io/styleguide/cppguide.html
+#
+# Отключено осознанно:
+#   readability-math-missing-parentheses — скобки вокруг умножения перед
+#     сложением не нужны, приоритет очевиден;
+#   readability-function-cognitive-complexity — крупные функции-состояния
+#     (App::Iterate, HandleEvent) разбираются постепенно;
+#   modernize-use-designated-initializers — позиционная инициализация простых
+#     структур (SDL_FRect{x, y, w, h}) читается не хуже designated-списка.
 Checks: >
   -*,
   bugprone-*,
@@ -14,7 +22,10 @@ Checks: >
   -misc-non-private-member-variables-in-classes,
   -misc-include-cleaner,
   -portability-avoid-pragma-once,
-  -bugprone-easily-swappable-parameters
+  -bugprone-easily-swappable-parameters,
+  -readability-math-missing-parentheses,
+  -readability-function-cognitive-complexity,
+  -modernize-use-designated-initializers
 
 WarningsAsErrors: ''
 HeaderFilterRegex: '.*'

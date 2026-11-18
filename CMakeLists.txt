@@ -7,6 +7,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Предупреждения только для собственного кода: зависимости собираются со
+# своими настройками и шумят. Недостающие поля в агрегатной инициализации —
+# осознанный стиль: у структур есть значения по умолчанию, и перечисляются
+# только значимые поля.
+set(DND_WARNINGS -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
+
 include(FetchContent)
 
 # Собираем все зависимости статически, чтобы исполняемый файл был автономным.
@@ -15,7 +21,6 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(SDL3_VERSION       release-3.4.20)
 set(SDL3_TTF_VERSION   release-3.2.2)
 set(SDL3_IMAGE_VERSION release-3.4.8)
-set(SDL3_NET_VERSION   release-3.2.0)
 
 # Ядро SDL3: только статически, без тестов, примеров и установки
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -41,10 +46,6 @@ set(SDLIMAGE_AVIF OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_JXL OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_TIF OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_WEBP OFF CACHE BOOL "" FORCE)
-
-# SDL3_net: без примеров
-set(SDLNET_SAMPLES OFF CACHE BOOL "" FORCE)
-set(SDLNET_INSTALL OFF CACHE BOOL "" FORCE)
 
 # Дочерние библиотеки хранят встроенные декодеры (FreeType, HarfBuzz,
 # libpng, ...) в git-подмодулях, поэтому они скачиваются git-клонами.
@@ -75,29 +76,11 @@ FetchContent_Declare(
   GIT_PROGRESS TRUE
   SYSTEM
 )
-FetchContent_Declare(
-  SDL3_net
-  GIT_REPOSITORY https://github.com/libsdl-org/SDL_net.git
-  GIT_TAG ${SDL3_NET_VERSION}
-  GIT_SHALLOW TRUE
-  GIT_PROGRESS TRUE
-  SYSTEM
-)
 
 # SDL3 должен быть доступен первым: дочерние библиотеки переиспользуют
 # SDL3::Headers и SDL3::SDL3, если эти цели уже определены, вместо поиска
 # установленного пакета SDL3.
-FetchContent_MakeAvailable(SDL3 SDL3_image SDL3_ttf SDL3_net)
-
-# io.h из MinGW объявляет POSIX read()/write(), которые конфликтуют со
-# статическими Windows-хелперами с теми же именами внутри SDL_net.
-# NO_OLDNAMES скрывает эти устаревшие объявления только для единиц
-# трансляции SDL_net.
-if(WIN32 AND TARGET SDL3_net-static)
-  target_compile_definitions(SDL3_net-static PRIVATE NO_OLDNAMES)
-elseif(WIN32 AND TARGET SDL3_net-shared)
-  target_compile_definitions(SDL3_net-shared PRIVATE NO_OLDNAMES)
-endif()
+FetchContent_MakeAvailable(SDL3 SDL3_image SDL3_ttf)
 
 add_library(dnd_core STATIC
   src/core/aoe.cpp
@@ -118,6 +101,7 @@ add_library(dnd_core STATIC
   src/core/visibility.cpp
 )
 target_include_directories(dnd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(dnd_core PRIVATE ${DND_WARNINGS})
 
 add_library(dnd_net STATIC
   src/net/net_client.cpp
@@ -126,6 +110,7 @@ add_library(dnd_net STATIC
   src/net/tcp_socket.cpp
 )
 target_link_libraries(dnd_net PUBLIC dnd_core)
+target_compile_options(dnd_net PRIVATE ${DND_WARNINGS})
 if(WIN32)
   target_link_libraries(dnd_net PUBLIC ws2_32)
 endif()
@@ -141,6 +126,7 @@ add_executable(${PROJECT_NAME}
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE SDL_MAIN_USE_CALLBACKS)
+target_compile_options(${PROJECT_NAME} PRIVATE ${DND_WARNINGS})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
   dnd_core
@@ -148,7 +134,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   SDL3::SDL3
   SDL3_image::SDL3_image
   SDL3_ttf::SDL3_ttf
-  SDL3_net::SDL3_net
 )
 
 enable_testing()
@@ -157,6 +142,7 @@ add_executable(dnd_core_tests
   tests/core_tests.cpp
 )
 target_link_libraries(dnd_core_tests PRIVATE dnd_core)
+target_compile_options(dnd_core_tests PRIVATE ${DND_WARNINGS})
 
 add_test(NAME core_tests COMMAND dnd_core_tests)
 
@@ -164,5 +150,6 @@ add_executable(dnd_net_tests
   tests/net_tests.cpp
 )
 target_link_libraries(dnd_net_tests PRIVATE dnd_net)
+target_compile_options(dnd_net_tests PRIVATE ${DND_WARNINGS})
 
 add_test(NAME net_tests COMMAND dnd_net_tests)

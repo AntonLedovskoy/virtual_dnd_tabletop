@@ -25,8 +25,9 @@ auto NextSceneName(const Campaign& campaign) -> std::string {
   for (std::size_t index = 1; index <= kMaxNameAttempts; ++index) {
     std::string candidate = "Сцена " + std::to_string(index);
     const bool taken = std::ranges::any_of(
-        campaign.scenes,
-        [&candidate](const Scene& scene) { return scene.name == candidate; });
+        campaign.scenes, [&candidate](const Scene& scene) -> bool {
+          return scene.name == candidate;
+        });
     if (!taken) {
       return candidate;
     }

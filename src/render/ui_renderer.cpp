@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,7 @@ constexpr SDL_Color kHintText{
 
 constexpr int kPadding = 12;
 constexpr int kVisibleLines = 7;
+constexpr std::size_t kVisibleSceneRows = 9;
 constexpr int kLineSpacing = 4;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
@@ -57,16 +59,16 @@ auto FormatLogTime(std::uint32_t timestamp) -> std::string {
   if (timestamp == 0) {
     return {};
   }
-  const std::time_t time = static_cast<std::time_t>(timestamp);
+  const auto time = static_cast<std::time_t>(timestamp);
   const std::tm* local = std::localtime(&time);
   if (local == nullptr) {
     return {};
   }
-  char buffer[16] = {};
-  if (std::strftime(buffer, sizeof(buffer), "%H:%M:%S", local) == 0) {
+  std::array<char, 16> buffer{};
+  if (std::strftime(buffer.data(), buffer.size(), "%H:%M:%S", local) == 0) {
     return {};
   }
-  return buffer;
+  return buffer.data();
 }
 
 }  // namespace
@@ -307,7 +309,7 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
 
   constexpr int panel_width = 300;
   constexpr int panel_padding = 10;
-  constexpr float hint_width =
+  constexpr auto hint_width =
       static_cast<float>(panel_width - (2 * panel_padding));
   const float text_line_height = std::max(1.0F, text->LineHeight());
   int hint_row_count = 0;
@@ -369,7 +371,7 @@ auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   const SDL_FRect panel{
       .x = static_cast<float>(panel_x),
-      .y = static_cast<float>(panel_y),
+      .y = panel_y,
       .w = static_cast<float>(panel_width),
       .h = static_cast<float>(panel_height),
   };
@@ -578,7 +580,6 @@ auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   constexpr float width = 620.0F;
   constexpr float height = 380.0F;
-  constexpr std::size_t kVisibleRows = 9;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -598,11 +599,13 @@ auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
 
   // Окно прокрутки держит выбранную сцену в середине списка.
   std::size_t first = 0;
-  if (names.size() > kVisibleRows) {
-    first = selected > kVisibleRows / 2 ? selected - (kVisibleRows / 2) : 0;
-    first = std::min(first, names.size() - kVisibleRows);
+  if (names.size() > kVisibleSceneRows) {
+    first = selected > kVisibleSceneRows / 2
+                ? selected - (kVisibleSceneRows / 2)
+                : 0;
+    first = std::min(first, names.size() - kVisibleSceneRows);
   }
-  for (std::size_t row = 0; row < kVisibleRows; ++row) {
+  for (std::size_t row = 0; row < kVisibleSceneRows; ++row) {
     const std::size_t index = first + row;
     if (index >= names.size()) {
       break;

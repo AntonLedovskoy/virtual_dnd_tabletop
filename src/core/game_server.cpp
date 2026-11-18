@@ -668,7 +668,7 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
   outcome.accepted = true;
   outcome.events.emplace_back(
       EncounterUpdated{.encounter = state_.EncounterState()});
-  for (TokenId id : spent) {
+  for (const TokenId id : spent) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
     }
@@ -689,7 +689,7 @@ auto GameServer::HandleEndEncounter(bool can_control_all) -> CommandOutcome {
   outcome.accepted = true;
   outcome.events.emplace_back(
       EncounterUpdated{.encounter = state_.EncounterState()});
-  for (TokenId id : spent) {
+  for (const TokenId id : spent) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
     }
@@ -709,7 +709,7 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
   outcome.accepted = true;
   outcome.events.emplace_back(
       EncounterUpdated{.encounter = state_.EncounterState()});
-  for (TokenId id : spent) {
+  for (const TokenId id : spent) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
     }

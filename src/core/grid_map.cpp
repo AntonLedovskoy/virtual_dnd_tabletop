@@ -1,13 +1,22 @@
 #include "core/grid_map.h"
 
+#include <array>
 #include <queue>
 #include <vector>
 
 namespace dnd {
 namespace {
 
-constexpr int kDirections[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0},
-                                   {1, 0},   {-1, 1}, {0, 1},  {1, 1}};
+constexpr std::array<Cell, 8> kNeighbours{{
+    {-1, -1},
+    {0, -1},
+    {1, -1},
+    {-1, 0},
+    {1, 0},
+    {-1, 1},
+    {0, 1},
+    {1, 1},
+}};
 
 // Расстояния в шагах от origin по восьми направлениям; -1 — недостижимо.
 // max_steps < 0 означает поиск без ограничения дальности.
@@ -31,15 +40,15 @@ auto StepDistances(const GridMap& map, Cell origin, int max_steps)
     if (max_steps >= 0 && current >= max_steps) {
       continue;
     }
-    for (const auto& direction : kDirections) {
-      const Cell next{.x = cell.x + direction[0], .y = cell.y + direction[1]};
+    for (const Cell& direction : kNeighbours) {
+      const Cell next{.x = cell.x + direction.x, .y = cell.y + direction.y};
       if (!map.Contains(next) || map.IsBlocked(next)) {
         continue;
       }
       // Угол между двумя стенами не прорезаем.
-      if (direction[0] != 0 && direction[1] != 0) {
-        const Cell horizontal{.x = cell.x + direction[0], .y = cell.y};
-        const Cell vertical{.x = cell.x, .y = cell.y + direction[1]};
+      if (direction.x != 0 && direction.y != 0) {
+        const Cell horizontal{.x = cell.x + direction.x, .y = cell.y};
+        const Cell vertical{.x = cell.x, .y = cell.y + direction.y};
         if (map.IsBlocked(horizontal) && map.IsBlocked(vertical)) {
           continue;
         }
