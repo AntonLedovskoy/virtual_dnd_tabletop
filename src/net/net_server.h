@@ -70,6 +70,10 @@ class NetServer {
     PeerId id = 0;
     std::string name;
     bool welcomed = false;
+    // Запрос, отправленный при подключении. Пока он не получен, Hello не
+    // принимается: отпечаток пароля должен быть привязан к этой сессии.
+    Challenge challenge;
+    bool challenge_sent = false;
     std::chrono::steady_clock::time_point last_seen =
         std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point rate_window_start =
@@ -81,9 +85,9 @@ class NetServer {
         std::chrono::steady_clock::now();
     std::unique_ptr<TcpConnection> connection;
 
-    // Простое окно в секунду: после kMaxCommandsPerSecond команды из этого
+    // Простое окно в секунду: после kMaxCommandsPerSecond сообщения из этого
     // окна молча отбрасываются.
-    auto AllowCommand(std::chrono::steady_clock::time_point now) -> bool;
+    auto AllowMessage(std::chrono::steady_clock::time_point now) -> bool;
   };
 
   auto FindPeer(PeerId id) -> Peer*;

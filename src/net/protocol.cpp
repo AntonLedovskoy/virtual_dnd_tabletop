@@ -10,18 +10,38 @@ namespace dnd {
 namespace {
 
 constexpr std::uint32_t kMaxPlayerName = 64;
-constexpr std::uint32_t kMaxPassword = 128;
 constexpr std::uint32_t kMaxRejectReason = 256;
 constexpr std::uint32_t kMaxRosterEntries = 64;
 
 }  // namespace
+
+auto EncodeChallenge(const Challenge& challenge) -> std::vector<std::uint8_t> {
+  ByteWriter writer;
+  writer.U8(static_cast<std::uint8_t>(MessageType::kChallenge));
+  writer.Bytes(challenge.nonce.data(), challenge.nonce.size());
+  return writer.Data();
+}
+
+auto DecodeChallenge(const std::uint8_t* data, std::size_t size)
+    -> std::optional<Challenge> {
+  ByteReader reader(data, size);
+  std::uint8_t type = 0;
+  Challenge challenge;
+  if (!reader.U8(type) ||
+      type != static_cast<std::uint8_t>(MessageType::kChallenge) ||
+      !reader.Bytes(challenge.nonce.data(), challenge.nonce.size()) ||
+      !reader.Done()) {
+    return std::nullopt;
+  }
+  return challenge;
+}
 
 auto EncodeHello(const Hello& hello) -> std::vector<std::uint8_t> {
   ByteWriter writer;
   writer.U8(static_cast<std::uint8_t>(MessageType::kHello));
   writer.U32(kProtocolVersion);
   writer.String(hello.player_name);
-  writer.String(hello.password);
+  writer.Bytes(hello.proof.data(), hello.proof.size());
   return writer.Data();
 }
 
@@ -50,7 +70,7 @@ auto DecodeHello(const std::uint8_t* data, std::size_t size)
   }
   if (!reader.U32(version) || version != kProtocolVersion ||
       !reader.String(hello.player_name, kMaxPlayerName) ||
-      !reader.String(hello.password, kMaxPassword) || !reader.Done()) {
+      !reader.Bytes(hello.proof.data(), hello.proof.size()) || !reader.Done()) {
     return std::nullopt;
   }
   return hello;

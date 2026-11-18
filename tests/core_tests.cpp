@@ -5,6 +5,9 @@
 #include <fstream>
 #include <optional>
 #include <random>
+#include <span>
+#include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -19,8 +22,10 @@
 #include "core/game_state.h"
 #include "core/grid_map.h"
 #include "core/local_transport.h"
+#include "core/password.h"
 #include "core/scene_io.h"
 #include "core/serialization.h"
+#include "core/sha256.h"
 #include "core/utf8.h"
 #include "core/visibility.h"
 
@@ -1780,6 +1785,58 @@ auto TestCommandEventSerialization() -> void {
          "decoder rejects an even line width");
 }
 
+auto HexDigest(const dnd::Sha256Digest& digest) -> std::string {
+  constexpr std::string_view digits = "0123456789abcdef";
+  std::string text;
+  text.reserve(digest.size() * 2);
+  for (const std::uint8_t byte : digest) {
+    text.push_back(digits[byte >> 4]);
+    text.push_back(digits[byte & 0x0FU]);
+  }
+  return text;
+}
+
+auto TestSha256() -> void {
+  // Векторы из FIPS 180-4 и RFC 4231: без них ошибку в раундах не видно.
+  Expect(HexDigest(dnd::Sha256("")) ==
+             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+         "sha256 hashes the empty string");
+  Expect(HexDigest(dnd::Sha256("abc")) ==
+             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+         "sha256 hashes a short message");
+  Expect(HexDigest(dnd::Sha256(
+             "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")) ==
+             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+         "sha256 hashes two blocks");
+
+  const std::string message = "The quick brown fox jumps over the lazy dog";
+  const std::string key = "key";
+  const auto* key_bytes = reinterpret_cast<const std::uint8_t*>(key.data());
+  const auto* message_bytes =
+      reinterpret_cast<const std::uint8_t*>(message.data());
+  Expect(HexDigest(dnd::HmacSha256(
+             std::span<const std::uint8_t>(key_bytes, key.size()),
+             std::span<const std::uint8_t>(message_bytes, message.size()))) ==
+             "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
+         "hmac-sha256 matches the reference value");
+
+  // Отпечаток пароля зависит от запроса: тот же пароль на другой nonce даёт
+  // другое значение, иначе подсмотренный ответ можно переиграть.
+  const dnd::ChallengeNonce first{};
+  dnd::ChallengeNonce second{};
+  second[0] = 1;
+  const auto first_proof = dnd::MakePasswordProof("secret", first);
+  Expect(
+      dnd::ProofMatches(first_proof, dnd::MakePasswordProof("secret", first)),
+      "proof is deterministic for the same challenge");
+  Expect(
+      !dnd::ProofMatches(first_proof, dnd::MakePasswordProof("secret", second)),
+      "proof changes with the challenge");
+  Expect(
+      !dnd::ProofMatches(first_proof, dnd::MakePasswordProof("other", first)),
+      "proof changes with the password");
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -1807,6 +1864,7 @@ auto main() -> int {
     TestSaveLoadRoundtrip();
     TestCampaign();
     TestDamagedPayloads();
+    TestSha256();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());
     return 1;

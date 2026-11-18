@@ -49,12 +49,6 @@ auto NetClient::Poll(NetClientUpdate& update) -> void {
     return;
   }
 
-  if (connection_->Connected() && !hello_sent_) {
-    connection_->QueueFrame(
-        EncodeHello(Hello{.player_name = player_name_, .password = password_}));
-    hello_sent_ = true;
-  }
-
   const auto now = std::chrono::steady_clock::now();
   if (now - last_ping_ >= kPingInterval && connection_->Connected()) {
     last_ping_ = now;
@@ -73,7 +67,16 @@ auto NetClient::Poll(NetClientUpdate& update) -> void {
     }
     const auto type = static_cast<MessageType>(frame[0]);
 
-    if (type == MessageType::kWelcome) {
+    if (type == MessageType::kChallenge) {
+      const std::optional<Challenge> challenge =
+          DecodeChallenge(frame.data(), frame.size());
+      if (challenge.has_value() && !hello_sent_) {
+        connection_->QueueFrame(EncodeHello(
+            Hello{.player_name = player_name_,
+                  .proof = MakePasswordProof(password_, challenge->nonce)}));
+        hello_sent_ = true;
+      }
+    } else if (type == MessageType::kWelcome) {
       std::optional<Welcome> welcome =
           DecodeWelcome(frame.data(), frame.size());
       if (welcome.has_value()) {

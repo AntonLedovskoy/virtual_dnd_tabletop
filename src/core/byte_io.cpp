@@ -1,5 +1,6 @@
 #include "core/byte_io.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace dnd {
@@ -22,7 +23,11 @@ auto ByteWriter::String(const std::string& value) -> void {
 }
 
 auto ByteWriter::Raw(const std::vector<std::uint8_t>& data) -> void {
-  data_.insert(data_.end(), data.begin(), data.end());
+  Bytes(data.data(), data.size());
+}
+
+auto ByteWriter::Bytes(const std::uint8_t* data, std::size_t size) -> void {
+  data_.insert(data_.end(), data, data + size);
 }
 
 ByteReader::ByteReader(const std::uint8_t* data, std::size_t size)
@@ -78,6 +83,15 @@ auto ByteReader::Bytes(std::uint32_t length, std::vector<std::uint8_t>& out)
     return false;
   }
   out.assign(data_ + offset_, data_ + offset_ + length);
+  offset_ += length;
+  return true;
+}
+
+auto ByteReader::Bytes(std::uint8_t* out, std::size_t length) -> bool {
+  if (Remaining() < length) {
+    return false;
+  }
+  std::copy(data_ + offset_, data_ + offset_ + length, out);
   offset_ += length;
   return true;
 }

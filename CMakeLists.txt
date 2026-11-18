@@ -95,8 +95,10 @@ add_library(dnd_core STATIC
   src/core/game_state.cpp
   src/core/grid_map.cpp
   src/core/local_transport.cpp
+  src/core/password.cpp
   src/core/scene_io.cpp
   src/core/serialization.cpp
+  src/core/sha256.cpp
   src/core/utf8.cpp
   src/core/visibility.cpp
 )

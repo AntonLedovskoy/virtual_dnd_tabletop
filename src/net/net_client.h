@@ -50,6 +50,8 @@ class NetClient {
   std::string password_;
   std::uint16_t port_ = 0;
   bool welcomed_ = false;
+  // Hello отправляется только в ответ на запрос хоста: так пароль не ходит
+  // по сети, а отпечаток привязан к конкретной сессии.
   bool hello_sent_ = false;
   std::chrono::steady_clock::time_point last_ping_;
 };

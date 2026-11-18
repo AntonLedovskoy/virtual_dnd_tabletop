@@ -15,6 +15,7 @@ class ByteWriter {
   auto U32(std::uint32_t value) -> void;
   auto I32(std::int32_t value) -> void;
   auto String(const std::string& value) -> void;
+  auto Bytes(const std::uint8_t* data, std::size_t size) -> void;
   auto Raw(const std::vector<std::uint8_t>& data) -> void;
 
   [[nodiscard]] auto Data() const -> const std::vector<std::uint8_t>& {
@@ -36,6 +37,7 @@ class ByteReader {
   auto I32(std::int32_t& value) -> bool;
   auto String(std::string& value, std::uint32_t max_length) -> bool;
   auto Bytes(std::uint32_t length, std::vector<std::uint8_t>& out) -> bool;
+  auto Bytes(std::uint8_t* out, std::size_t length) -> bool;
   auto Skip(std::size_t count) -> bool;
 
   [[nodiscard]] auto Remaining() const -> std::size_t {

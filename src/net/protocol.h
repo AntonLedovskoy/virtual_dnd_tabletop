@@ -8,12 +8,13 @@
 
 #include "core/command.h"
 #include "core/event.h"
+#include "core/password.h"
 #include "core/snapshot.h"
 #include "core/visibility.h"
 
 namespace dnd {
 
-inline constexpr std::uint32_t kProtocolVersion = 16;
+inline constexpr std::uint32_t kProtocolVersion = 17;
 
 enum class MessageType : std::uint8_t {
   kHello = 1,
@@ -23,11 +24,20 @@ enum class MessageType : std::uint8_t {
   kReject = 5,
   kPing = 6,
   kRoster = 7,
+  kChallenge = 8,
 };
 
+// Запрос хоста: случайный nonce, чтобы отпечаток пароля нельзя было
+// подсмотреть и переиграть.
+struct Challenge {
+  ChallengeNonce nonce{};
+};
+
+// Пароль по сети не ходит: клиент доказывает знание пароля отпечатком
+// HMAC-SHA256(пароль, nonce).
 struct Hello {
   std::string player_name;
-  std::string password;
+  PasswordProof proof{};
 };
 
 // Читает только начало Hello: тип сообщения и версию протокола. Раскладка
@@ -51,6 +61,10 @@ struct Welcome {
 auto EncodeHello(const Hello& hello) -> std::vector<std::uint8_t>;
 auto DecodeHello(const std::uint8_t* data, std::size_t size)
     -> std::optional<Hello>;
+
+auto EncodeChallenge(const Challenge& challenge) -> std::vector<std::uint8_t>;
+auto DecodeChallenge(const std::uint8_t* data, std::size_t size)
+    -> std::optional<Challenge>;
 
 auto EncodeWelcome(const Welcome& welcome) -> std::vector<std::uint8_t>;
 auto DecodeWelcome(const std::uint8_t* data, std::size_t size)

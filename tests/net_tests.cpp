@@ -328,7 +328,8 @@ auto TestVersionMismatchReject() -> void {
   writer.U8(static_cast<std::uint8_t>(dnd::MessageType::kHello));
   writer.U32(foreign_version);
   writer.String("tester");
-  writer.String("");
+  const std::vector<std::uint8_t> proof(dnd::kProofSize, 0);
+  writer.Bytes(proof.data(), proof.size());
   connection->QueueFrame(writer.Data());
 
   std::vector<dnd::PeerJoined> joined;
@@ -367,6 +368,96 @@ auto TestVersionMismatchReject() -> void {
     Expect(reason->find("обновите игру") != std::string::npos,
            "reject tells the player what to do");
   }
+}
+
+auto TestChallengeHandshake() -> void {
+  dnd::NetServer server;
+  Expect(server.Start(0, "secret"), "challenge server listens");
+  const std::uint16_t port = server.Port();
+  if (port == 0) {
+    return;
+  }
+
+  const std::unique_ptr<dnd::TcpConnection> connection =
+      dnd::TcpConnection::Connect("127.0.0.1", port);
+  Expect(connection != nullptr, "challenge client connects");
+  if (connection == nullptr) {
+    return;
+  }
+
+  std::vector<dnd::PeerJoined> joined;
+  std::vector<dnd::PeerCommand> commands;
+  std::vector<dnd::PeerId> dropped;
+  std::vector<std::vector<std::uint8_t>> frames;
+  std::optional<dnd::Challenge> challenge;
+  const auto challenge_deadline = Now() + std::chrono::seconds(3);
+  while (!challenge.has_value() && Now() < challenge_deadline) {
+    server.Poll(joined, commands, dropped);
+    if (connection->Poll(frames)) {
+      for (const std::vector<std::uint8_t>& frame : frames) {
+        if (frame.empty() || static_cast<dnd::MessageType>(frame[0]) !=
+                                 dnd::MessageType::kChallenge) {
+          continue;
+        }
+        if (const std::optional<dnd::Challenge> decoded =
+                dnd::DecodeChallenge(frame.data(), frame.size())) {
+          challenge = decoded;
+        }
+      }
+      frames.clear();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(challenge.has_value(), "server sends a challenge before hello");
+  if (!challenge.has_value()) {
+    return;
+  }
+
+  // Пароль не должен проходить проверку, если отпечаток посчитан от чужого
+  // запроса: иначе подсмотренный ответ можно было бы переиграть.
+  dnd::Challenge foreign;
+  foreign.nonce[0] = 1;
+  connection->QueueFrame(dnd::EncodeHello(
+      dnd::Hello{.player_name = "tester",
+                 .proof = dnd::MakePasswordProof("secret", foreign.nonce)}));
+
+  std::optional<std::string> reason;
+  const auto reject_deadline = Now() + std::chrono::seconds(3);
+  while (!reason.has_value() && Now() < reject_deadline) {
+    server.Poll(joined, commands, dropped);
+    if (connection->Poll(frames)) {
+      for (const std::vector<std::uint8_t>& frame : frames) {
+        if (frame.empty() || static_cast<dnd::MessageType>(frame[0]) !=
+                                 dnd::MessageType::kReject) {
+          continue;
+        }
+        if (const std::optional<std::string> decoded =
+                dnd::DecodeReject(frame.data(), frame.size())) {
+          reason = decoded;
+        }
+      }
+      frames.clear();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(joined.empty(), "stale proof does not join");
+  Expect(reason.has_value() && *reason == "неверный пароль",
+         "stale proof is rejected as a wrong password");
+
+  // Перебор пароля на одном соединении не должен занимать хост: после лимита
+  // сообщений сервер закрывает соединение.
+  for (int i = 0; i < 200; ++i) {
+    connection->QueueFrame(dnd::EncodeHello(dnd::Hello{}));
+  }
+  bool closed = false;
+  const auto close_deadline = Now() + std::chrono::seconds(5);
+  while (!closed && Now() < close_deadline) {
+    server.Poll(joined, commands, dropped);
+    closed = !connection->Poll(frames);
+    frames.clear();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(closed, "handshake flood closes the connection");
 }
 
 auto TestPeerLimit() -> void {
@@ -529,6 +620,7 @@ auto main() -> int {
     TestPasswordAndRoster();
     TestPlayerNameValidation();
     TestVersionMismatchReject();
+    TestChallengeHandshake();
     TestPeerLimit();
     TestCommandRateLimit();
     TestOutgoingQueueLimit();

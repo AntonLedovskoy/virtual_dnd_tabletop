@@ -16,7 +16,7 @@ constexpr std::size_t kFarewellPeers = 8;
 
 }  // namespace
 
-auto NetServer::Peer::AllowCommand(std::chrono::steady_clock::time_point now)
+auto NetServer::Peer::AllowMessage(std::chrono::steady_clock::time_point now)
     -> bool {
   if (now - rate_window_start >= std::chrono::seconds(1)) {
     rate_window_start = now;
@@ -53,6 +53,12 @@ auto NetServer::Poll(std::vector<PeerJoined>& joined,
       peer.farewell = true;
       peer.close_at = std::chrono::steady_clock::now() + kFarewellDelay;
       peer.connection->QueueFrame(EncodeReject("на хосте нет свободных мест"));
+    } else {
+      // Пароль по сети не ходит: сначала отдаём случайный запрос, на который
+      // клиент отвечает отпечатком.
+      peer.challenge = Challenge{.nonce = RandomChallenge()};
+      peer.challenge_sent = true;
+      peer.connection->QueueFrame(EncodeChallenge(peer.challenge));
     }
     peers_.push_back(std::move(peer));
   }
@@ -110,6 +116,13 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
     if (peer.welcomed) {
       return;
     }
+    if (!peer.AllowMessage(std::chrono::steady_clock::now())) {
+      // Перебор пароля: соединение закрывается, а не крутится в памяти.
+      Reject(peer.id, "слишком много попыток входа");
+      peer.farewell = true;
+      peer.close_at = std::chrono::steady_clock::now() + kFarewellDelay;
+      return;
+    }
     // Сначала проверяем версию: о несовпадении надо сказать прямо, иначе
     // игрок со старой сборкой увидит только «некорректное приветствие».
     const std::optional<std::uint32_t> version =
@@ -125,7 +138,7 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
       return;
     }
     const std::optional<Hello> hello = DecodeHello(frame.data(), frame.size());
-    if (!hello.has_value()) {
+    if (!hello.has_value() || !peer.challenge_sent) {
       Reject(peer.id, "некорректное приветствие");
       return;
     }
@@ -137,7 +150,8 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
       Reject(peer.id, "имя DM зарезервировано");
       return;
     }
-    if (!password_.empty() && hello->password != password_) {
+    if (!ProofMatches(MakePasswordProof(password_, peer.challenge.nonce),
+                      hello->proof)) {
       Reject(peer.id, "неверный пароль");
       return;
     }
@@ -158,6 +172,7 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
     }
     peer.name = hello->player_name;
     peer.welcomed = true;
+    peer.challenge_sent = false;  // повторно Hello не принимается
     roster_dirty_ = true;
     joined.push_back(PeerJoined{.peer = peer.id, .name = peer.name});
     return;
@@ -167,7 +182,7 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
     if (!peer.welcomed) {
       return;
     }
-    if (!peer.AllowCommand(std::chrono::steady_clock::now())) {
+    if (!peer.AllowMessage(std::chrono::steady_clock::now())) {
       return;  // слишком часто: молча отбрасываем
     }
     const std::optional<Command> command =
