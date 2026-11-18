@@ -16,6 +16,13 @@ namespace dnd {
 
 using PeerId = std::uint32_t;
 
+// Сколько игроков стол принимает одновременно. Девятый получает отказ.
+inline constexpr std::size_t kMaxPeers = 8;
+
+// Предел частоты команд на пира: лишние молча отбрасываются, чтобы одна
+// зажатая клавиша не занимала хост.
+inline constexpr int kMaxCommandsPerSecond = 30;
+
 struct PeerJoined {
   PeerId peer = 0;
   std::string name;
@@ -65,7 +72,18 @@ class NetServer {
     bool welcomed = false;
     std::chrono::steady_clock::time_point last_seen =
         std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point rate_window_start =
+        std::chrono::steady_clock::now();
+    int rate_commands = 0;
+    // Отказ отправлен, соединение ждёт закрытия клиентом или таймера.
+    bool farewell = false;
+    std::chrono::steady_clock::time_point close_at =
+        std::chrono::steady_clock::now();
     std::unique_ptr<TcpConnection> connection;
+
+    // Простое окно в секунду: после kMaxCommandsPerSecond команды из этого
+    // окна молча отбрасываются.
+    auto AllowCommand(std::chrono::steady_clock::time_point now) -> bool;
   };
 
   auto FindPeer(PeerId id) -> Peer*;

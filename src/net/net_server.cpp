@@ -7,8 +7,27 @@ namespace dnd {
 namespace {
 
 constexpr std::chrono::seconds kIdleTimeout{15};
+// Сколько живёт соединение, которому отправлен отказ: клиент должен успеть
+// прочитать причину, но место на столе такие подключения не занимают.
+constexpr std::chrono::seconds kFarewellDelay{2};
+// Сколько отказных соединений хост держит одновременно. Всё сверх этого
+// закрывается сразу: иначе поток подключений съел бы память.
+constexpr std::size_t kFarewellPeers = 8;
 
 }  // namespace
+
+auto NetServer::Peer::AllowCommand(std::chrono::steady_clock::time_point now)
+    -> bool {
+  if (now - rate_window_start >= std::chrono::seconds(1)) {
+    rate_window_start = now;
+    rate_commands = 0;
+  }
+  if (rate_commands >= kMaxCommandsPerSecond) {
+    return false;
+  }
+  ++rate_commands;
+  return true;
+}
 
 auto NetServer::Start(std::uint16_t port, const std::string& password) -> bool {
   password_ = password;
@@ -20,9 +39,21 @@ auto NetServer::Poll(std::vector<PeerJoined>& joined,
                      std::vector<PeerCommand>& commands,
                      std::vector<PeerId>& dropped) -> void {
   while (std::unique_ptr<TcpConnection> connection = listener_.Accept()) {
+    if (peers_.size() >= kMaxPeers + kFarewellPeers) {
+      continue;  // совсем нет места: соединение закрывается сразу
+    }
     Peer peer;
     peer.id = next_peer_id_++;
     peer.connection = std::move(connection);
+    const auto active = static_cast<std::size_t>(std::ranges::count_if(
+        peers_, [](const Peer& other) -> bool { return !other.farewell; }));
+    if (active >= kMaxPeers) {
+      // Мест нет: причину надо успеть отправить, поэтому соединение живёт
+      // ещё мгновение и закрывается по таймеру, а не рвётся сразу с RST.
+      peer.farewell = true;
+      peer.close_at = std::chrono::steady_clock::now() + kFarewellDelay;
+      peer.connection->QueueFrame(EncodeReject("на хосте нет свободных мест"));
+    }
     peers_.push_back(std::move(peer));
   }
 
@@ -35,17 +66,23 @@ auto NetServer::Poll(std::vector<PeerJoined>& joined,
     if (!frames.empty()) {
       peer.last_seen = now;
     }
+    if (peer.farewell) {
+      continue;  // отказ уже отправлен, читать нечего
+    }
     for (const std::vector<std::uint8_t>& frame : frames) {
       HandleFrame(peer, frame, joined, commands);
     }
   }
 
   for (auto it = peers_.begin(); it != peers_.end();) {
-    const bool idle = now - it->last_seen > kIdleTimeout;
-    if (!it->connection->Connected() || idle) {
-      dropped.push_back(it->id);
+    const bool idle = !it->farewell && now - it->last_seen > kIdleTimeout;
+    const bool expired = it->farewell && now >= it->close_at;
+    if (!it->connection->Connected() || idle || expired) {
+      if (it->welcomed) {
+        dropped.push_back(it->id);
+        roster_dirty_ = true;
+      }
       it = peers_.erase(it);
-      roster_dirty_ = true;
     } else {
       ++it;
     }
@@ -129,6 +166,9 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
   if (type == MessageType::kCommand) {
     if (!peer.welcomed) {
       return;
+    }
+    if (!peer.AllowCommand(std::chrono::steady_clock::now())) {
+      return;  // слишком часто: молча отбрасываем
     }
     const std::optional<Command> command =
         DecodeCommandMessage(frame.data(), frame.size());

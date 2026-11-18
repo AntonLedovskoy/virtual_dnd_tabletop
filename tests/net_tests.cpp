@@ -369,6 +369,148 @@ auto TestVersionMismatchReject() -> void {
   }
 }
 
+auto TestPeerLimit() -> void {
+  dnd::NetServer server;
+  Expect(server.Start(0), "peer limit server listens");
+  const std::uint16_t port = server.Port();
+  if (port == 0) {
+    return;
+  }
+
+  std::vector<std::unique_ptr<dnd::NetClient>> clients;
+  for (std::size_t i = 0; i < dnd::kMaxPeers; ++i) {
+    clients.push_back(std::make_unique<dnd::NetClient>());
+    Expect(clients.back()->Connect("127.0.0.1", port,
+                                   "player" + std::to_string(i)),
+           "seat client connects");
+  }
+
+  std::vector<dnd::PeerJoined> joined;
+  std::vector<dnd::PeerCommand> commands;
+  std::vector<dnd::PeerId> dropped;
+  dnd::NetClientUpdate update;
+  const auto fill_deadline = Now() + std::chrono::seconds(3);
+  while (joined.size() < dnd::kMaxPeers && Now() < fill_deadline) {
+    for (const std::unique_ptr<dnd::NetClient>& client : clients) {
+      client->Poll(update);
+    }
+    server.Poll(joined, commands, dropped);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(joined.size() == dnd::kMaxPeers, "all seats are taken");
+
+  dnd::NetClient extra;
+  Expect(extra.Connect("127.0.0.1", port, "extra"), "extra client connects");
+  dnd::NetClientUpdate extra_update;
+  const auto extra_deadline = Now() + std::chrono::seconds(3);
+  while (!extra_update.reject.has_value() && Now() < extra_deadline) {
+    for (const std::unique_ptr<dnd::NetClient>& client : clients) {
+      client->Poll(update);
+    }
+    extra.Poll(extra_update);
+    server.Poll(joined, commands, dropped);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(joined.size() == dnd::kMaxPeers, "extra client does not join");
+  Expect(extra_update.reject.has_value(), "extra client is rejected");
+  if (extra_update.reject.has_value()) {
+    Expect(extra_update.reject->find("свободных мест") != std::string::npos,
+           "reject explains that the table is full");
+  }
+}
+
+auto TestCommandRateLimit() -> void {
+  dnd::NetServer server;
+  Expect(server.Start(0), "rate limit server listens");
+  const std::uint16_t port = server.Port();
+  if (port == 0) {
+    return;
+  }
+
+  dnd::NetClient client;
+  Expect(client.Connect("127.0.0.1", port, "spammer"), "spammer connects");
+  std::vector<dnd::PeerJoined> joined;
+  std::vector<dnd::PeerCommand> commands;
+  std::vector<dnd::PeerId> dropped;
+  dnd::NetClientUpdate update;
+  const auto join_deadline = Now() + std::chrono::seconds(3);
+  while (joined.empty() && Now() < join_deadline) {
+    server.Poll(joined, commands, dropped);
+    client.Poll(update);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(!joined.empty(), "spammer joins");
+  if (joined.empty()) {
+    return;
+  }
+
+  server.SendWelcome(
+      joined.front().peer,
+      dnd::Welcome{.snapshot = MakeSnapshot(), .fog = MakeFog(6, 4)});
+  const auto welcome_deadline = Now() + std::chrono::seconds(3);
+  while (!update.welcome.has_value() && Now() < welcome_deadline) {
+    server.Poll(joined, commands, dropped);
+    client.Poll(update);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(update.welcome.has_value(), "spammer receives the welcome");
+
+  const int burst = dnd::kMaxCommandsPerSecond * 10;
+  for (int i = 0; i < burst; ++i) {
+    client.SendCommand(dnd::Say{.text = "flood"});
+  }
+
+  // Читаем, пока сервер не замолчит на 200 мс: так виден весь всплеск, но
+  // мы не ждём следующего окна лимита.
+  const auto drain_deadline = Now() + std::chrono::seconds(3);
+  auto quiet_since = Now();
+  while (Now() < drain_deadline &&
+         Now() - quiet_since < std::chrono::milliseconds(200)) {
+    const std::size_t before = commands.size();
+    server.Poll(joined, commands, dropped);
+    if (commands.size() != before) {
+      quiet_since = Now();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(!commands.empty(), "burst is partially accepted");
+  Expect(
+      commands.size() <= static_cast<std::size_t>(dnd::kMaxCommandsPerSecond),
+      "extra commands are dropped");
+}
+
+auto TestOutgoingQueueLimit() -> void {
+  dnd::NetServer server;
+  Expect(server.Start(0), "queue limit server listens");
+  const std::uint16_t port = server.Port();
+  if (port == 0) {
+    return;
+  }
+
+  // Собеседник не читает: хост обязан закрыть такое соединение, а не копить
+  // исходящие байты до исчерпания памяти.
+  const std::unique_ptr<dnd::TcpConnection> connection =
+      dnd::TcpConnection::Connect("127.0.0.1", port);
+  Expect(connection != nullptr, "queue limit client connects");
+  if (connection == nullptr) {
+    return;
+  }
+  std::vector<std::vector<std::uint8_t>> frames;
+  const auto connect_deadline = Now() + std::chrono::seconds(3);
+  while (!connection->Connected() && Now() < connect_deadline) {
+    connection->Poll(frames);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(connection->Connected(), "queue limit connection is established");
+
+  const std::vector<std::uint8_t> frame(static_cast<std::size_t>(16) * 1024, 0);
+  for (int i = 0; i < 512 && connection->Connected(); ++i) {
+    connection->QueueFrame(frame);
+  }
+  Expect(!connection->Connected(),
+         "connection is closed after the outgoing queue limit");
+}
+
 auto TestPing() -> void {
   const std::vector<std::uint8_t> ping = dnd::EncodePing();
   Expect(dnd::DecodePing(ping.data(), ping.size()), "ping roundtrip");
@@ -387,6 +529,9 @@ auto main() -> int {
     TestPasswordAndRoster();
     TestPlayerNameValidation();
     TestVersionMismatchReject();
+    TestPeerLimit();
+    TestCommandRateLimit();
+    TestOutgoingQueueLimit();
     TestTcpHandshakeAndEvents();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());

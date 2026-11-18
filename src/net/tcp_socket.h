@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -10,6 +11,12 @@ namespace dnd {
 // TCP-фрейминг с префиксом длины поверх Winsock. Каждый фрейм — одно
 // сообщение протокола; сокетный слой работает только с байтами.
 auto InitializeSockets() -> bool;
+
+// Предел очереди отправки. Если собеседник не читает данные и очередь
+// переполняется, соединение закрывается: хост не должен копить память
+// из-за одного медленного клиента.
+inline constexpr std::size_t kMaxOutgoingBytes =
+    static_cast<std::size_t>(1024) * 1024;
 
 // Не-loopback IPv4-адреса машины — для показа адреса хоста в лобби.
 auto LocalIpv4Addresses() -> std::vector<std::string>;

@@ -31,6 +31,16 @@ auto SetNonBlocking(SOCKET socket_handle) -> void {
   ioctlsocket(socket_handle, FIONBIO, &mode);
 }
 
+// Настройки уже установленного соединения: неблокирующий режим и отключение
+// алгоритма Нейгла. Команды и события маленькие, и без TCP_NODELAY стек ждёт
+// накопления пакета — ходы доходят с заметной задержкой.
+auto ConfigureSocket(SOCKET socket_handle) -> void {
+  SetNonBlocking(socket_handle);
+  BOOL no_delay = TRUE;
+  setsockopt(socket_handle, IPPROTO_TCP, TCP_NODELAY,
+             reinterpret_cast<const char*>(&no_delay), sizeof(no_delay));
+}
+
 auto ReadFrameSize(const std::vector<std::uint8_t>& buffer, std::size_t offset)
     -> std::uint32_t {
   return static_cast<std::uint32_t>(buffer[offset]) |
@@ -102,7 +112,7 @@ auto LocalIpv4Addresses() -> std::vector<std::string> {
 
 TcpConnection::TcpConnection(std::uintptr_t handle, bool connecting)
     : handle_(handle), connected_(!connecting), connecting_(connecting) {
-  SetNonBlocking(ToSocket(handle_));
+  ConfigureSocket(ToSocket(handle_));
 }
 
 TcpConnection::~TcpConnection() {
@@ -135,7 +145,7 @@ auto TcpConnection::Connect(const std::string& host, std::uint16_t port)
     if (socket_handle == kInvalidSocket) {
       continue;
     }
-    SetNonBlocking(socket_handle);
+    ConfigureSocket(socket_handle);
     const int result = connect(socket_handle, address->ai_addr,
                                static_cast<int>(address->ai_addrlen));
     if (result == 0) {
@@ -157,6 +167,16 @@ auto TcpConnection::Connect(const std::string& host, std::uint16_t port)
 }
 
 auto TcpConnection::QueueFrame(const std::vector<std::uint8_t>& frame) -> void {
+  if (!connected_ && !connecting_) {
+    return;  // соединение уже закрыто: копить нечего
+  }
+  if (outgoing_.size() + kFrameHeaderSize + frame.size() > kMaxOutgoingBytes) {
+    // Собеседник не читает: соединение закрывается, чтобы очередь не росла
+    // до исчерпания памяти хоста.
+    connected_ = false;
+    outgoing_.clear();
+    return;
+  }
   AppendFrameSize(outgoing_, static_cast<std::uint32_t>(frame.size()));
   outgoing_.insert(outgoing_.end(), frame.begin(), frame.end());
   Flush();
