@@ -676,6 +676,76 @@ auto TestAoeDamage() -> void {
          "tokens outside the template are untouched");
 }
 
+auto TestDeathSaves() -> void {
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "doomed",
+                         .owner = "alice",
+                         .hp = 0,
+                         .max_hp = 10,
+                         .conditions = {dnd::Condition{"без сознания"}},
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "stable",
+                         .owner = "bob",
+                         .hp = 0,
+                         .max_hp = 10,
+                         .conditions = {dnd::Condition{"без сознания"}},
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 2)},
+              dnd::Token{.id = 3,
+                         .name = "lucky",
+                         .owner = "carol",
+                         .hp = 0,
+                         .max_hp = 10,
+                         .conditions = {dnd::Condition{"без сознания"}},
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(3, 3)},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameState state(snapshot);
+
+  (void)state.DeathSave(1, 5);
+  (void)state.DeathSave(1, 6);
+  const std::optional<dnd::Token> dead = state.DeathSave(1, 7);
+  Expect(dead.has_value() && dead->death_save_failures == 3,
+         "three failures fill the death save counter");
+  if (dead.has_value()) {
+    Expect(std::ranges::any_of(dead->conditions,
+                               [](const dnd::Condition& condition) -> bool {
+                                 return condition.name == dnd::kDead;
+                               }),
+           "three failures kill the character");
+  }
+
+  (void)state.DeathSave(2, 10);
+  (void)state.DeathSave(2, 11);
+  const std::optional<dnd::Token> stable = state.DeathSave(2, 12);
+  Expect(stable.has_value() && stable->death_save_successes == 3,
+         "three successes stabilize the character");
+  if (stable.has_value()) {
+    Expect(std::ranges::none_of(stable->conditions,
+                                [](const dnd::Condition& condition) -> bool {
+                                  return condition.name == dnd::kUnconscious;
+                                }),
+           "a stable character is no longer unconscious");
+  }
+
+  const std::optional<dnd::Token> revived = state.DeathSave(3, 20);
+  Expect(revived.has_value() && revived->hp == 1,
+         "a natural twenty brings the character back with 1 HP");
+
+  const std::optional<dnd::Token> hit = state.DamageToken(2, 5);
+  Expect(hit.has_value() && hit->death_save_failures == 1,
+         "damage at zero hp adds a death save failure");
+}
+
 auto TestConditionDurationAndInitiative() -> void {
   const dnd::GridMap map(8, 8);
   const dnd::GameSnapshot snapshot{
@@ -1931,6 +2001,16 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::AoeDamage>(*aoe_damage_decoded).save_dc == 15,
       "aoe damage command survives serialization");
 
+  const dnd::Command death_save{dnd::DeathSave{.id = 6}};
+  const std::vector<std::uint8_t> death_save_bytes =
+      dnd::EncodeCommand(death_save);
+  const std::optional<dnd::Command> death_save_decoded =
+      dnd::DecodeCommand(death_save_bytes.data(), death_save_bytes.size());
+  Expect(death_save_decoded.has_value() &&
+             std::holds_alternative<dnd::DeathSave>(*death_save_decoded) &&
+             std::get<dnd::DeathSave>(*death_save_decoded).id == 6,
+         "death save command survives serialization");
+
   const dnd::Command rest{dnd::RestParty{.long_rest = true}};
   const std::vector<std::uint8_t> rest_bytes = dnd::EncodeCommand(rest);
   const std::optional<dnd::Command> rest_decoded =
@@ -1956,6 +2036,8 @@ auto TestCommandEventSerialization() -> void {
                           .damage = "1d8+2",
                           .conditions = {dnd::Condition{"оглушён", 2}},
                           .movement_used = 5,
+                          .death_save_successes = 1,
+                          .death_save_failures = 2,
                           .kind = dnd::TokenKind::kMonster,
                           .color = 0x46A864U,
                           .cell = CellAt(1, 1)},
@@ -1986,6 +2068,10 @@ auto TestCommandEventSerialization() -> void {
                   .rounds == 2 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.movement_used ==
               5 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded)
+                  .token.death_save_successes == 1 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded)
+                  .token.death_save_failures == 2 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
               dnd::TokenKind::kMonster &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.color ==
@@ -2143,6 +2229,7 @@ auto main() -> int {
     TestDamageHealRest();
     TestConcentration();
     TestAoeDamage();
+    TestDeathSaves();
     TestConditionDurationAndInitiative();
     TestDiceExpression();
     TestBestiary();

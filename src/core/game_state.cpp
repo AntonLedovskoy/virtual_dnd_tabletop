@@ -135,13 +135,24 @@ auto GameState::DamageToken(TokenId id, int amount) -> std::optional<Token> {
   if (token == nullptr) {
     return std::nullopt;
   }
+  const bool was_down = token->hp == 0;
   int remaining = std::max(0, amount);
   const int absorbed = std::min(token->temp_hp, remaining);
   token->temp_hp -= absorbed;
   remaining -= absorbed;
   token->hp = std::max(0, token->hp - remaining);
-  if (token->hp == 0) {
+  if (token->hp == 0 && !was_down) {
+    token->death_save_successes = 0;
+    token->death_save_failures = 0;
     AddConditionIfMissing(*token, Condition{std::string(kUnconscious)});
+  }
+  if (was_down && amount > 0) {
+    // Удар по лежачему — провал спасброска от смерти.
+    token->death_save_failures = std::min(3, token->death_save_failures + 1);
+    if (token->death_save_failures >= 3) {
+      RemoveCondition(*token, kUnconscious);
+      AddConditionIfMissing(*token, Condition{std::string(kDead)});
+    }
   }
   return *token;
 }
@@ -152,8 +163,38 @@ auto GameState::HealToken(TokenId id, int amount) -> std::optional<Token> {
     return std::nullopt;
   }
   token->hp = std::min(token->max_hp, token->hp + std::max(0, amount));
+  token->death_save_successes = 0;
+  token->death_save_failures = 0;
   if (token->hp > 0) {
     RemoveCondition(*token, kUnconscious);
+  }
+  return *token;
+}
+
+auto GameState::DeathSave(TokenId id, int roll) -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr || token->hp > 0) {
+    return std::nullopt;
+  }
+  if (roll == 20) {
+    token->hp = 1;
+    token->death_save_successes = 0;
+    token->death_save_failures = 0;
+    RemoveCondition(*token, kUnconscious);
+    return *token;
+  }
+  if (roll >= 10) {
+    token->death_save_successes = std::min(3, token->death_save_successes + 1);
+    if (token->death_save_successes >= 3) {
+      // Три успеха: персонаж стабилен, но всё ещё без сознания на нуле HP.
+      RemoveCondition(*token, kUnconscious);
+    }
+  } else {
+    token->death_save_failures = std::min(3, token->death_save_failures + 1);
+    if (token->death_save_failures >= 3) {
+      RemoveCondition(*token, kUnconscious);
+      AddConditionIfMissing(*token, Condition{std::string(kDead)});
+    }
   }
   return *token;
 }
@@ -166,18 +207,26 @@ auto GameState::RestParty(bool long_rest) -> std::vector<Token> {
     }
     const int old_hp = token.hp;
     const int old_temp = token.temp_hp;
+    const int old_successes = token.death_save_successes;
+    const int old_failures = token.death_save_failures;
     const std::size_t old_conditions = token.conditions.size();
     if (long_rest) {
       token.hp = token.max_hp;
       token.temp_hp = 0;
       token.conditions.clear();
+      token.death_save_successes = 0;
+      token.death_save_failures = 0;
     } else {
       token.hp = std::min(token.max_hp, token.hp + ((token.max_hp + 1) / 2));
       if (token.hp > 0) {
         RemoveCondition(token, kUnconscious);
+        token.death_save_successes = 0;
+        token.death_save_failures = 0;
       }
     }
     if (token.hp != old_hp || token.temp_hp != old_temp ||
+        token.death_save_successes != old_successes ||
+        token.death_save_failures != old_failures ||
         token.conditions.size() != old_conditions) {
       changed.push_back(token);
     }

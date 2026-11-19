@@ -1952,6 +1952,18 @@ auto App::SubmitChat() -> void {
     }
     return;
   }
+  if (text == "/deathsave") {
+    if (token == nullptr) {
+      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+      return;
+    }
+    if (token->hp > 0) {
+      view_.AddLocalLine("Спасбросок от смерти нужен при 0 HP");
+      return;
+    }
+    SendCommand(DeathSave{.id = token->id});
+    return;
+  }
   if (text == "/rest" || text == "/longrest") {
     if (options_.mode != AppMode::kHost) {
       view_.AddLocalLine("Отдых объявляет только DM");

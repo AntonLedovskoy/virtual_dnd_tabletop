@@ -52,6 +52,8 @@ class GameState {
       -> std::optional<Token>;
   // Лечение не поднимает выше максимума; при HP > 0 снимает «без сознания».
   [[nodiscard]] auto HealToken(TokenId id, int amount) -> std::optional<Token>;
+  // Бросок спасброска от смерти при hp == 0; roll — уже выпавший d20.
+  [[nodiscard]] auto DeathSave(TokenId id, int roll) -> std::optional<Token>;
   // Возвращает персонажей, чьи HP или состояния изменились.
   [[nodiscard]] auto RestParty(bool long_rest) -> std::vector<Token>;
   [[nodiscard]] auto SetInitiative(TokenId id, int value)

@@ -141,6 +141,11 @@ struct AoeDamage {
   int save_dc = 15;
 };
 
+// Владелец или DM: спасбросок от смерти у токена с нулём HP.
+struct DeathSave {
+  TokenId id = 0;
+};
+
 // Владелец или DM: заменить список состояний токена.
 struct UpdateTokenCombat {
   TokenId id = 0;
@@ -163,6 +168,6 @@ using Command =
                  ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
                  SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
                  StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken,
-                 HealToken, RestParty, AoeDamage>;
+                 HealToken, RestParty, AoeDamage, DeathSave>;
 
 }  // namespace dnd

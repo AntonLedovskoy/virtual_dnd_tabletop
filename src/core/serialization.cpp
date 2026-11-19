@@ -44,6 +44,7 @@ constexpr std::uint8_t kCommandDamageToken = 21;
 constexpr std::uint8_t kCommandHealToken = 22;
 constexpr std::uint8_t kCommandRestParty = 23;
 constexpr std::uint8_t kCommandAoeDamage = 24;
+constexpr std::uint8_t kCommandDeathSave = 25;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -79,6 +80,8 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
     writer.I32(condition.rounds);
   }
   writer.I32(token.movement_used);
+  writer.I32(token.death_save_successes);
+  writer.I32(token.death_save_failures);
 }
 
 auto ReadToken(ByteReader& reader, Token& token) -> bool {
@@ -103,6 +106,8 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::uint32_t condition_count = 0;
   std::vector<Condition> conditions;
   std::int32_t movement_used = 0;
+  std::int32_t death_successes = 0;
+  std::int32_t death_failures = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -124,7 +129,9 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
     }
     conditions.emplace_back(std::move(condition_name), rounds);
   }
-  if (!reader.I32(movement_used)) {
+  if (!reader.I32(movement_used) || !reader.I32(death_successes) ||
+      !reader.I32(death_failures) || death_successes < 0 ||
+      death_successes > 3 || death_failures < 0 || death_failures > 3) {
     return false;
   }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
@@ -153,6 +160,8 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .damage = std::move(damage),
       .conditions = std::move(conditions),
       .movement_used = movement_used,
+      .death_save_successes = death_successes,
+      .death_save_failures = death_failures,
       .kind = static_cast<TokenKind>(kind),
       .color = color,
       .cell = Cell{.x = x, .y = y},
@@ -299,6 +308,14 @@ auto DecodeAoeDamageCommand(ByteReader& reader) -> std::optional<Command> {
   }
   return Command{
       AoeDamage{.expression = std::move(expression), .save_dc = save_dc}};
+}
+
+auto DecodeDeathSaveCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  if (!reader.U32(id) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{DeathSave{.id = id}};
 }
 
 auto DecodeStartEncounterCommand(ByteReader& reader) -> std::optional<Command> {
@@ -862,6 +879,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandAoeDamage);
           writer.String(cmd.expression);
           writer.I32(cmd.save_dc);
+        } else if constexpr (std::is_same_v<T, DeathSave>) {
+          writer.U8(kCommandDeathSave);
+          writer.U32(cmd.id);
         }
       },
       command);
@@ -924,6 +944,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeRestCommand(reader);
     case kCommandAoeDamage:
       return DecodeAoeDamageCommand(reader);
+    case kCommandDeathSave:
+      return DecodeDeathSaveCommand(reader);
     default:
       return std::nullopt;
   }

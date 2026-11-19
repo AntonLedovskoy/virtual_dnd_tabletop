@@ -58,7 +58,7 @@ inline constexpr std::string_view kHelpCommonTitle = "Для всех";
 inline constexpr std::string_view kHelpDmTitle = "Мастер (DM)";
 inline constexpr std::string_view kHelpPlayerTitle = "Игрок";
 inline constexpr std::string_view kHelpClose = "F1 или Esc — закрыть";
-inline constexpr std::array<std::string_view, 13> kHelpCommon = {
+inline constexpr std::array<std::string_view, 14> kHelpCommon = {
     "Enter — чат и команды",
     "F1 — справка, Esc — закрыть",
     "ЛКМ — выбрать токен, перетащить",
@@ -72,6 +72,7 @@ inline constexpr std::array<std::string_view, 13> kHelpCommon = {
     "K — состояния, L — лист",
     "M — дальность хода, V — цвет",
     "Команды: /damage N, /heal N",
+    "/deathsave — при 0 HP",
 };
 inline constexpr std::array<std::string_view, 2> kHelpPlayer = {
     "C — забрать персонажа под курсором",

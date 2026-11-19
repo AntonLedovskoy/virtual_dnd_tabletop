@@ -126,6 +126,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleRest(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, AoeDamage>) {
           return HandleAoeDamage(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, DeathSave>) {
+          return HandleDeathSave(cmd, actor, can_control_all);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -589,6 +591,59 @@ auto GameServer::HandleAoeDamage(const AoeDamage& command, bool can_control_all)
                         .timestamp = CurrentTimeSeconds()},
     });
   }
+  return outcome;
+}
+
+auto GameServer::HandleDeathSave(const DeathSave& command,
+                                 const std::string& actor, bool can_control_all)
+    -> CommandOutcome {
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!CanControl(*token, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  if (token->hp > 0) {
+    return CommandOutcome{.reject_reason = "спасбросок нужен при 0 HP"};
+  }
+  const bool dead = std::ranges::any_of(token->conditions,
+                                        [](const Condition& condition) -> bool {
+                                          return condition.name == kDead;
+                                        });
+  if (dead) {
+    return CommandOutcome{.reject_reason = "персонаж уже мёртв"};
+  }
+  const std::string name = token->name;
+  std::uniform_int_distribution<int> d20(1, 20);
+  const int roll = d20(rng_);
+  const std::optional<Token> updated = state_.DeathSave(command.id, roll);
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "не удалось бросить спасбросок"};
+  }
+  std::ostringstream text;
+  text << name << ": спасбросок от смерти " << roll;
+  if (roll == 20) {
+    text << " — критический успех, 1 HP";
+  } else if (roll >= 10) {
+    text << " — успех (" << updated->death_save_successes << "/3)";
+    if (updated->death_save_successes >= 3) {
+      text << ", стабилен";
+    }
+  } else {
+    text << " — провал (" << updated->death_save_failures << "/3)";
+    if (updated->death_save_failures >= 3) {
+      text << ", персонаж погиб";
+    }
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = AuthorName(actor),
+                      .text = text.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
   return outcome;
 }
 
