@@ -129,6 +129,9 @@ class App {
   auto SaveCampaign() -> void;
   // Сохраняет мир хоста в активную сцену кампании.
   auto StoreActiveScene() -> void;
+  // Изменение мира: кампания уйдёт на диск после kAutosaveDelay.
+  auto MarkCampaignDirty() -> void;
+  auto CheckAutosave() -> void;
   // Заменяет мир и пересобирает вид хоста, клиентам уходит ViewUpdated.
   auto ResetWorld(GameSnapshot snapshot) -> void;
   auto BroadcastWorld() -> void;
@@ -212,6 +215,9 @@ class App {
 
   bool chat_active_ = false;
   std::string chat_input_;
+
+  bool campaign_dirty_ = false;
+  std::chrono::steady_clock::time_point campaign_changed_at_;
 
   bool help_active_ = false;
   int log_scroll_ = 0;

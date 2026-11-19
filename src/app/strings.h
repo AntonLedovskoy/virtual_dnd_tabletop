@@ -100,6 +100,8 @@ inline constexpr std::string_view kPlayerName = "Имя";
 inline constexpr std::string_view kPassword = "Пароль";
 inline constexpr std::string_view kPasswordOptional = "Пароль (необязательно)";
 inline constexpr std::string_view kHostAddress = "Адрес для друзей:";
+inline constexpr std::string_view kCampaignScene = "Активная сцена: ";
+inline constexpr std::string_view kCampaignSceneCount = "Сцен в кампании: ";
 inline constexpr std::string_view kNoAddress = "IP не определён";
 inline constexpr std::string_view kFirewallHint =
     "Откройте TCP-порт в Windows Firewall и на роутере. "

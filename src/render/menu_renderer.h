@@ -29,6 +29,9 @@ struct MenuState {
   std::string password;
   std::string status;
   bool busy = false;
+  // Активная сцена кампании для вкладки хоста.
+  std::string scene_name;
+  std::size_t scene_count = 0;
 };
 
 struct MenuLayout {

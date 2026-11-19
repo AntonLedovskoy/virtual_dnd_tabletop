@@ -42,6 +42,8 @@ constexpr int kMapHeight = 12;
 constexpr int kSightRadius = 6;
 constexpr float kFontSize = 16.0F;
 constexpr std::chrono::seconds kReconnectDelay{2};
+// Пауза после изменения мира: серия ходов не должна писать файл каждый кадр.
+constexpr std::chrono::seconds kAutosaveDelay{8};
 constexpr std::size_t kMaxChatInput = 200;
 
 constexpr TokenId kHeroId = 1;
@@ -1927,6 +1929,15 @@ auto App::ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void {
     view_.AddLocalLine(std::string(strings::kRejected) + outcome.reject_reason);
     return;
   }
+  // Чат и броски приходят как LogLineAdded: мир они не меняют, автосейв не
+  // нужен. Всё остальное — движение, бой, листы — меняет сцену.
+  const bool world_changed =
+      std::ranges::any_of(outcome.events, [](const Event& event) -> bool {
+        return !std::holds_alternative<LogLineAdded>(event);
+      });
+  if (world_changed) {
+    MarkCampaignDirty();
+  }
   for (const Event& event : outcome.events) {
     // Вид DM уже полный: ему нужны только перемещения токенов и строки лога.
     // Игроки дополнительно получают обновления вида и туман.
@@ -2129,6 +2140,35 @@ auto App::LoadGame() -> void {
 auto App::SaveCampaign() -> void {
   if (!WriteCampaign(campaign_, CampaignPath())) {
     SDL_Log("campaign save failed");
+    return;
+  }
+  campaign_dirty_ = false;
+}
+
+auto App::MarkCampaignDirty() -> void {
+  // Отсчёт идёт от первого несохранённого изменения: иначе непрерывные ходы
+  // отодвигали бы автосейв до бесконечности.
+  if (!campaign_dirty_) {
+    campaign_dirty_ = true;
+    campaign_changed_at_ = std::chrono::steady_clock::now();
+  }
+}
+
+auto App::CheckAutosave() -> void {
+  if (!campaign_dirty_ || options_.mode != AppMode::kHost || !in_game_) {
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (now - campaign_changed_at_ < kAutosaveDelay) {
+    return;
+  }
+  StoreActiveScene();
+  SaveCampaign();
+  if (campaign_dirty_) {
+    // Запись не удалась: не долбим диск каждый кадр, повторим позже.
+    campaign_changed_at_ = now;
+  } else {
+    SDL_Log("campaign autosaved");
   }
 }
 
@@ -2340,8 +2380,13 @@ auto App::Iterate() -> void {
     PumpHost();
   }
   SyncLogScroll();
+  CheckAutosave();
 
   if (!in_game_) {
+    menu_.scene_count = campaign_.scenes.size();
+    menu_.scene_name = campaign_.active < campaign_.scenes.size()
+                           ? campaign_.scenes[campaign_.active].name
+                           : std::string{};
     DrawMenu(renderer_, text_.get(), menu_, local_addresses_);
     SDL_RenderPresent(renderer_);
     return;

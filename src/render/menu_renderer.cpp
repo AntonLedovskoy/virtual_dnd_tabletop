@@ -153,6 +153,16 @@ auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
     DrawField(renderer, text, layout.password_field,
               std::string(strings::kPasswordOptional), state.password,
               state.active_field == MenuField::kPassword, true);
+    // Что именно начнётся по кнопке: имя активной сцены и размер кампании.
+    const std::string scene = state.scene_name.empty() ? "—" : state.scene_name;
+    text->Draw(std::string(strings::kCampaignScene) + scene, panel_x + 40.0F,
+               layout.password_field.y + layout.password_field.h + 10.0F, kText,
+               field_width);
+    text->Draw(std::string(strings::kCampaignSceneCount) +
+                   std::to_string(state.scene_count),
+               panel_x + 40.0F,
+               layout.password_field.y + layout.password_field.h + 32.0F, kHint,
+               field_width);
   } else if (state.tab == MenuTab::kJoin) {
     DrawField(renderer, text, layout.address_field,
               std::string(strings::kAddress), state.address,
