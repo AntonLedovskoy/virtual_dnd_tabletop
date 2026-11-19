@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/command.h"
@@ -70,6 +71,8 @@ class GameState {
       -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenCombat(TokenId id,
                                        std::vector<Condition> conditions)
+      -> std::optional<Token>;
+  [[nodiscard]] auto RemoveTokenCondition(TokenId id, std::string_view name)
       -> std::optional<Token>;
 
   // Добавляет к израсходованному запасу движения токена steps клеток.

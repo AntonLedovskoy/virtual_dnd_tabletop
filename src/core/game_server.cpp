@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "core/clock.h"
+#include "core/conditions.h"
 #include "core/dice.h"
 #include "core/units.h"
 
@@ -417,6 +418,11 @@ auto GameServer::HandleDamage(const DamageToken& command,
   const std::string name = token->name;
   const int temp_before = token->temp_hp;
   const int hp_before = token->hp;
+  const int save_bonus = token->save_bonus;
+  const bool concentrating = std::ranges::any_of(
+      token->conditions, [](const Condition& condition) -> bool {
+        return condition.name == kConcentration;
+      });
   const std::optional<Token> updated =
       state_.DamageToken(command.id, command.amount);
   if (!updated.has_value()) {
@@ -439,6 +445,29 @@ auto GameServer::HandleDamage(const DamageToken& command,
                       .text = text.str(),
                       .timestamp = CurrentTimeSeconds()},
   });
+  if (concentrating) {
+    // Проверка концентрации: d20 + бонус спасброска против 10 или половины
+    // полученного урона. Провал снимает состояние «концентрация».
+    const int dc = std::max(10, command.amount / 2);
+    std::uniform_int_distribution<int> d20(1, 20);
+    const int roll = d20(rng_) + save_bonus;
+    std::ostringstream check;
+    check << name << ": проверка концентрации " << roll << " против " << dc;
+    if (roll < dc) {
+      check << " — сорвана";
+      if (std::optional<Token> without =
+              state_.RemoveTokenCondition(command.id, kConcentration)) {
+        outcome.events.emplace_back(TokenUpdated{.token = std::move(*without)});
+      }
+    } else {
+      check << " — удержана";
+    }
+    outcome.events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = AuthorName(actor),
+                        .text = check.str(),
+                        .timestamp = CurrentTimeSeconds()},
+    });
+  }
   return outcome;
 }
 

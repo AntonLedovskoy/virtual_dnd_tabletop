@@ -268,6 +268,16 @@ auto GameState::UpdateTokenCombat(TokenId id, std::vector<Condition> conditions)
   return *token;
 }
 
+auto GameState::RemoveTokenCondition(TokenId id, std::string_view name)
+    -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  RemoveCondition(*token, name);
+  return *token;
+}
+
 auto GameState::SpendMovement(TokenId id, int steps) -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {

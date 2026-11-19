@@ -579,6 +579,47 @@ auto TestDamageHealRest() -> void {
          "long rest restores hp and clears conditions");
 }
 
+auto TestConcentration() -> void {
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "calm",
+                         .owner = "alice",
+                         .save_bonus = 100,
+                         .conditions = {dnd::Condition{"концентрация"}},
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "shaken",
+                         .owner = "bob",
+                         .save_bonus = -100,
+                         .conditions = {dnd::Condition{"концентрация"}},
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 2)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 6, 9);
+
+  Expect(
+      server
+          .HandleCommand(dnd::DamageToken{.id = 1, .amount = 7}, "alice", false)
+          .accepted,
+      "damage with concentration is accepted");
+  Expect(TokenOf(server.State(), 1).conditions.size() == 1,
+         "a successful save keeps concentration");
+
+  Expect(
+      server.HandleCommand(dnd::DamageToken{.id = 2, .amount = 7}, "bob", false)
+          .accepted,
+      "damage with concentration is accepted");
+  Expect(TokenOf(server.State(), 2).conditions.empty(),
+         "a failed concentration save removes the condition");
+}
+
 auto TestConditionDurationAndInitiative() -> void {
   const dnd::GridMap map(8, 8);
   const dnd::GameSnapshot snapshot{
@@ -2031,6 +2072,7 @@ auto main() -> int {
     TestOwnership();
     TestClaimAndTokenAdmin();
     TestDamageHealRest();
+    TestConcentration();
     TestConditionDurationAndInitiative();
     TestDiceExpression();
     TestBestiary();

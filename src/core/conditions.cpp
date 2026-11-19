@@ -14,7 +14,7 @@ auto DefaultConditions() -> const std::vector<std::string>& {
       "опутан",
       "оглушён",
       std::string(kUnconscious),
-      "концентрация",
+      std::string(kConcentration),
   };
   return kConditions;
 }

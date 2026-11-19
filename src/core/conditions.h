@@ -8,6 +8,7 @@ namespace dnd {
 
 // Автоматическое состояние при нуле HP; его ставит и снимает сервер.
 inline constexpr std::string_view kUnconscious = "без сознания";
+inline constexpr std::string_view kConcentration = "концентрация";
 
 // Сколько ходов действует состояние, включённое в панели K.
 inline constexpr int kDefaultConditionRounds = 10;
