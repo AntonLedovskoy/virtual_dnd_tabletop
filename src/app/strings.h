@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string_view>
 
 namespace dnd::strings {
@@ -27,14 +28,14 @@ inline constexpr std::string_view kDmCommandHint =
     "/rename имя | /owner имя | /maxhp N | /kick имя";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
-    "Enter — чат | /roll d20+5 | A атака | S спасбросок | B бестиарий | "
-    "F шаблон | K состояния | L лист | M дальность | Alt+ЛКМ линейка | "
-    "Tab сцены | P персонаж, N монстр, Del удалить, +/- HP, [ ] иниц., "
-    "T бой, G ход";
+    "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
+    "B бестиарий | F шаблон | K состояния | L лист | M дальность | "
+    "Alt+ЛКМ линейка | Tab сцены | P персонаж, N монстр, Del удалить, "
+    "+/- HP, [ ] иниц., T бой, G ход";
 inline constexpr std::string_view kChatHintPlayer =
-    "Enter — чат | /roll d20+5 | A атака | S спасбросок | C забрать | "
-    "R освободить | K состояния | L лист | M дальность | Alt+ЛКМ линейка | "
-    "V цвет";
+    "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
+    "C забрать | R освободить | K состояния | L лист | M дальность | "
+    "Alt+ЛКМ линейка | V цвет";
 inline constexpr std::string_view kAoeHint =
     "F — выйти | ЛКМ/курсор — место | ←/→ поворот | ↑/↓ размер | "
     "1–3 вид | , . ширина | Esc убрать";
@@ -48,6 +49,44 @@ inline constexpr std::string_view kConnectionLost =
     "Связь потеряна, переподключение...";
 inline constexpr std::string_view kConnectionRestored =
     "Связь с хостом восстановлена";
+inline constexpr std::string_view kLogScrolledPrefix = "Прокручено вверх: ";
+inline constexpr std::string_view kLogScrolledSuffix = " стр. | End — к новым";
+
+// Справка F1: общая часть и набор, зависящий от роли.
+inline constexpr std::string_view kHelpTitle = "Справка по клавишам";
+inline constexpr std::string_view kHelpCommonTitle = "Для всех";
+inline constexpr std::string_view kHelpDmTitle = "Мастер (DM)";
+inline constexpr std::string_view kHelpPlayerTitle = "Игрок";
+inline constexpr std::string_view kHelpClose = "F1 или Esc — закрыть";
+inline constexpr std::array<std::string_view, 12> kHelpCommon = {
+    "Enter — чат и команды",
+    "F1 — справка, Esc — закрыть",
+    "ЛКМ — выбрать токен, перетащить",
+    "СКМ — панорама, колесо — зум",
+    "Home — центрировать карту",
+    "Alt+ЛКМ — линейка расстояний",
+    "PgUp / PgDn — лог, End — к новым",
+    "Колесо над логом — прокрутка лога",
+    "A / Shift+A — атака / с преимуществом",
+    "S — спасбросок, I — инициатива",
+    "K — состояния, L — лист",
+    "M — дальность хода, V — цвет",
+};
+inline constexpr std::array<std::string_view, 2> kHelpPlayer = {
+    "C — забрать персонажа под курсором",
+    "R — освободить своего персонажа",
+};
+inline constexpr std::array<std::string_view, 9> kHelpDm = {
+    "P / N — персонаж / монстр под курсором",
+    "Del — удалить выбранный токен",
+    "+ / - — HP, [ / ] — инициатива",
+    "B — бестиарий",
+    "Tab — сцены кампании",
+    "T — бой, G — следующий ход",
+    "F — шаблон области, Shift+F — убрать",
+    "F5 — сохранить, F9 — загрузить",
+    "Команды: /rename, /owner, /maxhp, /kick",
+};
 
 inline constexpr std::string_view kMenuTitle = "DND";
 inline constexpr std::string_view kMenuSubtitle = "Виртуальный стол";

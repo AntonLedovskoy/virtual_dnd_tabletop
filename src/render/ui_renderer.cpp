@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <ctime>
 #include <ranges>
+#include <span>
 #include <string>
 
 #include "app/strings.h"
@@ -35,7 +36,6 @@ constexpr SDL_Color kHintText{
     .r = 0x80, .g = 0x80, .b = 0x90, .a = SDL_ALPHA_OPAQUE};
 
 constexpr int kPadding = 12;
-constexpr int kVisibleLines = 7;
 constexpr std::size_t kVisibleSceneRows = 9;
 constexpr int kLineSpacing = 4;
 
@@ -75,14 +75,14 @@ auto FormatLogTime(std::uint32_t timestamp) -> std::string {
 
 auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                   const std::vector<LogLine>& lines, bool typing,
-                  const std::string& input, bool is_dm) -> void {
+                  const std::string& input, bool is_dm, int scroll) -> float {
   int window_width = 0;
   int window_height = 0;
   if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
-    return;
+    return 0.0F;
   }
   if (window_width <= 0 || window_height <= 0) {
-    return;
+    return 0.0F;
   }
 
   const auto max_text_width =
@@ -98,7 +98,7 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
     hint_line_count =
         std::max(1, static_cast<int>(std::ceil(hint_height / row_height)));
   }
-  const int content_height = (kVisibleLines * (line_height + kLineSpacing)) +
+  const int content_height = (kLogVisibleLines * (line_height + kLineSpacing)) +
                              (hint_line_count * (line_height + kLineSpacing));
   const int panel_height = content_height + (2 * kPadding);
   const auto panel_top = static_cast<float>(window_height - panel_height);
@@ -117,11 +117,14 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                  panel_top);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-  const int first_line =
-      std::max<int>(0, static_cast<int>(lines.size()) - kVisibleLines);
+  const int total = static_cast<int>(lines.size());
+  const int max_scroll = std::max(0, total - kLogVisibleLines);
+  const int offset = std::clamp(scroll, 0, max_scroll);
+  const int first_line = std::max(0, total - kLogVisibleLines - offset);
+  const int last_line = std::min(total, first_line + kLogVisibleLines);
   auto y = panel_top + static_cast<float>(kPadding);
-  for (auto i = static_cast<std::size_t>(first_line); i < lines.size(); ++i) {
-    const LogLine& line = lines[i];
+  for (int i = first_line; i < last_line; ++i) {
+    const LogLine& line = lines[static_cast<std::size_t>(i)];
     const auto left = static_cast<float>(kPadding);
     auto x = left;
     const std::string time = FormatLogTime(line.timestamp);
@@ -147,16 +150,23 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
 
   const float input_y =
       panel_top + static_cast<float>(kPadding) +
-      static_cast<float>(kVisibleLines * (line_height + kLineSpacing));
+      static_cast<float>(kLogVisibleLines * (line_height + kLineSpacing));
   if (text != nullptr) {
     if (typing) {
       text->Draw("> " + input + "_", static_cast<float>(kPadding), input_y,
                  kInputText, max_text_width);
+    } else if (offset > 0) {
+      const std::string scrolled = std::string(strings::kLogScrolledPrefix) +
+                                   std::to_string(offset) +
+                                   std::string(strings::kLogScrolledSuffix);
+      text->Draw(scrolled, static_cast<float>(kPadding), input_y, kHintText,
+                 max_text_width);
     } else {
       text->DrawWrapped(hint_text, static_cast<float>(kPadding), input_y,
                         kHintText, max_text_width);
     }
   }
+  return panel_top;
 }
 
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
@@ -651,6 +661,66 @@ auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,
   text->DrawCentered(
       message, panel,
       SDL_Color{.r = 0xff, .g = 0xd0, .b = 0xd0, .a = SDL_ALPHA_OPAQUE});
+}
+
+auto DrawHelpPanel(SDL_Renderer* renderer, TextRenderer* text, bool is_dm)
+    -> void {
+  if (renderer == nullptr || text == nullptr) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+    return;
+  }
+  const std::span<const std::string_view> role_lines =
+      is_dm ? std::span<const std::string_view>(strings::kHelpDm)
+            : std::span<const std::string_view>(strings::kHelpPlayer);
+  const std::size_t rows =
+      std::max(strings::kHelpCommon.size(), role_lines.size());
+
+  constexpr float padding = 24.0F;
+  constexpr float column_gap = 28.0F;
+  const float line_height = text->LineHeight() + 6.0F;
+  const float width =
+      std::clamp(static_cast<float>(window_width) - 40.0F, 520.0F, 980.0F);
+  const float height =
+      (2.0F * padding) + (line_height * static_cast<float>(rows + 3));
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const float left = x + padding;
+  const float column_width = (width - (2.0F * padding) - column_gap) / 2.0F;
+  const float right = left + column_width + column_gap;
+  float top = y + padding;
+  text->Draw(strings::kHelpTitle, left, top, kInputText,
+             width - (2.0F * padding));
+  top += line_height;
+  text->Draw(strings::kHelpCommonTitle, left, top, kAuthorText, column_width);
+  text->Draw(is_dm ? strings::kHelpDmTitle : strings::kHelpPlayerTitle, right,
+             top, kAuthorText, column_width);
+  top += line_height;
+  for (std::size_t i = 0; i < rows; ++i) {
+    const float row_y = top + (static_cast<float>(i) * line_height);
+    if (i < strings::kHelpCommon.size()) {
+      text->Draw(std::string("• ") + std::string(strings::kHelpCommon[i]), left,
+                 row_y, kLogText, column_width);
+    }
+    if (i < role_lines.size()) {
+      text->Draw(std::string("• ") + std::string(role_lines[i]), right, row_y,
+                 kLogText, column_width);
+    }
+  }
+  const float hint_y = y + height - padding - line_height;
+  text->Draw(strings::kHelpClose, left, hint_y, kHintText,
+             width - (2.0F * padding));
 }
 
 }  // namespace dnd

@@ -84,6 +84,10 @@ class App {
   // После полной пересинхронизации выбранный токен мог исчезнуть: сбрасываем
   // выделение и панели, привязанные к пропавшим токенам.
   auto PruneStaleViewState() -> void;
+  // Прокрутка лога: положительное значение — вверх, к старым строкам.
+  auto ScrollLog(int lines) -> void;
+  // Держит прокрученный лог на тех же строках, когда приходят новые.
+  auto SyncLogScroll() -> void;
   auto ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void;
   auto HandleMouseDown(const SDL_MouseButtonEvent& button) -> void;
   auto HandleMouseUp(const SDL_MouseButtonEvent& button) -> void;
@@ -208,6 +212,12 @@ class App {
 
   bool chat_active_ = false;
   std::string chat_input_;
+
+  bool help_active_ = false;
+  int log_scroll_ = 0;
+  std::size_t log_count_ = 0;
+  // Верхняя граница панели лога в прошлом кадре; 0 — панели не было.
+  float log_top_ = 0.0F;
 
   TokenId selected_id_ = 0;
   bool dragging_ = false;

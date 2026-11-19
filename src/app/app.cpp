@@ -361,6 +361,10 @@ auto App::StartHost() -> bool {
   drag_target_.reset();
   chat_active_ = false;
   chat_input_.clear();
+  help_active_ = false;
+  log_scroll_ = 0;
+  log_count_ = 0;
+  log_top_ = 0.0F;
   players_.clear();
   players_.emplace_back("DM (хост)");
   local_addresses_ = LocalIpv4Addresses();
@@ -414,6 +418,10 @@ auto App::StartClient() -> bool {
   client_connecting_ = true;
   client_connected_ = false;
   in_game_ = false;
+  help_active_ = false;
+  log_scroll_ = 0;
+  log_count_ = 0;
+  log_top_ = 0.0F;
   players_.clear();
   const auto now = std::chrono::steady_clock::now();
   next_reconnect_ = now + kReconnectDelay;
@@ -436,6 +444,10 @@ auto App::StartEditor() -> void {
   panning_ = false;
   chat_active_ = false;
   chat_input_.clear();
+  help_active_ = false;
+  log_scroll_ = 0;
+  log_count_ = 0;
+  log_top_ = 0.0F;
   CenterCamera();
 }
 
@@ -678,6 +690,11 @@ auto App::HandleWheel(const SDL_MouseWheelEvent& wheel) -> void {
   if (wheel.y == 0.0F) {
     return;
   }
+  // Колесо над логом листает историю, а не приближает карту.
+  if (in_game_ && log_top_ > 0.0F && wheel.mouse_y >= log_top_) {
+    ScrollLog(static_cast<int>(wheel.y * 3.0F));
+    return;
+  }
   const float old_size = cell_size_;
   const float world_x = (wheel.mouse_x - camera_x_) / old_size;
   const float world_y = (wheel.mouse_y - camera_y_) / old_size;
@@ -870,6 +887,24 @@ auto App::LoadFont() -> void {
 }
 
 auto App::HandleEvent(const SDL_Event& event) -> void {
+  // Справку ловим раньше остальных панелей: F1 должен открываться всегда,
+  // даже поверх листа персонажа или строки чата.
+  if (in_game_ && !in_editor_ && event.type == SDL_EVENT_KEY_DOWN &&
+      event.key.key == SDLK_F1 && !event.key.repeat) {
+    help_active_ = !help_active_;
+    if (help_active_) {
+      chat_active_ = false;
+      chat_input_.clear();
+    }
+    return;
+  }
+  if (help_active_ && in_game_ && !in_editor_) {
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
+      help_active_ = false;
+    }
+    return;
+  }
+
   if (sheet_active_) {
     switch (event.type) {
       case SDL_EVENT_TEXT_INPUT:
@@ -1035,6 +1070,15 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
   }
 
   switch (key.key) {
+    case SDLK_PAGEUP:
+      ScrollLog(kLogVisibleLines);
+      break;
+    case SDLK_PAGEDOWN:
+      ScrollLog(-kLogVisibleLines);
+      break;
+    case SDLK_END:
+      log_scroll_ = 0;
+      break;
     case SDLK_F5:
       SaveGame();
       break;
@@ -2030,6 +2074,26 @@ auto App::PruneStaleViewState() -> void {
   }
 }
 
+auto App::ScrollLog(int lines) -> void {
+  const int total = static_cast<int>(view_.Log().size());
+  const int max_scroll = std::max(0, total - kLogVisibleLines);
+  log_scroll_ = std::clamp(log_scroll_ + lines, 0, max_scroll);
+  log_count_ = view_.Log().size();
+}
+
+auto App::SyncLogScroll() -> void {
+  const std::size_t size = view_.Log().size();
+  // Пока пользователь читает старые строки, новые не должны сдвигать текст:
+  // увеличиваем отступ ровно на столько, на сколько вырос лог.
+  if (log_scroll_ > 0 && size > log_count_) {
+    log_scroll_ += static_cast<int>(size - log_count_);
+  }
+  log_count_ = size;
+  const int total = static_cast<int>(size);
+  const int max_scroll = std::max(0, total - kLogVisibleLines);
+  log_scroll_ = std::clamp(log_scroll_, 0, max_scroll);
+}
+
 auto App::SaveGame() -> void {
   if (options_.mode == AppMode::kClient) {
     SDL_Log("saving is only available on the host");
@@ -2275,6 +2339,7 @@ auto App::Iterate() -> void {
   } else if (in_game_) {
     PumpHost();
   }
+  SyncLogScroll();
 
   if (!in_game_) {
     DrawMenu(renderer_, text_.get(), menu_, local_addresses_);
@@ -2374,8 +2439,9 @@ auto App::Iterate() -> void {
     DrawCellHighlight(renderer_, *drag_target_, cell_size_, camera_x_,
                       camera_y_);
   }
-  DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_active_, chat_input_,
-               options_.mode == AppMode::kHost);
+  log_top_ =
+      DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_active_,
+                   chat_input_, options_.mode == AppMode::kHost, log_scroll_);
   if (sheet_active_) {
     const Token* sheet_token = nullptr;
     for (const Token& token : view_.Tokens()) {
@@ -2423,6 +2489,10 @@ auto App::Iterate() -> void {
   // нужен, чтобы он не принял замороженный стол за настоящий.
   if (is_client && !client_connected_) {
     DrawConnectionBanner(renderer_, text_.get(), strings::kConnectionLost);
+  }
+  // Справка рисуется последней и перекрывает все остальные панели.
+  if (help_active_) {
+    DrawHelpPanel(renderer_, text_.get(), is_dm);
   }
   SDL_RenderPresent(renderer_);
 }

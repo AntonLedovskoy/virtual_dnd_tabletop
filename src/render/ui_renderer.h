@@ -15,10 +15,15 @@ namespace dnd {
 
 class TextRenderer;
 
-// Нижняя панель с общим логом стола и строкой ввода чата.
+// Сколько строк лога помещается в нижнюю панель.
+inline constexpr int kLogVisibleLines = 7;
+
+// Нижняя панель с общим логом стола и строкой ввода чата. scroll — на
+// сколько строк прокручено вверх от самых свежих. Возвращает верхнюю границу
+// панели или 0, если она не нарисована.
 auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                   const std::vector<LogLine>& lines, bool typing,
-                  const std::string& input, bool is_dm) -> void;
+                  const std::string& input, bool is_dm, int scroll) -> float;
 
 // Порядок инициативы справа сверху для видимых клиенту токенов.
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
@@ -79,5 +84,9 @@ auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
 // Баннер поверх стола: связь с хостом потеряна, идёт переподключение.
 auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,
                           std::string_view message) -> void;
+
+// Модальная справка по клавишам: общая часть и набор роли.
+auto DrawHelpPanel(SDL_Renderer* renderer, TextRenderer* text, bool is_dm)
+    -> void;
 
 }  // namespace dnd
