@@ -620,6 +620,62 @@ auto TestConcentration() -> void {
          "a failed concentration save removes the condition");
 }
 
+auto TestAoeDamage() -> void {
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "brute",
+                         .owner = "dm",
+                         .hp = 50,
+                         .max_hp = 50,
+                         .save_bonus = -100,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "rogue",
+                         .owner = "dm",
+                         .hp = 50,
+                         .max_hp = 50,
+                         .save_bonus = 100,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(2, 2)},
+              dnd::Token{.id = 3,
+                         .name = "far",
+                         .owner = "dm",
+                         .hp = 50,
+                         .max_hp = 50,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(6, 6)},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameServer server(snapshot, 6, 5);
+  Expect(server
+             .HandleCommand(dnd::SetAoe{.aoe =
+                                            dnd::AoeTemplate{
+                                                .shape = dnd::AoeShape::kCircle,
+                                                .origin = CellAt(1, 1),
+                                                .radius = 2,
+                                            }},
+                            "", true)
+             .accepted,
+         "the DM places an area template");
+  Expect(server
+             .HandleCommand(dnd::AoeDamage{.expression = "2d2", .save_dc = 15},
+                            "", true)
+             .accepted,
+         "the DM damages tokens inside the template");
+  const dnd::Token brute = TokenOf(server.State(), 1);
+  const dnd::Token rogue = TokenOf(server.State(), 2);
+  Expect(brute.hp < rogue.hp, "a failed save takes full damage");
+  Expect(rogue.hp < 50, "a successful save still takes half damage");
+  Expect(TokenOf(server.State(), 3).hp == 50,
+         "tokens outside the template are untouched");
+}
+
 auto TestConditionDurationAndInitiative() -> void {
   const dnd::GridMap map(8, 8);
   const dnd::GameSnapshot snapshot{
@@ -1862,6 +1918,19 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::HealToken>(*heal_decoded).amount == 3,
          "heal command survives serialization");
 
+  const dnd::Command aoe_damage{
+      dnd::AoeDamage{.expression = "2d6", .save_dc = 15}};
+  const std::vector<std::uint8_t> aoe_damage_bytes =
+      dnd::EncodeCommand(aoe_damage);
+  const std::optional<dnd::Command> aoe_damage_decoded =
+      dnd::DecodeCommand(aoe_damage_bytes.data(), aoe_damage_bytes.size());
+  Expect(
+      aoe_damage_decoded.has_value() &&
+          std::holds_alternative<dnd::AoeDamage>(*aoe_damage_decoded) &&
+          std::get<dnd::AoeDamage>(*aoe_damage_decoded).expression == "2d6" &&
+          std::get<dnd::AoeDamage>(*aoe_damage_decoded).save_dc == 15,
+      "aoe damage command survives serialization");
+
   const dnd::Command rest{dnd::RestParty{.long_rest = true}};
   const std::vector<std::uint8_t> rest_bytes = dnd::EncodeCommand(rest);
   const std::optional<dnd::Command> rest_decoded =
@@ -2073,6 +2142,7 @@ auto main() -> int {
     TestClaimAndTokenAdmin();
     TestDamageHealRest();
     TestConcentration();
+    TestAoeDamage();
     TestConditionDurationAndInitiative();
     TestDiceExpression();
     TestBestiary();

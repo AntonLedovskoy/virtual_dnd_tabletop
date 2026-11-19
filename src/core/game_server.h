@@ -87,6 +87,8 @@ class GameServer {
       -> CommandOutcome;
   [[nodiscard]] auto HandleRest(const RestParty& command, bool can_control_all)
       -> CommandOutcome;
+  [[nodiscard]] auto HandleAoeDamage(const AoeDamage& command,
+                                     bool can_control_all) -> CommandOutcome;
   [[nodiscard]] auto HandleSetInitiative(const SetInitiative& command,
                                          const std::string& actor,
                                          bool can_control_all)

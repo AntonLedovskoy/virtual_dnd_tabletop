@@ -1037,6 +1037,13 @@ auto App::HandleEvent(const SDL_Event& event) -> void {
 }
 
 auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
+  // Enter в режиме шаблона сразу готовит команду урона по области.
+  if ((key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) && !chat_active_ &&
+      aoe_mode_ && options_.mode == AppMode::kHost) {
+    chat_active_ = true;
+    chat_input_ = "/aoe ";
+    return;
+  }
   if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
     if (chat_active_) {
       SubmitChat();
@@ -1865,6 +1872,28 @@ auto App::SubmitChat() -> void {
     } else {
       SwitchSceneByName(name);
     }
+    return;
+  }
+
+  if (text.starts_with("/aoe ")) {
+    if (options_.mode != AppMode::kHost) {
+      view_.AddLocalLine("Урон по области наносит только DM");
+      return;
+    }
+    const std::string rest = text.substr(5);
+    const auto space = rest.rfind(' ');
+    int save_dc = 0;
+    DiceExpression parsed;
+    if (space == std::string::npos ||
+        !ParseDiceExpression(rest.substr(0, space), parsed) ||
+        !ParseNumber(std::string_view(rest).substr(space + 1), save_dc) ||
+        save_dc < 1 || save_dc > 100) {
+      view_.AddLocalLine(
+          "Использование: /aoe 2d6 15 (урон и сложность спасброска)");
+      return;
+    }
+    SendCommand(
+        AoeDamage{.expression = rest.substr(0, space), .save_dc = save_dc});
     return;
   }
 

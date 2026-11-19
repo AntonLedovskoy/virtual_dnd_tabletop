@@ -134,6 +134,13 @@ struct RestParty {
   bool long_rest = false;
 };
 
+// Только DM: урон по токенам под текущим шаблоном области. Спасбросок
+// против save_dc уменьшает урон вдвое.
+struct AoeDamage {
+  std::string expression;
+  int save_dc = 15;
+};
+
 // Владелец или DM: заменить список состояний токена.
 struct UpdateTokenCombat {
   TokenId id = 0;
@@ -156,6 +163,6 @@ using Command =
                  ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
                  SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
                  StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken,
-                 HealToken, RestParty>;
+                 HealToken, RestParty, AoeDamage>;
 
 }  // namespace dnd

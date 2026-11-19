@@ -25,7 +25,7 @@ inline constexpr std::string_view kYourToken = "это ваш персонаж";
 inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, N — монстр, B — бестиарий, Del — удалить";
 inline constexpr std::string_view kDmCommandHint =
-    "/rename | /owner | /maxhp | /damage | /heal | /rest | /kick";
+    "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
@@ -77,7 +77,7 @@ inline constexpr std::array<std::string_view, 2> kHelpPlayer = {
     "C — забрать персонажа под курсором",
     "R — освободить своего персонажа",
 };
-inline constexpr std::array<std::string_view, 10> kHelpDm = {
+inline constexpr std::array<std::string_view, 11> kHelpDm = {
     "P / N — персонаж / монстр под курсором",
     "Del — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -88,6 +88,7 @@ inline constexpr std::array<std::string_view, 10> kHelpDm = {
     "F5 — сохранить, F9 — загрузить",
     "Команды: /rename, /owner, /maxhp, /kick",
     "/rest — короткий отдых, /longrest — длинный",
+    "Enter в режиме F и /aoe 2d6 15 — урон по шаблону",
 };
 
 inline constexpr std::string_view kMenuTitle = "DND";

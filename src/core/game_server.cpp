@@ -124,6 +124,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleHeal(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, RestParty>) {
           return HandleRest(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, AoeDamage>) {
+          return HandleAoeDamage(cmd, can_control_all);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -528,6 +530,65 @@ auto GameServer::HandleRest(const RestParty& command, bool can_control_all)
                               : "Короткий отдых: партия восстановила силы",
                   .timestamp = CurrentTimeSeconds()},
   });
+  return outcome;
+}
+
+auto GameServer::HandleAoeDamage(const AoeDamage& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "урон по области наносит только DM"};
+  }
+  const AoeTemplate& aoe = state_.Aoe();
+  if (aoe.shape == AoeShape::kNone) {
+    return CommandOutcome{.reject_reason = "сначала поставьте шаблон области"};
+  }
+  DiceExpression expression;
+  if (command.expression.empty() ||
+      command.expression.size() > kMaxDamageExpression ||
+      !ParseDiceExpression(command.expression, expression)) {
+    return CommandOutcome{.reject_reason = "некорректное выражение урона"};
+  }
+  if (command.save_dc < 1 || command.save_dc > 100) {
+    return CommandOutcome{.reject_reason = "некорректная сложность спасброска"};
+  }
+
+  const DiceRollResult result = RollDiceExpression(expression, rng_);
+  const int total_damage = std::max(0, result.total);
+  const std::vector<Cell> cells = AoeCells(state_.Map(), aoe);
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  std::ostringstream header;
+  header << "Область: " << command.expression << " = " << total_damage
+         << ", спасбросок " << command.save_dc;
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = "DM",
+                      .text = header.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
+
+  std::uniform_int_distribution<int> d20(1, 20);
+  for (const Token& token : state_.Tokens()) {
+    if (std::ranges::find(cells, token.cell) == cells.end()) {
+      continue;
+    }
+    const std::string name = token.name;
+    const int roll = d20(rng_) + token.save_bonus;
+    const bool success = roll >= command.save_dc;
+    const int damage = success ? total_damage / 2 : total_damage;
+    if (damage > 0) {
+      if (std::optional<Token> updated = state_.DamageToken(token.id, damage)) {
+        outcome.events.emplace_back(TokenUpdated{.token = std::move(*updated)});
+      }
+    }
+    std::ostringstream line;
+    line << name << ": спасбросок " << roll << " против " << command.save_dc
+         << (success ? " — успех, " : " — провал, ") << damage << " урона";
+    outcome.events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = "DM",
+                        .text = line.str(),
+                        .timestamp = CurrentTimeSeconds()},
+    });
+  }
   return outcome;
 }
 

@@ -43,6 +43,7 @@ constexpr std::uint8_t kCommandSetAoe = 20;
 constexpr std::uint8_t kCommandDamageToken = 21;
 constexpr std::uint8_t kCommandHealToken = 22;
 constexpr std::uint8_t kCommandRestParty = 23;
+constexpr std::uint8_t kCommandAoeDamage = 24;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -287,6 +288,17 @@ auto DecodeRestCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{RestParty{.long_rest = long_rest != 0}};
+}
+
+auto DecodeAoeDamageCommand(ByteReader& reader) -> std::optional<Command> {
+  std::string expression;
+  std::int32_t save_dc = 0;
+  if (!reader.String(expression, kMaxNotes) || !reader.I32(save_dc) ||
+      !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{
+      AoeDamage{.expression = std::move(expression), .save_dc = save_dc}};
 }
 
 auto DecodeStartEncounterCommand(ByteReader& reader) -> std::optional<Command> {
@@ -846,6 +858,10 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, RestParty>) {
           writer.U8(kCommandRestParty);
           writer.U8(cmd.long_rest ? 1 : 0);
+        } else if constexpr (std::is_same_v<T, AoeDamage>) {
+          writer.U8(kCommandAoeDamage);
+          writer.String(cmd.expression);
+          writer.I32(cmd.save_dc);
         }
       },
       command);
@@ -906,6 +922,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeHealCommand(reader);
     case kCommandRestParty:
       return DecodeRestCommand(reader);
+    case kCommandAoeDamage:
+      return DecodeAoeDamageCommand(reader);
     default:
       return std::nullopt;
   }
