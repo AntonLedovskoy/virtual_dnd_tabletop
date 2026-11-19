@@ -14,7 +14,6 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x43444E44;  // "DNDC" в little-endian
 constexpr std::uint32_t kMaxPayload = 256U * 1024U * 1024U;
-constexpr std::uint32_t kMaxSceneName = 64;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -42,6 +41,7 @@ auto EncodeCampaign(const Campaign& campaign) -> std::vector<std::uint8_t> {
   writer.U32(static_cast<std::uint32_t>(campaign.active));
   for (const Scene& scene : campaign.scenes) {
     writer.String(scene.name);
+    writer.String(scene.note);
     const std::vector<std::uint8_t> blob = EncodeSnapshot(scene.snapshot);
     writer.U32(static_cast<std::uint32_t>(blob.size()));
     writer.Raw(blob);
@@ -68,7 +68,8 @@ auto DecodeCampaign(const std::uint8_t* data, std::size_t size)
     Scene scene;
     std::uint32_t blob_size = 0;
     std::vector<std::uint8_t> blob;
-    if (!reader.String(scene.name, kMaxSceneName) || scene.name.empty() ||
+    if (!reader.String(scene.name, kMaxSceneNameLength) || scene.name.empty() ||
+        !reader.String(scene.note, kMaxSceneNoteLength) ||
         !reader.U32(blob_size) || blob_size == 0 ||
         !reader.Bytes(blob_size, blob)) {
       return std::nullopt;

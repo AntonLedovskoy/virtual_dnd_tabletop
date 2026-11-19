@@ -34,9 +34,11 @@ constexpr SDL_Color kInputText{
     .r = 0xff, .g = 0xff, .b = 0xff, .a = SDL_ALPHA_OPAQUE};
 constexpr SDL_Color kHintText{
     .r = 0x80, .g = 0x80, .b = 0x90, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kErrorText{
+    .r = 0xff, .g = 0x90, .b = 0x90, .a = SDL_ALPHA_OPAQUE};
 
 constexpr int kPadding = 12;
-constexpr std::size_t kVisibleSceneRows = 9;
+constexpr std::size_t kVisibleSceneRows = 6;
 constexpr int kLineSpacing = 4;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
@@ -593,9 +595,11 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
 }
 
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
-                     const std::vector<std::string>& names, std::size_t active,
-                     std::size_t selected) -> void {
-  if (renderer == nullptr || text == nullptr || names.empty()) {
+                     const std::vector<Scene>& scenes, std::size_t active,
+                     std::size_t selected, const std::string& edit_label,
+                     const std::string& edit_text, const std::string& status)
+    -> void {
+  if (renderer == nullptr || text == nullptr || scenes.empty()) {
     return;
   }
   int window_width = 0;
@@ -603,8 +607,8 @@ auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
   if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
     return;
   }
-  constexpr float width = 620.0F;
-  constexpr float height = 380.0F;
+  constexpr float width = 760.0F;
+  constexpr float height = 420.0F;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -624,28 +628,47 @@ auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
 
   // Окно прокрутки держит выбранную сцену в середине списка.
   std::size_t first = 0;
-  if (names.size() > kVisibleSceneRows) {
+  if (scenes.size() > kVisibleSceneRows) {
     first = selected > kVisibleSceneRows / 2
                 ? selected - (kVisibleSceneRows / 2)
                 : 0;
-    first = std::min(first, names.size() - kVisibleSceneRows);
+    first = std::min(first, scenes.size() - kVisibleSceneRows);
   }
+  const float name_step = text->LineHeight() + 2.0F;
+  const float note_step = text->LineHeight() + 6.0F;
   for (std::size_t row = 0; row < kVisibleSceneRows; ++row) {
     const std::size_t index = first + row;
-    if (index >= names.size()) {
+    if (index >= scenes.size()) {
       break;
     }
+    const Scene& scene = scenes[index];
     const bool is_active = index == active;
     const bool is_selected = index == selected;
     const std::string line = std::to_string(index + 1) +
                              (is_active ? ". * " : ".   ") +
-                             (is_selected ? "> " : "  ") + names[index];
+                             (is_selected ? "> " : "  ") + scene.name;
     text->Draw(line, left, cursor_y, is_selected ? kAuthorText : kLogText,
                content_width);
-    cursor_y += text->LineHeight() + 2.0F;
+    cursor_y += name_step;
+    if (!scene.note.empty()) {
+      text->Draw("    " + scene.note, left, cursor_y, kHintText, content_width);
+    }
+    cursor_y += note_step;
   }
-  text->DrawWrapped(strings::kScenesHint, left, y + height - 56.0F, kHintText,
-                    content_width);
+  const float bottom_y = y + height - 56.0F;
+  if (!edit_label.empty()) {
+    text->Draw(edit_label + edit_text + "_", left, bottom_y, kInputText,
+               content_width);
+    if (!status.empty()) {
+      text->Draw(status, left, bottom_y + text->LineHeight() + 2.0F, kErrorText,
+                 content_width);
+    }
+  } else if (!status.empty()) {
+    text->Draw(status, left, bottom_y, kErrorText, content_width);
+  } else {
+    text->DrawWrapped(strings::kScenesHint, left, bottom_y, kHintText,
+                      content_width);
+  }
 }
 
 auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,

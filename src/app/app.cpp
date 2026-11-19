@@ -199,6 +199,16 @@ auto FormatBonus(int bonus) -> std::string {
   return {};
 }
 
+auto TrimText(std::string_view text) -> std::string_view {
+  while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) {
+    text.remove_suffix(1);
+  }
+  return text;
+}
+
 auto ParsePortText(std::string_view text, std::uint16_t& port) -> bool {
   int value = 0;
   if (!ParseNumber(text, value) || value > 65535) {
@@ -948,8 +958,15 @@ auto App::HandleEvent(const SDL_Event& event) -> void {
   }
 
   if (scenes_active_) {
-    if (event.type == SDL_EVENT_KEY_DOWN) {
-      HandleScenesKeyDown(event.key);
+    switch (event.type) {
+      case SDL_EVENT_TEXT_INPUT:
+        HandleScenesTextInput(event.text.text);
+        break;
+      case SDL_EVENT_KEY_DOWN:
+        HandleScenesKeyDown(event.key);
+        break;
+      default:
+        break;
     }
     return;
   }
@@ -1864,13 +1881,16 @@ auto App::SubmitChat() -> void {
       view_.AddLocalLine(std::string(strings::kScenesDmOnly));
       return;
     }
-    const std::string name = text.size() > 7 ? text.substr(7) : std::string{};
-    if (name.empty()) {
+    const std::string_view args =
+        text.size() > 7 ? std::string_view(text).substr(7) : std::string_view{};
+    if (args.empty()) {
       OpenScenes();
-    } else if (name == "new") {
+    } else if (args == "new") {
       CreateScene();
+    } else if (args == "rename" || args.starts_with("rename ")) {
+      RenameSceneByCommand(args.substr(6));
     } else {
-      SwitchSceneByName(name);
+      SwitchSceneByName(args);
     }
     return;
   }
@@ -2350,14 +2370,19 @@ auto App::CreateScene() -> void {
   }
   StoreActiveScene();
   // Новая сцена — копия текущей: DM сразу расставляет в ней монстров.
-  Scene scene{.name = NextSceneName(campaign_),
+  std::string name = NextSceneName(campaign_);
+  if (!dnd::IsSceneNameAvailable(campaign_, name)) {
+    view_.AddLocalLine(std::string(strings::kSceneNameTaken));
+    return;
+  }
+  Scene scene{.name = std::move(name),
               .snapshot = campaign_.scenes[campaign_.active].snapshot};
-  const std::string name = scene.name;
+  const std::string display_name = scene.name;
   campaign_.scenes.push_back(std::move(scene));
   campaign_.active = campaign_.scenes.size() - 1;
   scenes_selected_ = campaign_.active;
   SaveCampaign();
-  Announce("Новая сцена: " + name);
+  Announce("Новая сцена: " + display_name);
 }
 
 auto App::DeleteActiveScene() -> void {
@@ -2389,6 +2414,9 @@ auto App::OpenScenes() -> void {
   }
   scenes_active_ = true;
   scenes_selected_ = campaign_.active;
+  scenes_edit_ = SceneEditField::kNone;
+  scenes_edit_buffer_.clear();
+  scenes_status_.clear();
   bestiary_active_ = false;
   sheet_active_ = false;
   conditions_active_ = false;
@@ -2396,9 +2424,24 @@ auto App::OpenScenes() -> void {
   chat_input_.clear();
 }
 
-auto App::CloseScenes() -> void { scenes_active_ = false; }
+auto App::CloseScenes() -> void {
+  scenes_active_ = false;
+  CancelSceneEdit();
+  scenes_status_.clear();
+}
 
 auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (scenes_edit_ != SceneEditField::kNone) {
+    if (key.key == SDLK_ESCAPE) {
+      CancelSceneEdit();
+    } else if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
+      CommitSceneEdit();
+    } else if (key.key == SDLK_BACKSPACE && !scenes_edit_buffer_.empty()) {
+      scenes_edit_buffer_.resize(PreviousCodePointStart(scenes_edit_buffer_));
+      scenes_status_.clear();
+    }
+    return;
+  }
   switch (key.key) {
     case SDLK_ESCAPE:
     case SDLK_TAB:
@@ -2421,6 +2464,12 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       SwitchScene(index);
       return;
     }
+    case SDLK_R:
+      BeginSceneEdit(SceneEditField::kName);
+      return;
+    case SDLK_E:
+      BeginSceneEdit(SceneEditField::kNote);
+      return;
     case SDLK_N:
       CreateScene();
       return;
@@ -2438,6 +2487,104 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       SwitchScene(index);
     }
   }
+}
+
+auto App::HandleScenesTextInput(const char* text) -> void {
+  if (scenes_edit_ == SceneEditField::kNone || text == nullptr) {
+    return;
+  }
+  if (scenes_edit_ignore_text_) {
+    scenes_edit_ignore_text_ = false;
+    return;
+  }
+  scenes_edit_buffer_ += text;
+  TruncateUtf8(scenes_edit_buffer_, scenes_edit_ == SceneEditField::kName
+                                        ? kMaxSceneNameLength
+                                        : kMaxSceneNoteLength);
+  scenes_status_.clear();
+}
+
+auto App::RenameSceneAt(std::size_t index, std::string name) -> bool {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
+    return false;
+  }
+  if (index >= campaign_.scenes.size()) {
+    view_.AddLocalLine(std::string(strings::kScenesEmpty));
+    return false;
+  }
+  if (name.empty()) {
+    view_.AddLocalLine(std::string(strings::kSceneNameEmpty));
+    return false;
+  }
+  TruncateUtf8(name, kMaxSceneNameLength);
+  const std::string old_name = campaign_.scenes[index].name;
+  if (!dnd::RenameScene(campaign_, index, std::move(name))) {
+    view_.AddLocalLine(std::string(strings::kSceneNameTaken));
+    return false;
+  }
+  scenes_selected_ = index;
+  SaveCampaign();
+  Announce("Сцена переименована: " + old_name + " → " +
+           campaign_.scenes[index].name);
+  return true;
+}
+
+auto App::RenameSceneByCommand(std::string_view args) -> void {
+  const std::optional<SceneRenameRequest> request =
+      ParseSceneRename(campaign_, args);
+  if (!request.has_value()) {
+    view_.AddLocalLine(TrimText(args).empty()
+                           ? std::string(strings::kSceneRenameUsage)
+                           : std::string(strings::kScenesEmpty));
+    return;
+  }
+  (void)RenameSceneAt(request->index, request->new_name);
+}
+
+auto App::BeginSceneEdit(SceneEditField field) -> void {
+  if (field == SceneEditField::kNone ||
+      scenes_selected_ >= campaign_.scenes.size()) {
+    return;
+  }
+  const Scene& scene = campaign_.scenes[scenes_selected_];
+  scenes_edit_ = field;
+  // Имя набирается с нуля: так переименование не требует стирать старое.
+  scenes_edit_buffer_ =
+      field == SceneEditField::kName ? std::string{} : scene.note;
+  scenes_edit_ignore_text_ = true;
+  scenes_status_.clear();
+}
+
+auto App::CancelSceneEdit() -> void {
+  scenes_edit_ = SceneEditField::kNone;
+  scenes_edit_buffer_.clear();
+  scenes_edit_ignore_text_ = false;
+}
+
+auto App::CommitSceneEdit() -> void {
+  if (scenes_selected_ >= campaign_.scenes.size()) {
+    CancelSceneEdit();
+    return;
+  }
+  if (scenes_edit_ == SceneEditField::kName) {
+    std::string name(TrimText(scenes_edit_buffer_));
+    if (name.empty()) {
+      scenes_status_ = std::string(strings::kSceneNameEmpty);
+      return;
+    }
+    if (!RenameSceneAt(scenes_selected_, std::move(name))) {
+      scenes_status_ = std::string(strings::kSceneNameTaken);
+      return;
+    }
+  } else if (scenes_edit_ == SceneEditField::kNote) {
+    std::string note(TrimText(scenes_edit_buffer_));
+    TruncateUtf8(note, kMaxSceneNoteLength);
+    campaign_.scenes[scenes_selected_].note = std::move(note);
+    SaveCampaign();
+  }
+  CancelSceneEdit();
+  scenes_status_.clear();
 }
 
 auto App::Iterate() -> void {
@@ -2592,13 +2739,15 @@ auto App::Iterate() -> void {
     DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
   }
   if (scenes_active_) {
-    std::vector<std::string> scene_names;
-    scene_names.reserve(campaign_.scenes.size());
-    for (const Scene& scene : campaign_.scenes) {
-      scene_names.push_back(scene.name);
+    std::string edit_label;
+    if (scenes_edit_ == SceneEditField::kName) {
+      edit_label = std::string(strings::kSceneNameLabel);
+    } else if (scenes_edit_ == SceneEditField::kNote) {
+      edit_label = std::string(strings::kSceneNoteLabel);
     }
-    DrawScenesPanel(renderer_, text_.get(), scene_names, campaign_.active,
-                    scenes_selected_);
+    DrawScenesPanel(renderer_, text_.get(), campaign_.scenes, campaign_.active,
+                    scenes_selected_, edit_label, scenes_edit_buffer_,
+                    scenes_status_);
   }
   if (conditions_active_) {
     const Token* condition_token = nullptr;

@@ -1572,6 +1572,30 @@ auto TestCampaign() -> void {
   campaign.active = 1;
   Expect(dnd::NextSceneName(campaign) == "Сцена 3",
          "next scene name counts existing scenes");
+  Expect(!dnd::IsSceneNameAvailable(campaign, "Сцена 1"),
+         "an existing scene name is unavailable");
+  Expect(dnd::IsSceneNameAvailable(campaign, "Сцена 1", 0),
+         "a scene may keep its own name");
+  Expect(!dnd::IsSceneNameAvailable(campaign, ""),
+         "an empty scene name is rejected");
+  Expect(!dnd::RenameScene(campaign, 1, "Сцена 1"),
+         "rename rejects a duplicate name");
+  Expect(dnd::RenameScene(campaign, 1, "Подземелье"),
+         "rename accepts a free name");
+  const std::optional<dnd::SceneRenameRequest> spaced =
+      dnd::ParseSceneRename(campaign, "Сцена 1 Пещера");
+  Expect(
+      spaced.has_value() && spaced->index == 0 && spaced->new_name == "Пещера",
+      "scene rename parses names with spaces");
+  const std::optional<dnd::SceneRenameRequest> plain =
+      dnd::ParseSceneRename(campaign, "Подземелье Логово");
+  Expect(plain.has_value() && plain->index == 1 && plain->new_name == "Логово",
+         "scene rename parses a one-word scene name");
+  Expect(!dnd::ParseSceneRename(campaign, "Нет такой").has_value(),
+         "scene rename rejects an unknown scene");
+  Expect(!dnd::ParseSceneRename(campaign, "Сцена 1").has_value(),
+         "scene rename needs a new name");
+  campaign.scenes.front().note = "Герои спустились в подземелье";
 
   const std::filesystem::path path =
       std::filesystem::temp_directory_path() / "dnd_core_tests_campaign.bin";
@@ -1582,8 +1606,10 @@ auto TestCampaign() -> void {
     Expect(loaded->scenes.size() == 2, "scene count survives the roundtrip");
     Expect(loaded->active == 1, "active scene survives the roundtrip");
     Expect(loaded->scenes.front().name == "Сцена 1" &&
-               loaded->scenes.back().name == "Сцена 2",
+               loaded->scenes.back().name == "Подземелье",
            "scene names survive the roundtrip");
+    Expect(loaded->scenes.front().note == "Герои спустились в подземелье",
+           "scene notes survive the roundtrip");
     Expect(loaded->scenes.front().snapshot.map.Width() == 5 &&
                loaded->scenes.front().snapshot.map.IsBlocked(CellAt(1, 1)),
            "scene walls survive the roundtrip");

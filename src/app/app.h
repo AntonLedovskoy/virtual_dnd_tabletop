@@ -29,6 +29,9 @@ class TextRenderer;
 
 enum class AppMode : std::uint8_t { kHost, kClient };
 
+// Что DM правит прямо в панели сцен.
+enum class SceneEditField : std::uint8_t { kNone, kName, kNote };
+
 struct AppOptions {
   AppMode mode = AppMode::kHost;
   std::string connect_host = "127.0.0.1";
@@ -143,7 +146,15 @@ class App {
   auto OpenScenes() -> void;
   auto CloseScenes() -> void;
   auto HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto HandleScenesTextInput(const char* text) -> void;
   auto SwitchSceneByName(std::string_view name) -> void;
+  // Переименовывает сцену по индексу; false, если имя пустое или занято.
+  auto RenameSceneAt(std::size_t index, std::string name) -> bool;
+  // Разбирает хвост команды «/scene rename СТАРОЕ НОВОЕ».
+  auto RenameSceneByCommand(std::string_view args) -> void;
+  auto BeginSceneEdit(SceneEditField field) -> void;
+  auto CancelSceneEdit() -> void;
+  auto CommitSceneEdit() -> void;
   auto LoadFont() -> void;
 
   [[nodiscard]] auto CellFromPixel(float x, float y) const -> Cell;
@@ -196,6 +207,11 @@ class App {
 
   bool scenes_active_ = false;
   std::size_t scenes_selected_ = 0;
+  SceneEditField scenes_edit_ = SceneEditField::kNone;
+  std::string scenes_edit_buffer_;
+  std::string scenes_status_;
+  // Первый TEXT_INPUT после R/E — это сама горячая клавиша, её не вводим.
+  bool scenes_edit_ignore_text_ = false;
 
   bool show_movement_range_ = false;
   bool aoe_mode_ = false;

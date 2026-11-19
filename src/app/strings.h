@@ -83,7 +83,7 @@ inline constexpr std::array<std::string_view, 11> kHelpDm = {
     "Del — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
     "B — бестиарий",
-    "Tab — сцены кампании",
+    "Tab — сцены (R имя, E заметка)",
     "T — бой, G — следующий ход",
     "F — шаблон области, Shift+F — убрать",
     "F5 — сохранить, F9 — загрузить",
@@ -166,9 +166,16 @@ inline constexpr std::string_view kBestiaryDmOnly =
 
 inline constexpr std::string_view kScenesTitle = "Сцены";
 inline constexpr std::string_view kScenesHint =
-    "1–9 — переключить | ↑ ↓ и Enter — выбрать | N — новая копия | "
-    "Del — удалить | Esc — закрыть";
+    "1–9 — переключить | ↑ ↓ и Enter — выбрать | R — имя | E — заметка | "
+    "N — новая копия | Del — удалить | Esc — закрыть";
 inline constexpr std::string_view kScenesDmOnly = "Сцены переключает только DM";
 inline constexpr std::string_view kScenesEmpty = "Сцена не найдена";
+inline constexpr std::string_view kSceneNameLabel = "Новое имя: ";
+inline constexpr std::string_view kSceneNoteLabel = "Заметка: ";
+inline constexpr std::string_view kSceneNameEmpty =
+    "Имя сцены не может быть пустым";
+inline constexpr std::string_view kSceneNameTaken = "Имя сцены уже занято";
+inline constexpr std::string_view kSceneRenameUsage =
+    "Использование: /scene rename СТАРОЕ НОВОЕ";
 
 }  // namespace dnd::strings

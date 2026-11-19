@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/bestiary.h"
+#include "core/campaign.h"
 #include "core/encounter.h"
 #include "core/log_line.h"
 #include "core/token.h"
@@ -78,10 +79,14 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
                          const std::vector<Condition>& conditions) -> void;
 
-// Модальный список сцен кампании для DM: активная и выбранная подсвечены.
+// Модальный список сцен кампании для DM: имя, заметка, активная и выбранная.
+// edit_label непустой, когда DM правит имя или заметку; status — сообщение
+// об ошибке вместо подсказки.
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
-                     const std::vector<std::string>& names, std::size_t active,
-                     std::size_t selected) -> void;
+                     const std::vector<Scene>& scenes, std::size_t active,
+                     std::size_t selected, const std::string& edit_label,
+                     const std::string& edit_text, const std::string& status)
+    -> void;
 
 // Баннер поверх стола: связь с хостом потеряна, идёт переподключение.
 auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,
