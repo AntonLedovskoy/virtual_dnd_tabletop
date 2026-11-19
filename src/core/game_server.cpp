@@ -28,6 +28,7 @@ constexpr int kMaxBonus = 100;
 constexpr int kMaxTempHp = 1000;
 constexpr std::size_t kMaxConditions = 16;
 constexpr std::size_t kMaxConditionLength = 32;
+constexpr int kMaxConditionRounds = 100;
 
 auto AuthorName(const std::string& actor) -> std::string {
   return actor.empty() ? "DM" : actor;
@@ -691,7 +692,9 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
     return CommandOutcome{.reject_reason = "заметки слишком длинные"};
   }
   if (command.attack_bonus < -kMaxBonus || command.attack_bonus > kMaxBonus ||
-      command.save_bonus < -kMaxBonus || command.save_bonus > kMaxBonus) {
+      command.save_bonus < -kMaxBonus || command.save_bonus > kMaxBonus ||
+      command.initiative_bonus < -kMaxBonus ||
+      command.initiative_bonus > kMaxBonus) {
     return CommandOutcome{.reject_reason = "некорректный бонус"};
   }
   if (command.damage.size() > kMaxDamageExpression) {
@@ -708,8 +711,8 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   }
   const std::optional<Token> updated = state_.UpdateTokenSheet(
       command.id, command.ac, command.speed, command.notes,
-      command.attack_bonus, command.save_bonus, command.damage,
-      command.temp_hp);
+      command.attack_bonus, command.save_bonus, command.initiative_bonus,
+      command.damage, command.temp_hp);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }
@@ -733,8 +736,9 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
   if (command.conditions.size() > kMaxConditions) {
     return CommandOutcome{.reject_reason = "слишком много состояний"};
   }
-  for (const std::string& condition : command.conditions) {
-    if (condition.empty() || condition.size() > kMaxConditionLength) {
+  for (const Condition& condition : command.conditions) {
+    if (condition.name.empty() || condition.name.size() > kMaxConditionLength ||
+        condition.rounds < 0 || condition.rounds > kMaxConditionRounds) {
       return CommandOutcome{.reject_reason = "некорректное состояние"};
     }
   }
@@ -768,13 +772,36 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
     return CommandOutcome{.reject_reason = "бой начинает только DM"};
   }
   const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
+  // Инициатива бросается за всех сразу: d20 + бонус из листа. Это же
+  // значение потом можно поправить вручную через [ и ].
+  std::uniform_int_distribution<int> d20(1, 20);
+  std::vector<std::pair<int, std::string>> rolls;
+  rolls.reserve(state_.Tokens().size());
+  for (const Token& token : state_.Tokens()) {
+    const int value = d20(rng_) + token.initiative_bonus;
+    rolls.emplace_back(value, token.name);
+    (void)state_.SetInitiative(token.id, value);
+  }
   if (!state_.StartEncounter()) {
     return CommandOutcome{.reject_reason = "нет токенов для инициативы"};
+  }
+  std::ranges::sort(rolls, [](const auto& left, const auto& right) -> bool {
+    return left.first > right.first;
+  });
+  std::ostringstream initiative;
+  initiative << "Инициатива:";
+  for (const auto& [value, name] : rolls) {
+    initiative << " " << name << " " << value << ";";
   }
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(
       EncounterUpdated{.encounter = state_.EncounterState()});
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = "DM",
+                      .text = initiative.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
   for (const TokenId id : spent) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});

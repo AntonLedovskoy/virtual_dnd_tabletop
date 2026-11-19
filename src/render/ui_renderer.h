@@ -54,9 +54,10 @@ enum class SheetField : std::uint8_t {
   kSpeed = 1,
   kAttack = 2,
   kSave = 3,
-  kTempHp = 4,
-  kDamage = 5,
-  kNotes = 6,
+  kInitiative = 4,
+  kTempHp = 5,
+  kDamage = 6,
+  kNotes = 7,
 };
 
 // Модальный лист персонажа или монстра.
@@ -64,8 +65,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token& token, SheetField active,
                     const std::string& ac, const std::string& speed,
                     const std::string& attack, const std::string& save,
-                    const std::string& temp_hp, const std::string& damage,
-                    const std::string& notes) -> void;
+                    const std::string& initiative, const std::string& temp_hp,
+                    const std::string& damage, const std::string& notes)
+    -> void;
 
 // Модальный список встроенного бестиария.
 auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
@@ -74,7 +76,7 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
 // Модальный список состояний выбранного токена.
 auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
-                         const std::vector<std::string>& conditions) -> void;
+                         const std::vector<Condition>& conditions) -> void;
 
 // Модальный список сцен кампании для DM: активная и выбранная подсвечены.
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,

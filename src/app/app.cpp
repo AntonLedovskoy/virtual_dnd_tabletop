@@ -1397,6 +1397,7 @@ auto App::OpenSheet() -> void {
   sheet_speed_ = std::to_string(token->speed);
   sheet_attack_ = std::to_string(token->attack_bonus);
   sheet_save_ = std::to_string(token->save_bonus);
+  sheet_initiative_ = std::to_string(token->initiative_bonus);
   sheet_temp_hp_ = std::to_string(token->temp_hp);
   sheet_damage_ = token->damage;
   sheet_notes_ = token->notes;
@@ -1412,13 +1413,16 @@ auto App::SaveSheet() -> void {
   int speed = 0;
   int attack = 0;
   int save = 0;
+  int initiative = 0;
   int temp_hp = 0;
   if (!ParseNumber(sheet_ac_, ac) || ac > 1000 ||
       !ParseSignedNumber(sheet_speed_, speed) || speed < 0 || speed > 1000 ||
       !ParseSignedNumber(sheet_attack_, attack) || attack < -100 ||
       attack > 100 || !ParseSignedNumber(sheet_save_, save) || save < -100 ||
-      save > 100 || !ParseSignedNumber(sheet_temp_hp_, temp_hp) ||
-      temp_hp < 0 || temp_hp > 1000) {
+      save > 100 || !ParseSignedNumber(sheet_initiative_, initiative) ||
+      initiative < -100 || initiative > 100 ||
+      !ParseSignedNumber(sheet_temp_hp_, temp_hp) || temp_hp < 0 ||
+      temp_hp > 1000) {
     view_.AddLocalLine("Некорректные значения полей листа");
     return;
   }
@@ -1446,6 +1450,7 @@ auto App::SaveSheet() -> void {
                                .notes = sheet_notes_,
                                .attack_bonus = attack,
                                .save_bonus = save,
+                               .initiative_bonus = initiative,
                                .damage = sheet_damage_,
                                .temp_hp = temp_hp});
   CloseSheet();
@@ -1490,8 +1495,9 @@ auto App::RollInitiative() -> void {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
-  SendCommand(RollExpression{.expression = "d20",
-                             .label = RollLabel("Инициатива", token->name)});
+  SendCommand(
+      RollExpression{.expression = "d20" + FormatBonus(token->initiative_bonus),
+                     .label = RollLabel("Инициатива", token->name)});
 }
 
 auto App::HandleSheetTextInput(const char* text) -> void {
@@ -1500,7 +1506,8 @@ auto App::HandleSheetTextInput(const char* text) -> void {
   }
   if (sheet_field_ == SheetField::kAc || sheet_field_ == SheetField::kSpeed ||
       sheet_field_ == SheetField::kAttack ||
-      sheet_field_ == SheetField::kSave) {
+      sheet_field_ == SheetField::kSave ||
+      sheet_field_ == SheetField::kInitiative) {
     switch (sheet_field_) {
       case SheetField::kAc:
         AppendBoundedNumber(sheet_ac_, text, 1, 1000, false);
@@ -1513,6 +1520,9 @@ auto App::HandleSheetTextInput(const char* text) -> void {
         break;
       case SheetField::kSave:
         AppendBoundedNumber(sheet_save_, text, -100, 100, true);
+        break;
+      case SheetField::kInitiative:
+        AppendBoundedNumber(sheet_initiative_, text, -100, 100, true);
         break;
       case SheetField::kTempHp:
         AppendBoundedNumber(sheet_temp_hp_, text, 0, 1000, false);
@@ -1544,7 +1554,7 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
     return;
   }
   if (key.key == SDLK_TAB) {
-    const int next = (static_cast<int>(sheet_field_) + 1) % 7;
+    const int next = (static_cast<int>(sheet_field_) + 1) % 8;
     sheet_field_ = static_cast<SheetField>(next);
     return;
   }
@@ -1564,6 +1574,9 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SheetField::kSave:
       buffer = &sheet_save_;
+      break;
+    case SheetField::kInitiative:
+      buffer = &sheet_initiative_;
       break;
     case SheetField::kTempHp:
       buffer = &sheet_temp_hp_;
@@ -1656,9 +1669,12 @@ auto App::ToggleCondition(int index) -> void {
     return;
   }
   const std::string& condition = standard[static_cast<std::size_t>(index)];
-  const auto it = std::ranges::find(conditions_draft_, condition);
+  const auto it = std::ranges::find_if(
+      conditions_draft_, [&condition](const Condition& item) -> bool {
+        return item.name == condition;
+      });
   if (it == conditions_draft_.end()) {
-    conditions_draft_.push_back(condition);
+    conditions_draft_.emplace_back(condition, kDefaultConditionRounds);
   } else {
     conditions_draft_.erase(it);
   }
@@ -2527,7 +2543,8 @@ auto App::Iterate() -> void {
     } else {
       DrawSheetPanel(renderer_, text_.get(), *sheet_token, sheet_field_,
                      sheet_ac_, sheet_speed_, sheet_attack_, sheet_save_,
-                     sheet_temp_hp_, sheet_damage_, sheet_notes_);
+                     sheet_initiative_, sheet_temp_hp_, sheet_damage_,
+                     sheet_notes_);
     }
   }
   if (bestiary_active_) {

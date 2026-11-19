@@ -110,6 +110,7 @@ struct UpdateTokenSheet {
   std::string notes;
   int attack_bonus = 0;
   int save_bonus = 0;
+  int initiative_bonus = 0;
   std::string damage;
   int temp_hp = 0;
 };
@@ -136,7 +137,7 @@ struct RestParty {
 // Владелец или DM: заменить список состояний токена.
 struct UpdateTokenCombat {
   TokenId id = 0;
-  std::vector<std::string> conditions;
+  std::vector<Condition> conditions;
 };
 
 // Управление боем, доступное только DM.

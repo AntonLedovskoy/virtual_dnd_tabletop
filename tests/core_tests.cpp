@@ -465,23 +465,27 @@ auto TestClaimAndTokenAdmin() -> void {
          "too much temporary HP is rejected");
 
   const dnd::CommandOutcome conditions = server.HandleCommand(
-      dnd::UpdateTokenCombat{.id = 1, .conditions = {"сбит с ног", "отравлен"}},
+      dnd::UpdateTokenCombat{.id = 1,
+                             .conditions = {dnd::Condition{"сбит с ног"},
+                                            dnd::Condition{"отравлен"}}},
       "alice", false);
   Expect(conditions.accepted, "the owner can update conditions");
   Expect(TokenOf(server.State(), 1).conditions.size() == 2,
          "conditions are stored");
   Expect(!server
               .HandleCommand(
-                  dnd::UpdateTokenCombat{.id = 1, .conditions = {"чужое"}},
+                  dnd::UpdateTokenCombat{
+                      .id = 1, .conditions = {dnd::Condition{"чужое"}}},
                   "bob", false)
               .accepted,
          "other players cannot update conditions");
-  Expect(
-      !server
-           .HandleCommand(dnd::UpdateTokenCombat{.id = 1, .conditions = {""}},
-                          "alice", false)
-           .accepted,
-      "empty condition is rejected");
+  Expect(!server
+              .HandleCommand(
+                  dnd::UpdateTokenCombat{.id = 1,
+                                         .conditions = {dnd::Condition{""}}},
+                  "alice", false)
+              .accepted,
+         "empty condition is rejected");
 
   Expect(
       !server.HandleCommand(dnd::ReleaseToken{.id = 1}, "bob", false).accepted,
@@ -515,7 +519,8 @@ auto TestDamageHealRest() -> void {
                          .owner = "bob",
                          .hp = 0,
                          .max_hp = 10,
-                         .conditions = {"без сознания", "отравлен"},
+                         .conditions = {dnd::Condition{"без сознания"},
+                                        dnd::Condition{"отравлен"}},
                          .kind = dnd::TokenKind::kPlayer,
                          .cell = CellAt(2, 2)},
           },
@@ -536,8 +541,10 @@ auto TestDamageHealRest() -> void {
   Expect(hit.accepted, "damage beyond hp is accepted");
   const dnd::Token down = TokenOf(server.State(), 1);
   Expect(down.hp == 0, "hp stops at zero");
-  Expect(std::ranges::find(down.conditions, dnd::kUnconscious) !=
-             down.conditions.end(),
+  Expect(std::ranges::any_of(down.conditions,
+                             [](const dnd::Condition& condition) -> bool {
+                               return condition.name == dnd::kUnconscious;
+                             }),
          "zero hp adds the unconscious condition");
 
   const dnd::CommandOutcome heal = server.HandleCommand(
@@ -545,8 +552,10 @@ auto TestDamageHealRest() -> void {
   Expect(heal.accepted, "the owner can heal their character");
   const dnd::Token healed = TokenOf(server.State(), 1);
   Expect(healed.hp == 20, "healing stops at max hp");
-  Expect(std::ranges::find(healed.conditions, dnd::kUnconscious) ==
-             healed.conditions.end(),
+  Expect(!std::ranges::any_of(healed.conditions,
+                              [](const dnd::Condition& condition) -> bool {
+                                return condition.name == dnd::kUnconscious;
+                              }),
          "healing removes the unconscious condition");
 
   Expect(
@@ -557,9 +566,9 @@ auto TestDamageHealRest() -> void {
          "the DM declares a short rest");
   const dnd::Token rested = TokenOf(server.State(), 2);
   Expect(rested.hp == 5, "short rest restores half of max hp");
-  Expect(
-      rested.conditions.size() == 1 && rested.conditions.front() == "отравлен",
-      "short rest wakes the character but keeps other conditions");
+  Expect(rested.conditions.size() == 1 &&
+             rested.conditions.front().name == "отравлен",
+         "short rest wakes the character but keeps other conditions");
 
   Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
              .accepted,
@@ -568,6 +577,66 @@ auto TestDamageHealRest() -> void {
   Expect(restored.hp == restored.max_hp && restored.temp_hp == 0 &&
              restored.conditions.empty(),
          "long rest restores hp and clears conditions");
+}
+
+auto TestConditionDurationAndInitiative() -> void {
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .initiative = 20,
+                         .initiative_bonus = 5,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .initiative = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(2, 2)},
+          },
+      .next_token_id = 3,
+  };
+
+  dnd::GameServer server(snapshot, 6, 1234);
+  const dnd::CommandOutcome start =
+      server.HandleCommand(dnd::StartEncounter{}, "", true);
+  Expect(start.accepted, "the DM starts the encounter");
+  for (const dnd::Token& token : server.State().Tokens()) {
+    Expect(token.initiative >= 1 + token.initiative_bonus &&
+               token.initiative <= 20 + token.initiative_bonus,
+           "initiative is rolled with the sheet bonus");
+  }
+  Expect(std::ranges::any_of(start.events,
+                             [](const dnd::Event& event) -> bool {
+                               return std::holds_alternative<dnd::LogLineAdded>(
+                                   event);
+                             }),
+         "initiative rolls are written to the log");
+
+  const dnd::CommandOutcome timed = server.HandleCommand(
+      dnd::UpdateTokenCombat{.id = 1,
+                             .conditions = {dnd::Condition{"отравлен", 1},
+                                            dnd::Condition{"без сознания"}}},
+      "alice", false);
+  Expect(timed.accepted, "the owner sets a timed condition");
+  Expect(TokenOf(server.State(), 1).conditions.size() == 2,
+         "timed and permanent conditions coexist");
+
+  // Полный круг: ход гоблина, затем снова ход героя — у состояния кончается
+  // срок, а бессрочное «без сознания» остаётся.
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the DM advances the turn");
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the DM advances the turn again");
+  const dnd::Token ticked = TokenOf(server.State(), 1);
+  Expect(ticked.conditions.size() == 1 &&
+             ticked.conditions.front().name == "без сознания",
+         "timed condition expires at the start of the token turn");
 }
 
 auto TestDiceExpression() -> void {
@@ -1218,7 +1287,8 @@ auto TestSaveLoadRoundtrip() -> void {
                          .attack_bonus = 5,
                          .save_bonus = 2,
                          .damage = "1d8+3",
-                         .conditions = {"сбит с ног", "концентрация"},
+                         .conditions = {dnd::Condition{"сбит с ног"},
+                                        dnd::Condition{"концентрация"}},
                          .movement_used = 4,
                          .kind = dnd::TokenKind::kPlayer,
                          .color = 0x507AC8U,
@@ -1694,6 +1764,7 @@ auto TestCommandEventSerialization() -> void {
                             .notes = "Атака: +4, 1d6+2",
                             .attack_bonus = 4,
                             .save_bonus = 1,
+                            .initiative_bonus = 3,
                             .damage = "1d6+2",
                             .temp_hp = 5}};
   const std::vector<std::uint8_t> sheet_bytes =
@@ -1709,12 +1780,16 @@ auto TestCommandEventSerialization() -> void {
               "Атака: +4, 1d6+2" &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).attack_bonus == 4 &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).save_bonus == 1 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).initiative_bonus ==
+              3 &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).damage == "1d6+2" &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).temp_hp == 5,
       "sheet command survives serialization");
 
-  const dnd::Command combat_command{dnd::UpdateTokenCombat{
-      .id = 4, .conditions = {"сбит с ног", "отравлен"}}};
+  const dnd::Command combat_command{
+      dnd::UpdateTokenCombat{.id = 4,
+                             .conditions = {dnd::Condition{"сбит с ног"},
+                                            dnd::Condition{"отравлен"}}}};
   const std::vector<std::uint8_t> combat_bytes =
       dnd::EncodeCommand(combat_command);
   const std::optional<dnd::Command> combat_decoded =
@@ -1769,7 +1844,7 @@ auto TestCommandEventSerialization() -> void {
                           .attack_bonus = 4,
                           .save_bonus = 1,
                           .damage = "1d8+2",
-                          .conditions = {"оглушён"},
+                          .conditions = {dnd::Condition{"оглушён", 2}},
                           .movement_used = 5,
                           .kind = dnd::TokenKind::kMonster,
                           .color = 0x46A864U,
@@ -1796,6 +1871,9 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::TokenUpdated>(*updated_decoded).token.temp_hp == 3 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)
                   .token.conditions.size() == 1 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded)
+                  .token.conditions.front()
+                  .rounds == 2 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.movement_used ==
               5 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
@@ -1953,6 +2031,7 @@ auto main() -> int {
     TestOwnership();
     TestClaimAndTokenAdmin();
     TestDamageHealRest();
+    TestConditionDurationAndInitiative();
     TestDiceExpression();
     TestBestiary();
     TestDynamicFogObservers();

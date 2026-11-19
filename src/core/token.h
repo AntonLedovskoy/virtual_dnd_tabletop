@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/grid_map.h"
@@ -19,6 +20,19 @@ enum class TokenKind : std::uint8_t {
   kMonster = 2,
 };
 
+// Состояние токена. rounds > 0 — сколько ходов токена ещё действует,
+// 0 — до ручного снятия (например, «без сознания»).
+struct Condition {
+  std::string name;
+  int rounds = 0;
+
+  Condition() = default;
+  explicit Condition(std::string condition_name, int remaining = 0)
+      : name(std::move(condition_name)), rounds(remaining) {}
+  explicit Condition(const char* condition_name, int remaining = 0)
+      : name(condition_name), rounds(remaining) {}
+};
+
 struct Token {
   TokenId id = 0;
   std::string name;
@@ -34,8 +48,9 @@ struct Token {
   std::string notes;
   int attack_bonus = 0;
   int save_bonus = 0;
+  int initiative_bonus = 0;
   std::string damage;
-  std::vector<std::string> conditions;
+  std::vector<Condition> conditions;
   // Израсходованный за ход запас движения в клетках. Сбрасывается в начале
   // хода токена и вне боя не накапливается.
   int movement_used = 0;

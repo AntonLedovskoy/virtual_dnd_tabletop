@@ -65,10 +65,11 @@ class GameState {
       -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenSheet(TokenId id, int ac, int speed,
                                       std::string notes, int attack_bonus,
-                                      int save_bonus, std::string damage,
-                                      int temp_hp) -> std::optional<Token>;
+                                      int save_bonus, int initiative_bonus,
+                                      std::string damage, int temp_hp)
+      -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenCombat(TokenId id,
-                                       std::vector<std::string> conditions)
+                                       std::vector<Condition> conditions)
       -> std::optional<Token>;
 
   // Добавляет к израсходованному запасу движения токена steps клеток.

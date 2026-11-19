@@ -184,6 +184,7 @@ class App {
   std::string sheet_speed_;
   std::string sheet_attack_;
   std::string sheet_save_;
+  std::string sheet_initiative_;
   std::string sheet_temp_hp_;
   std::string sheet_damage_;
   std::string sheet_notes_;
@@ -191,7 +192,7 @@ class App {
   bool bestiary_active_ = false;
   bool conditions_active_ = false;
   TokenId conditions_token_id_ = 0;
-  std::vector<std::string> conditions_draft_;
+  std::vector<Condition> conditions_draft_;
 
   bool scenes_active_ = false;
   std::size_t scenes_selected_ = 0;

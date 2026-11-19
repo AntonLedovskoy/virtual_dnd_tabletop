@@ -10,18 +10,22 @@
 namespace dnd {
 namespace {
 
-auto AddConditionIfMissing(Token& token, std::string_view name) -> bool {
-  if (std::ranges::find(token.conditions, name) != token.conditions.end()) {
+auto AddConditionIfMissing(Token& token, Condition condition) -> bool {
+  const bool exists = std::ranges::any_of(
+      token.conditions, [&condition](const Condition& other) -> bool {
+        return other.name == condition.name;
+      });
+  if (exists) {
     return false;
   }
-  token.conditions.emplace_back(name);
+  token.conditions.push_back(std::move(condition));
   return true;
 }
 
 auto RemoveCondition(Token& token, std::string_view name) -> bool {
   return std::erase_if(token.conditions,
-                       [name](const std::string& condition) -> bool {
-                         return condition == name;
+                       [name](const Condition& condition) -> bool {
+                         return condition.name == name;
                        }) > 0;
 }
 
@@ -137,7 +141,7 @@ auto GameState::DamageToken(TokenId id, int amount) -> std::optional<Token> {
   remaining -= absorbed;
   token->hp = std::max(0, token->hp - remaining);
   if (token->hp == 0) {
-    AddConditionIfMissing(*token, kUnconscious);
+    AddConditionIfMissing(*token, Condition{std::string(kUnconscious)});
   }
   return *token;
 }
@@ -236,8 +240,9 @@ auto GameState::SetTokenColor(TokenId id, std::uint32_t color)
 
 auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
                                  std::string notes, int attack_bonus,
-                                 int save_bonus, std::string damage,
-                                 int temp_hp) -> std::optional<Token> {
+                                 int save_bonus, int initiative_bonus,
+                                 std::string damage, int temp_hp)
+    -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -247,13 +252,13 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
   token->notes = std::move(notes);
   token->attack_bonus = attack_bonus;
   token->save_bonus = save_bonus;
+  token->initiative_bonus = initiative_bonus;
   token->damage = std::move(damage);
   token->temp_hp = temp_hp;
   return *token;
 }
 
-auto GameState::UpdateTokenCombat(TokenId id,
-                                  std::vector<std::string> conditions)
+auto GameState::UpdateTokenCombat(TokenId id, std::vector<Condition> conditions)
     -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
@@ -318,9 +323,19 @@ auto GameState::NextTurn() -> bool {
     encounter_.turn_index = 0;
     ++encounter_.round;
   }
-  // Новый активный токен начинает ход с полным запасом движения.
+  // Новый активный токен начинает ход с полным запасом движения. Состояния
+  // с длительностью отсчитываются в начале хода своего токена; состояния
+  // с rounds == 0 держатся до ручного снятия.
   if (Token* token = FindToken(ActiveTokenId())) {
     token->movement_used = 0;
+    for (auto it = token->conditions.begin(); it != token->conditions.end();) {
+      if (it->rounds <= 0) {
+        ++it;
+        continue;
+      }
+      --it->rounds;
+      it = it->rounds == 0 ? token->conditions.erase(it) : it + 1;
+    }
   }
   return true;
 }

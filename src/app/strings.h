@@ -142,8 +142,11 @@ inline constexpr std::string_view kSheetAc = "КД";
 inline constexpr std::string_view kSheetSpeed = "Скорость, м";
 inline constexpr std::string_view kSheetAttack = "Бонус атаки";
 inline constexpr std::string_view kSheetSave = "Бонус спасброска";
+inline constexpr std::string_view kSheetInitiative = "Бонус инициативы";
 inline constexpr std::string_view kSheetTempHp = "Временные HP";
 inline constexpr std::string_view kConditions = "Состояния";
+inline constexpr std::string_view kConditionsHint =
+    "1–8 — переключить (10 ходов) | 0 — очистить | Esc — закрыть";
 inline constexpr std::string_view kMovementLeft = "Осталось хода";
 inline constexpr std::string_view kMovementOf = "из";
 inline constexpr std::string_view kMovementFree = "Вне боя движение свободное";
