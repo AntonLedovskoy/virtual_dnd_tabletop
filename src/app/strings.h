@@ -44,6 +44,10 @@ inline constexpr std::string_view kRejected = "Отклонено: ";
 inline constexpr std::string_view kSelectToken = "Сначала выберите токен";
 inline constexpr std::string_view kSelectTokenForCommand =
     "Сначала выберите токен для команды";
+inline constexpr std::string_view kConnectionLost =
+    "Связь потеряна, переподключение...";
+inline constexpr std::string_view kConnectionRestored =
+    "Связь с хостом восстановлена";
 
 inline constexpr std::string_view kMenuTitle = "DND";
 inline constexpr std::string_view kMenuSubtitle = "Виртуальный стол";

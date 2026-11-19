@@ -623,4 +623,34 @@ auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
                     content_width);
 }
 
+auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,
+                          std::string_view message) -> void {
+  if (renderer == nullptr || text == nullptr || message.empty()) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+    return;
+  }
+  constexpr float width = 520.0F;
+  constexpr float padding = 12.0F;
+  const float height = text->LineHeight() + (2.0F * padding);
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = 72.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kPanelBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  // Красная рамка: это не подсказка, а предупреждение о потере связи.
+  SetDrawColor(
+      renderer,
+      SDL_Color{.r = 0xd0, .g = 0x50, .b = 0x50, .a = SDL_ALPHA_OPAQUE});
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+  text->DrawCentered(
+      message, panel,
+      SDL_Color{.r = 0xff, .g = 0xd0, .b = 0xd0, .a = SDL_ALPHA_OPAQUE});
+}
+
 }  // namespace dnd

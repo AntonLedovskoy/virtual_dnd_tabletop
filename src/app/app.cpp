@@ -1947,7 +1947,9 @@ auto App::PumpClient() -> void {
   net_client_.Poll(update);
 
   if (update.welcome.has_value()) {
+    const bool reconnected = in_game_ && !client_connected_;
     view_.Reset(update.welcome->snapshot, update.welcome->fog);
+    PruneStaleViewState();
     client_connected_ = true;
     client_is_dm_ = update.welcome->is_dm;
     client_connecting_ = false;
@@ -1955,6 +1957,9 @@ auto App::PumpClient() -> void {
     menu_.busy = false;
     menu_.status.clear();
     CenterCamera();
+    if (reconnected) {
+      view_.AddLocalLine(std::string(strings::kConnectionRestored));
+    }
     SDL_Log("joined host, world snapshot received");
   }
   for (const Event& event : update.events) {
@@ -1984,6 +1989,7 @@ auto App::PumpClient() -> void {
     if (in_game_) {
       if (client_connected_) {
         SDL_Log("connection to host lost, reconnecting...");
+        view_.AddLocalLine(std::string(strings::kConnectionLost));
       }
     } else {
       menu_.status = "Не удалось подключиться к хосту";
@@ -1998,6 +2004,29 @@ auto App::PumpClient() -> void {
     // Попытки подключения неблокирующие; успех определяется по приходу
     // Welcome, поэтому повторы не шумят.
     net_client_.Reconnect();
+  }
+}
+
+auto App::PruneStaleViewState() -> void {
+  const auto has_token = [this](TokenId id) -> bool {
+    return id != 0 && std::ranges::any_of(view_.Tokens(),
+                                          [id](const Token& token) -> bool {
+                                            return token.id == id;
+                                          });
+  };
+  if (!has_token(selected_id_)) {
+    selected_id_ = 0;
+    dragging_ = false;
+    drag_target_.reset();
+    measuring_ = false;
+    measure_start_.reset();
+    measure_end_.reset();
+  }
+  if (sheet_active_ && !has_token(sheet_token_id_)) {
+    CloseSheet();
+  }
+  if (conditions_active_ && !has_token(conditions_token_id_)) {
+    CloseConditions();
   }
 }
 
@@ -2389,6 +2418,11 @@ auto App::Iterate() -> void {
       DrawConditionsPanel(renderer_, text_.get(), *condition_token,
                           conditions_draft_);
     }
+  }
+  // Клиент остаётся на последнем снапшоте, пока идёт переподключение; баннер
+  // нужен, чтобы он не принял замороженный стол за настоящий.
+  if (is_client && !client_connected_) {
+    DrawConnectionBanner(renderer_, text_.get(), strings::kConnectionLost);
   }
   SDL_RenderPresent(renderer_);
 }

@@ -81,6 +81,9 @@ class App {
   auto UpdatePlayersFromRoster(const std::vector<RosterEntry>& roster) -> void;
   auto PumpHost() -> void;
   auto PumpClient() -> void;
+  // После полной пересинхронизации выбранный токен мог исчезнуть: сбрасываем
+  // выделение и панели, привязанные к пропавшим токенам.
+  auto PruneStaleViewState() -> void;
   auto ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void;
   auto HandleMouseDown(const SDL_MouseButtonEvent& button) -> void;
   auto HandleMouseUp(const SDL_MouseButtonEvent& button) -> void;

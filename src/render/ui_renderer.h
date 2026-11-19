@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/bestiary.h"
@@ -74,5 +75,9 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
                      const std::vector<std::string>& names, std::size_t active,
                      std::size_t selected) -> void;
+
+// Баннер поверх стола: связь с хостом потеряна, идёт переподключение.
+auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,
+                          std::string_view message) -> void;
 
 }  // namespace dnd
