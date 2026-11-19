@@ -7,8 +7,14 @@ auto DefaultConditions() -> const std::vector<std::string>& {
   // локальных констант ждёт lower_case.
   // NOLINTNEXTLINE(readability-identifier-naming)
   static const std::vector<std::string> kConditions{
-      "сбит с ног", "отравлен", "испуган",      "захвачен",
-      "опутан",     "оглушён",  "без сознания", "концентрация",
+      "сбит с ног",
+      "отравлен",
+      "испуган",
+      "захвачен",
+      "опутан",
+      "оглушён",
+      std::string(kUnconscious),
+      "концентрация",
   };
   return kConditions;
 }

@@ -496,6 +496,80 @@ auto TestClaimAndTokenAdmin() -> void {
       "the player can claim another character after releasing");
 }
 
+auto TestDamageHealRest() -> void {
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 20,
+                         .max_hp = 20,
+                         .temp_hp = 5,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "mage",
+                         .owner = "bob",
+                         .hp = 0,
+                         .max_hp = 10,
+                         .conditions = {"без сознания", "отравлен"},
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 2)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 6, 7);
+
+  dnd::CommandOutcome hit = server.HandleCommand(
+      dnd::DamageToken{.id = 1, .amount = 7}, "alice", false);
+  Expect(hit.accepted, "the owner can damage their character");
+  Expect(TokenOf(server.State(), 1).temp_hp == 0,
+         "temporary hp absorbs damage first");
+  Expect(TokenOf(server.State(), 1).hp == 18,
+         "only the rest of the damage reaches hp");
+
+  hit = server.HandleCommand(dnd::DamageToken{.id = 1, .amount = 30}, "alice",
+                             false);
+  Expect(hit.accepted, "damage beyond hp is accepted");
+  const dnd::Token down = TokenOf(server.State(), 1);
+  Expect(down.hp == 0, "hp stops at zero");
+  Expect(std::ranges::find(down.conditions, dnd::kUnconscious) !=
+             down.conditions.end(),
+         "zero hp adds the unconscious condition");
+
+  const dnd::CommandOutcome heal = server.HandleCommand(
+      dnd::HealToken{.id = 1, .amount = 50}, "alice", false);
+  Expect(heal.accepted, "the owner can heal their character");
+  const dnd::Token healed = TokenOf(server.State(), 1);
+  Expect(healed.hp == 20, "healing stops at max hp");
+  Expect(std::ranges::find(healed.conditions, dnd::kUnconscious) ==
+             healed.conditions.end(),
+         "healing removes the unconscious condition");
+
+  Expect(
+      !server.HandleCommand(dnd::RestParty{.long_rest = true}, "alice", false)
+           .accepted,
+      "only the DM declares a rest");
+  Expect(server.HandleCommand(dnd::RestParty{}, "", true).accepted,
+         "the DM declares a short rest");
+  const dnd::Token rested = TokenOf(server.State(), 2);
+  Expect(rested.hp == 5, "short rest restores half of max hp");
+  Expect(
+      rested.conditions.size() == 1 && rested.conditions.front() == "отравлен",
+      "short rest wakes the character but keeps other conditions");
+
+  Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
+             .accepted,
+         "the DM declares a long rest");
+  const dnd::Token restored = TokenOf(server.State(), 2);
+  Expect(restored.hp == restored.max_hp && restored.temp_hp == 0 &&
+             restored.conditions.empty(),
+         "long rest restores hp and clears conditions");
+}
+
 auto TestDiceExpression() -> void {
   dnd::DiceExpression expression;
   Expect(dnd::ParseDiceExpression("d20+5", expression), "d20+5 is parsed");
@@ -1652,6 +1726,35 @@ auto TestCommandEventSerialization() -> void {
               2,
       "combat command survives serialization");
 
+  const dnd::Command damage{dnd::DamageToken{.id = 4, .amount = 7}};
+  const std::vector<std::uint8_t> damage_bytes = dnd::EncodeCommand(damage);
+  const std::optional<dnd::Command> damage_decoded =
+      dnd::DecodeCommand(damage_bytes.data(), damage_bytes.size());
+  Expect(damage_decoded.has_value() &&
+             std::holds_alternative<dnd::DamageToken>(*damage_decoded) &&
+             std::get<dnd::DamageToken>(*damage_decoded).id == 4 &&
+             std::get<dnd::DamageToken>(*damage_decoded).amount == 7,
+         "damage command survives serialization");
+
+  const dnd::Command heal{dnd::HealToken{.id = 5, .amount = 3}};
+  const std::vector<std::uint8_t> heal_bytes = dnd::EncodeCommand(heal);
+  const std::optional<dnd::Command> heal_decoded =
+      dnd::DecodeCommand(heal_bytes.data(), heal_bytes.size());
+  Expect(heal_decoded.has_value() &&
+             std::holds_alternative<dnd::HealToken>(*heal_decoded) &&
+             std::get<dnd::HealToken>(*heal_decoded).id == 5 &&
+             std::get<dnd::HealToken>(*heal_decoded).amount == 3,
+         "heal command survives serialization");
+
+  const dnd::Command rest{dnd::RestParty{.long_rest = true}};
+  const std::vector<std::uint8_t> rest_bytes = dnd::EncodeCommand(rest);
+  const std::optional<dnd::Command> rest_decoded =
+      dnd::DecodeCommand(rest_bytes.data(), rest_bytes.size());
+  Expect(rest_decoded.has_value() &&
+             std::holds_alternative<dnd::RestParty>(*rest_decoded) &&
+             std::get<dnd::RestParty>(*rest_decoded).long_rest,
+         "rest command survives serialization");
+
   const dnd::Event updated{dnd::TokenUpdated{
       .token = dnd::Token{.id = 3,
                           .name = "orc",
@@ -1849,6 +1952,7 @@ auto main() -> int {
     TestServerVisibility();
     TestOwnership();
     TestClaimAndTokenAdmin();
+    TestDamageHealRest();
     TestDiceExpression();
     TestBestiary();
     TestDynamicFogObservers();

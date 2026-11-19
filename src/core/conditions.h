@@ -1,9 +1,13 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dnd {
+
+// Автоматическое состояние при нуле HP; его ставит и снимает сервер.
+inline constexpr std::string_view kUnconscious = "без сознания";
 
 // Стандартные метки состояний. Это подсказки для стола, а не автоматические
 // модификаторы бросков.

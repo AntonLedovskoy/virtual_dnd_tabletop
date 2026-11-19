@@ -1,10 +1,31 @@
 #include "core/game_state.h"
 
 #include <algorithm>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
+#include "core/conditions.h"
+
 namespace dnd {
+namespace {
+
+auto AddConditionIfMissing(Token& token, std::string_view name) -> bool {
+  if (std::ranges::find(token.conditions, name) != token.conditions.end()) {
+    return false;
+  }
+  token.conditions.emplace_back(name);
+  return true;
+}
+
+auto RemoveCondition(Token& token, std::string_view name) -> bool {
+  return std::erase_if(token.conditions,
+                       [name](const std::string& condition) -> bool {
+                         return condition == name;
+                       }) > 0;
+}
+
+}  // namespace
 
 GameState::GameState(GridMap map) : map_(std::move(map)) {}
 
@@ -103,6 +124,61 @@ auto GameState::SetTokenHp(TokenId id, int hp) -> std::optional<Token> {
   }
   token->hp = std::clamp(hp, 0, token->max_hp);
   return *token;
+}
+
+auto GameState::DamageToken(TokenId id, int amount) -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  int remaining = std::max(0, amount);
+  const int absorbed = std::min(token->temp_hp, remaining);
+  token->temp_hp -= absorbed;
+  remaining -= absorbed;
+  token->hp = std::max(0, token->hp - remaining);
+  if (token->hp == 0) {
+    AddConditionIfMissing(*token, kUnconscious);
+  }
+  return *token;
+}
+
+auto GameState::HealToken(TokenId id, int amount) -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->hp = std::min(token->max_hp, token->hp + std::max(0, amount));
+  if (token->hp > 0) {
+    RemoveCondition(*token, kUnconscious);
+  }
+  return *token;
+}
+
+auto GameState::RestParty(bool long_rest) -> std::vector<Token> {
+  std::vector<Token> changed;
+  for (Token& token : tokens_) {
+    if (token.kind != TokenKind::kPlayer) {
+      continue;
+    }
+    const int old_hp = token.hp;
+    const int old_temp = token.temp_hp;
+    const std::size_t old_conditions = token.conditions.size();
+    if (long_rest) {
+      token.hp = token.max_hp;
+      token.temp_hp = 0;
+      token.conditions.clear();
+    } else {
+      token.hp = std::min(token.max_hp, token.hp + ((token.max_hp + 1) / 2));
+      if (token.hp > 0) {
+        RemoveCondition(token, kUnconscious);
+      }
+    }
+    if (token.hp != old_hp || token.temp_hp != old_temp ||
+        token.conditions.size() != old_conditions) {
+      changed.push_back(token);
+    }
+  }
+  return changed;
 }
 
 auto GameState::SetInitiative(TokenId id, int value) -> std::optional<Token> {

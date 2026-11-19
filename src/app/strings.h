@@ -25,7 +25,7 @@ inline constexpr std::string_view kYourToken = "это ваш персонаж";
 inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, N — монстр, B — бестиарий, Del — удалить";
 inline constexpr std::string_view kDmCommandHint =
-    "/rename имя | /owner имя | /maxhp N | /kick имя";
+    "/rename | /owner | /maxhp | /damage | /heal | /rest | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
@@ -58,7 +58,7 @@ inline constexpr std::string_view kHelpCommonTitle = "Для всех";
 inline constexpr std::string_view kHelpDmTitle = "Мастер (DM)";
 inline constexpr std::string_view kHelpPlayerTitle = "Игрок";
 inline constexpr std::string_view kHelpClose = "F1 или Esc — закрыть";
-inline constexpr std::array<std::string_view, 12> kHelpCommon = {
+inline constexpr std::array<std::string_view, 13> kHelpCommon = {
     "Enter — чат и команды",
     "F1 — справка, Esc — закрыть",
     "ЛКМ — выбрать токен, перетащить",
@@ -71,12 +71,13 @@ inline constexpr std::array<std::string_view, 12> kHelpCommon = {
     "S — спасбросок, I — инициатива",
     "K — состояния, L — лист",
     "M — дальность хода, V — цвет",
+    "Команды: /damage N, /heal N",
 };
 inline constexpr std::array<std::string_view, 2> kHelpPlayer = {
     "C — забрать персонажа под курсором",
     "R — освободить своего персонажа",
 };
-inline constexpr std::array<std::string_view, 9> kHelpDm = {
+inline constexpr std::array<std::string_view, 10> kHelpDm = {
     "P / N — персонаж / монстр под курсором",
     "Del — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -86,6 +87,7 @@ inline constexpr std::array<std::string_view, 9> kHelpDm = {
     "F — шаблон области, Shift+F — убрать",
     "F5 — сохранить, F9 — загрузить",
     "Команды: /rename, /owner, /maxhp, /kick",
+    "/rest — короткий отдых, /longrest — длинный",
 };
 
 inline constexpr std::string_view kMenuTitle = "DND";

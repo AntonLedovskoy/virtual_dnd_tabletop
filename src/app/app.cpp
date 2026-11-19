@@ -1888,6 +1888,33 @@ auto App::SubmitChat() -> void {
     SendCommand(SetTokenMaxHp{.id = token->id, .max_hp = max_hp});
     return;
   }
+  if (text.starts_with("/damage ") || text.starts_with("/heal ")) {
+    if (token == nullptr) {
+      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+      return;
+    }
+    const bool heal = text.starts_with("/heal ");
+    int amount = 0;
+    const std::string_view value = std::string_view(text).substr(heal ? 6 : 8);
+    if (!ParseNumber(value, amount) || amount <= 0) {
+      view_.AddLocalLine("Использование: /damage 7 или /heal 5");
+      return;
+    }
+    if (heal) {
+      SendCommand(HealToken{.id = token->id, .amount = amount});
+    } else {
+      SendCommand(DamageToken{.id = token->id, .amount = amount});
+    }
+    return;
+  }
+  if (text == "/rest" || text == "/longrest") {
+    if (options_.mode != AppMode::kHost) {
+      view_.AddLocalLine("Отдых объявляет только DM");
+      return;
+    }
+    SendCommand(RestParty{.long_rest = text == "/longrest"});
+    return;
+  }
   SendCommand(Say{.text = text});
 }
 

@@ -79,6 +79,14 @@ class GameServer {
   [[nodiscard]] auto HandleSetHp(const SetTokenHp& command,
                                  const std::string& actor, bool can_control_all)
       -> CommandOutcome;
+  [[nodiscard]] auto HandleDamage(const DamageToken& command,
+                                  const std::string& actor,
+                                  bool can_control_all) -> CommandOutcome;
+  [[nodiscard]] auto HandleHeal(const HealToken& command,
+                                const std::string& actor, bool can_control_all)
+      -> CommandOutcome;
+  [[nodiscard]] auto HandleRest(const RestParty& command, bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleSetInitiative(const SetInitiative& command,
                                          const std::string& actor,
                                          bool can_control_all)

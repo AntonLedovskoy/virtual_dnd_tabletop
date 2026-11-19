@@ -116,6 +116,12 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleEndEncounter(can_control_all);
         } else if constexpr (std::is_same_v<T, SetAoe>) {
           return HandleSetAoe(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, DamageToken>) {
+          return HandleDamage(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, HealToken>) {
+          return HandleHeal(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, RestParty>) {
+          return HandleRest(cmd, can_control_all);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -391,6 +397,107 @@ auto GameServer::HandleSetHp(const SetTokenHp& command,
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  return outcome;
+}
+
+auto GameServer::HandleDamage(const DamageToken& command,
+                              const std::string& actor, bool can_control_all)
+    -> CommandOutcome {
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!CanControl(*token, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  if (command.amount <= 0 || command.amount > kMaxHp) {
+    return CommandOutcome{.reject_reason = "некорректный урон"};
+  }
+  const std::string name = token->name;
+  const int temp_before = token->temp_hp;
+  const int hp_before = token->hp;
+  const std::optional<Token> updated =
+      state_.DamageToken(command.id, command.amount);
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "не удалось нанести урон"};
+  }
+  const int absorbed = std::min(temp_before, command.amount);
+  std::ostringstream text;
+  text << name << " получил " << command.amount << " урона";
+  if (absorbed > 0) {
+    text << " (" << absorbed << " из временных HP)";
+  }
+  if (hp_before > 0 && updated->hp == 0) {
+    text << "; " << name << " без сознания";
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = AuthorName(actor),
+                      .text = text.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
+  return outcome;
+}
+
+auto GameServer::HandleHeal(const HealToken& command, const std::string& actor,
+                            bool can_control_all) -> CommandOutcome {
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!CanControl(*token, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  if (command.amount <= 0 || command.amount > kMaxHp) {
+    return CommandOutcome{.reject_reason = "некорректное лечение"};
+  }
+  const std::string name = token->name;
+  const int hp_before = token->hp;
+  const std::optional<Token> updated =
+      state_.HealToken(command.id, command.amount);
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "не удалось вылечить"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = AuthorName(actor),
+                      .text = name + " восстановил " +
+                              std::to_string(updated->hp - hp_before) + " HP",
+                      .timestamp = CurrentTimeSeconds()},
+  });
+  return outcome;
+}
+
+auto GameServer::HandleRest(const RestParty& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "отдых объявляет только DM"};
+  }
+  const bool has_players =
+      std::ranges::any_of(state_.Tokens(), [](const Token& token) -> bool {
+        return token.kind == TokenKind::kPlayer;
+      });
+  if (!has_players) {
+    return CommandOutcome{.reject_reason = "в партии нет персонажей"};
+  }
+  const std::vector<Token> changed = state_.RestParty(command.long_rest);
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  for (const Token& token : changed) {
+    outcome.events.emplace_back(TokenUpdated{.token = token});
+  }
+  outcome.events.emplace_back(LogLineAdded{
+      .line =
+          LogLine{.author = "DM",
+                  .text = command.long_rest
+                              ? "Длинный отдых: HP и состояния восстановлены"
+                              : "Короткий отдых: партия восстановила силы",
+                  .timestamp = CurrentTimeSeconds()},
+  });
   return outcome;
 }
 

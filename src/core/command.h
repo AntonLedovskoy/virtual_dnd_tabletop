@@ -114,6 +114,25 @@ struct UpdateTokenSheet {
   int temp_hp = 0;
 };
 
+// Владелец или DM: нанести урон. Временные HP принимают удар первыми, при
+// нуле HP сервер ставит состояние «без сознания».
+struct DamageToken {
+  TokenId id = 0;
+  int amount = 1;
+};
+
+// Владелец или DM: вылечить токен, но не выше максимума HP.
+struct HealToken {
+  TokenId id = 0;
+  int amount = 1;
+};
+
+// Только DM: отдых партии. Короткий восстанавливает половину максимума,
+// длинный — все HP и снимает состояния и временные HP.
+struct RestParty {
+  bool long_rest = false;
+};
+
 // Владелец или DM: заменить список состояний токена.
 struct UpdateTokenCombat {
   TokenId id = 0;
@@ -135,6 +154,7 @@ using Command =
                  RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
                  ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
                  SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
-                 StartEncounter, EndEncounter, NextTurn, SetAoe>;
+                 StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken,
+                 HealToken, RestParty>;
 
 }  // namespace dnd

@@ -46,6 +46,13 @@ class GameState {
 
   auto RemoveToken(TokenId id) -> bool;
   [[nodiscard]] auto SetTokenHp(TokenId id, int hp) -> std::optional<Token>;
+  // Временные HP принимают урон первыми; при нуле HP ставится «без сознания».
+  [[nodiscard]] auto DamageToken(TokenId id, int amount)
+      -> std::optional<Token>;
+  // Лечение не поднимает выше максимума; при HP > 0 снимает «без сознания».
+  [[nodiscard]] auto HealToken(TokenId id, int amount) -> std::optional<Token>;
+  // Возвращает персонажей, чьи HP или состояния изменились.
+  [[nodiscard]] auto RestParty(bool long_rest) -> std::vector<Token>;
   [[nodiscard]] auto SetInitiative(TokenId id, int value)
       -> std::optional<Token>;
   [[nodiscard]] auto SetTokenOwner(TokenId id, std::string owner)
