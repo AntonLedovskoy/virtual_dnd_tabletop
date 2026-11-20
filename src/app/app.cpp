@@ -1057,6 +1057,9 @@ auto App::ApplyUiScale() -> void {
     return;
   }
   const float scale = kUiScales[static_cast<std::size_t>(ui_scale_index_)];
+  int old_width = 0;
+  int old_height = 0;
+  const bool had_size = RenderSize(renderer_, old_width, old_height);
   // Nearest держит пиксели карты чёткими; увеличенный интерфейс сглаживаем,
   // иначе текст распадается на квадраты.
   SDL_SetDefaultTextureScaleMode(
@@ -1064,16 +1067,27 @@ auto App::ApplyUiScale() -> void {
   if (scale <= 1.0F) {
     SDL_SetRenderLogicalPresentation(renderer_, 0, 0,
                                      SDL_LOGICAL_PRESENTATION_DISABLED);
-    return;
+  } else {
+    const int logical_width =
+        std::max(1, static_cast<int>(static_cast<float>(width) / scale));
+    const int logical_height =
+        std::max(1, static_cast<int>(static_cast<float>(height) / scale));
+    if (!SDL_SetRenderLogicalPresentation(renderer_, logical_width,
+                                          logical_height,
+                                          SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
+      SDL_Log("ui scale failed: %s", SDL_GetError());
+    }
   }
-  const int logical_width =
-      std::max(1, static_cast<int>(static_cast<float>(width) / scale));
-  const int logical_height =
-      std::max(1, static_cast<int>(static_cast<float>(height) / scale));
-  if (!SDL_SetRenderLogicalPresentation(renderer_, logical_width,
-                                        logical_height,
-                                        SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
-    SDL_Log("ui scale failed: %s", SDL_GetError());
+  // Камера живёт в координатах интерфейса: после смены масштаба сдвигаем её
+  // так, чтобы в центре экрана осталась та же точка карты.
+  int new_width = 0;
+  int new_height = 0;
+  if (had_size && RenderSize(renderer_, new_width, new_height)) {
+    camera_x_ +=
+        (static_cast<float>(new_width) - static_cast<float>(old_width)) / 2.0F;
+    camera_y_ +=
+        (static_cast<float>(new_height) - static_cast<float>(old_height)) /
+        2.0F;
   }
 }
 
