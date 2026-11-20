@@ -116,6 +116,10 @@ class GameServer {
                                          const std::string& actor,
                                          bool can_control_all)
       -> CommandOutcome;
+  [[nodiscard]] auto HandleSetTokenPortrait(const SetTokenPortrait& command,
+                                            const std::string& actor,
+                                            bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleUpdateTokenSheet(const UpdateTokenSheet& command,
                                             const std::string& actor,
                                             bool can_control_all)

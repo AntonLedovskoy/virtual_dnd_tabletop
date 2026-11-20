@@ -341,6 +341,12 @@ auto App::Shutdown() -> void {
     SDL_DestroyTexture(background_texture_);
     background_texture_ = nullptr;
   }
+  for (const auto& [name, texture] : portrait_textures_) {
+    if (texture != nullptr) {
+      SDL_DestroyTexture(texture);
+    }
+  }
+  portrait_textures_.clear();
   text_.reset();
   if (font_ != nullptr) {
     TTF_CloseFont(font_);
@@ -1650,12 +1656,27 @@ auto App::BackgroundTexture(std::string_view image) -> SDL_Texture* {
     background_texture_ = nullptr;
   }
   background_texture_name_ = std::string(image);
-  if (image.empty() || !IsSafeBackgroundImageName(image)) {
+  if (image.empty() || !IsSafeImageName(image)) {
     return nullptr;
   }
   background_texture_ =
       IMG_LoadTexture(renderer_, AssetPath(image).string().c_str());
   return background_texture_;
+}
+
+auto App::PortraitTexture(const std::string& image) -> SDL_Texture* {
+  if (image.empty() || !IsSafeImageName(image)) {
+    return nullptr;
+  }
+  const auto found = portrait_textures_.find(image);
+  if (found != portrait_textures_.end()) {
+    return found->second;
+  }
+  SDL_Texture* texture =
+      IMG_LoadTexture(renderer_, AssetPath(image).string().c_str());
+  // Неудачную загрузку тоже запоминаем: не читаем диск каждый кадр.
+  portrait_textures_.emplace(image, texture);
+  return texture;
 }
 
 auto App::DrawBackground(const GridMap& map, const MapBackground& background)
@@ -1702,7 +1723,7 @@ auto App::SubmitMapCommand(std::string_view args) -> void {
       return;
     }
     next.scale = value;
-  } else if (IsSafeBackgroundImageName(args)) {
+  } else if (IsSafeImageName(args)) {
     next.image = std::string(args);
   } else {
     view_.AddLocalLine(std::string(strings::kMapUsage));
@@ -2336,6 +2357,22 @@ auto App::SubmitChat() -> void {
       return;
     }
     SendCommand(RenameToken{.id = token->id, .name = name});
+    return;
+  }
+  if (text == "/portrait" || text.starts_with("/portrait ")) {
+    if (token == nullptr) {
+      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+      return;
+    }
+    std::string portrait = text.size() > 10 ? text.substr(10) : std::string{};
+    if (portrait == "off") {
+      portrait.clear();
+    } else if (!IsSafeImageName(portrait)) {
+      view_.AddLocalLine(std::string(strings::kPortraitUsage));
+      return;
+    }
+    SendCommand(
+        SetTokenPortrait{.id = token->id, .portrait = std::move(portrait)});
     return;
   }
   if (text.starts_with("/maxhp ")) {
@@ -3130,8 +3167,14 @@ auto App::Iterate() -> void {
     DrawBackground(scene_.map, scene_.background);
     DrawGrid(renderer_, scene_.map, cell_size_, camera_x_, camera_y_);
     DrawWalls(renderer_, scene_.map, cell_size_, camera_x_, camera_y_);
+    std::vector<TokenArt> editor_art;
+    editor_art.reserve(scene_.tokens.size());
+    for (const Token& token : scene_.tokens) {
+      editor_art.push_back(
+          TokenArt{.portrait = PortraitTexture(token.portrait)});
+    }
     DrawTokens(renderer_, scene_.tokens, cell_size_, camera_x_, camera_y_,
-               text_.get(), 0, 0);
+               text_.get(), 0, 0, &editor_art);
     if (editor_panel_visible_) {
       DrawEditorPanel(renderer_, text_.get(), scene_, editor_brush_,
                       editor_status_);
@@ -3168,11 +3211,13 @@ auto App::Iterate() -> void {
   // сервер узнаёт о ходе только при отпускании кнопки. Токены вне текущей
   // зоны видимости не показываются вообще.
   std::vector<Token> shown;
+  std::vector<TokenArt> art;
   for (const Token& token : view_.Tokens()) {
     if (!view_.Fog().IsVisible(token.cell)) {
       continue;
     }
     shown.push_back(token);
+    art.push_back(TokenArt{.portrait = PortraitTexture(token.portrait)});
     if (dragging_ && token.id == selected_id_ && drag_target_.has_value()) {
       shown.back().cell = *drag_target_;
     }
@@ -3209,7 +3254,7 @@ auto App::Iterate() -> void {
           ? encounter.order[encounter.turn_index]
           : 0;
   DrawTokens(renderer_, shown, cell_size_, camera_x_, camera_y_, text_.get(),
-             selected_id_, active_id);
+             selected_id_, active_id, &art);
   const std::uint32_t now = CurrentTimeSeconds();
   view_.PrunePings(now);
   DrawPings(renderer_, view_.Pings(), now, cell_size_, camera_x_, camera_y_,

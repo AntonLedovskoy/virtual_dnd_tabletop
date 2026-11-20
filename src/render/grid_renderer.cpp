@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string>
 
@@ -58,9 +59,82 @@ constexpr std::array<SDL_Color, 4> kTokenColors{{
 constexpr float kTokenInset = 4.0F;
 constexpr float kWallInset = 1.0F;
 constexpr float kWallEdgeWidth = 3.0F;
+// Круг токена строится веером треугольников: SDL не умеет рисовать круги сам.
+constexpr int kCircleSegments = 48;
+constexpr std::size_t kCircleIndexCount =
+    static_cast<std::size_t>(kCircleSegments) * 3;
+constexpr float kFullTurn = 6.28318530718F;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+}
+
+auto ToFColor(SDL_Color color) -> SDL_FColor {
+  return SDL_FColor{
+      .r = static_cast<float>(color.r) / 255.0F,
+      .g = static_cast<float>(color.g) / 255.0F,
+      .b = static_cast<float>(color.b) / 255.0F,
+      .a = static_cast<float>(color.a) / 255.0F,
+  };
+}
+
+auto BuildCircle(SDL_FPoint center, float radius, SDL_Color color,
+                 std::array<SDL_Vertex, kCircleSegments + 1>& vertices)
+    -> void {
+  const SDL_FPoint middle{.x = 0.5F, .y = 0.5F};
+  const SDL_FColor vertex_color = ToFColor(color);
+  vertices[0] = SDL_Vertex{
+      .position = center, .color = vertex_color, .tex_coord = middle};
+  for (int i = 0; i < kCircleSegments; ++i) {
+    const float angle =
+        kFullTurn * static_cast<float>(i) / static_cast<float>(kCircleSegments);
+    const float cosine = std::cos(angle);
+    const float sine = std::sin(angle);
+    vertices[static_cast<std::size_t>(i) + 1] =
+        SDL_Vertex{.position = SDL_FPoint{.x = center.x + (radius * cosine),
+                                          .y = center.y + (radius * sine)},
+                   .color = vertex_color,
+                   .tex_coord = SDL_FPoint{.x = middle.x + (cosine * 0.5F),
+                                           .y = middle.y + (sine * 0.5F)}};
+  }
+}
+
+auto CircleIndices() -> const std::array<int, kCircleIndexCount>& {
+  static const std::array<int, kCircleIndexCount> indices =
+      []() -> std::array<int, kCircleIndexCount> {
+    std::array<int, kCircleIndexCount> built{};
+    for (int i = 0; i < kCircleSegments; ++i) {
+      const auto base = static_cast<std::size_t>(i) * 3;
+      built[base] = 0;
+      built[base + 1] = i + 1;
+      built[base + 2] = ((i + 1) % kCircleSegments) + 1;
+    }
+    return built;
+  }();
+  return indices;
+}
+
+auto DrawCircle(SDL_Renderer* renderer, SDL_FPoint center, float radius,
+                SDL_Color color) -> void {
+  std::array<SDL_Vertex, kCircleSegments + 1> vertices{};
+  BuildCircle(center, radius, color, vertices);
+  const auto& indices = CircleIndices();
+  SDL_RenderGeometry(renderer, nullptr, vertices.data(),
+                     static_cast<int>(vertices.size()), indices.data(),
+                     static_cast<int>(indices.size()));
+}
+
+auto DrawTexturedCircle(SDL_Renderer* renderer, SDL_Texture* texture,
+                        SDL_FPoint center, float radius) -> void {
+  constexpr SDL_Color white{
+      .r = 0xff, .g = 0xff, .b = 0xff, .a = SDL_ALPHA_OPAQUE};
+  std::array<SDL_Vertex, kCircleSegments + 1> vertices{};
+  BuildCircle(center, radius, white, vertices);
+  const auto& indices = CircleIndices();
+  SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+  SDL_RenderGeometry(renderer, texture, vertices.data(),
+                     static_cast<int>(vertices.size()), indices.data(),
+                     static_cast<int>(indices.size()));
 }
 
 auto CellCenter(Cell cell, float cell_size, float offset_x, float offset_y)
@@ -202,36 +276,29 @@ auto DrawCellHighlight(SDL_Renderer* renderer, Cell cell, float cell_size,
 auto DrawTokens(SDL_Renderer* renderer, const std::vector<Token>& tokens,
                 float cell_size, float offset_x, float offset_y,
                 TextRenderer* text, std::uint32_t selected_id,
-                std::uint32_t active_id) -> void {
-  for (const Token& token : tokens) {
+                std::uint32_t active_id, const std::vector<TokenArt>* art)
+    -> void {
+  for (std::size_t index = 0; index < tokens.size(); ++index) {
+    const Token& token = tokens[index];
     const SDL_FRect rect =
         CellRect(token.cell, cell_size, offset_x, offset_y, kTokenInset);
-    SetDrawColor(renderer, TokenColor(token));
-    SDL_RenderFillRect(renderer, &rect);
+    const SDL_FPoint center =
+        CellCenter(token.cell, cell_size, offset_x, offset_y);
+    const float radius = rect.w / 2.0F;
 
     const bool selected = token.id == selected_id;
-    SetDrawColor(renderer, selected ? kSelectedOutline : kTokenOutline);
-    SDL_RenderRect(renderer, &rect);
-    if (selected) {
-      const SDL_FRect inner{
-          .x = rect.x + 2.0F,
-          .y = rect.y + 2.0F,
-          .w = rect.w - 4.0F,
-          .h = rect.h - 4.0F,
-      };
-      SDL_RenderRect(renderer, &inner);
+    const bool active = active_id != 0 && token.id == active_id;
+    if (active) {
+      DrawCircle(renderer, center, radius + 4.0F, kTurnOutline);
     }
-
-    if (active_id != 0 && token.id == active_id) {
-      const SDL_FRect turn{
-          .x = rect.x - 1.0F,
-          .y = rect.y - 1.0F,
-          .w = rect.w + 2.0F,
-          .h = rect.h + 2.0F,
-      };
-      SetDrawColor(renderer, kTurnOutline);
-      SDL_RenderRect(renderer, &turn);
-      SDL_RenderRect(renderer, &rect);
+    if (selected) {
+      DrawCircle(renderer, center, radius + 2.0F, kSelectedOutline);
+    }
+    DrawCircle(renderer, center, radius + 1.0F, kTokenOutline);
+    DrawCircle(renderer, center, radius, TokenColor(token));
+    if (art != nullptr && index < art->size() &&
+        (*art)[index].portrait != nullptr) {
+      DrawTexturedCircle(renderer, (*art)[index].portrait, center, radius);
     }
 
     if (token.max_hp > 0) {

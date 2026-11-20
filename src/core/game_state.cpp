@@ -289,6 +289,19 @@ auto GameState::SetTokenColor(TokenId id, std::uint32_t color)
   return *token;
 }
 
+auto GameState::SetTokenPortrait(TokenId id, std::string portrait)
+    -> std::optional<Token> {
+  if (!portrait.empty() && !IsSafeImageName(portrait)) {
+    return std::nullopt;
+  }
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->portrait = std::move(portrait);
+  return *token;
+}
+
 auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
                                  std::string notes, int attack_bonus,
                                  int save_bonus, int initiative_bonus,

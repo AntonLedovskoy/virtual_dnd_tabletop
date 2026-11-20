@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -191,6 +192,8 @@ class App {
   auto BackgroundTexture(std::string_view image) -> SDL_Texture*;
   auto DrawBackground(const GridMap& map, const MapBackground& background)
       -> void;
+  // Портреты токенов: одна текстура на имя файла, nullptr — файла нет.
+  auto PortraitTexture(const std::string& image) -> SDL_Texture*;
   // Разбирает хвост команды «/map ...».
   auto SubmitMapCommand(std::string_view args) -> void;
   auto LoadFont() -> void;
@@ -297,6 +300,8 @@ class App {
   // Кэш картинки подложки: одна текстура на текущее имя файла.
   SDL_Texture* background_texture_ = nullptr;
   std::string background_texture_name_;
+  // Кэш портретов токенов по имени файла.
+  std::map<std::string, SDL_Texture*> portrait_textures_;
 
   std::deque<GameSnapshot> undo_stack_;
   TokenId pending_delete_token_ = 0;

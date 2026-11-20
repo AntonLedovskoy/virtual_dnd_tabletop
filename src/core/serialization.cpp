@@ -48,6 +48,7 @@ constexpr std::uint8_t kCommandAoeDamage = 24;
 constexpr std::uint8_t kCommandDeathSave = 25;
 constexpr std::uint8_t kCommandPing = 26;
 constexpr std::uint8_t kCommandSetMapBackground = 27;
+constexpr std::uint8_t kCommandSetTokenPortrait = 28;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -87,6 +88,7 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.movement_used);
   writer.I32(token.death_save_successes);
   writer.I32(token.death_save_failures);
+  writer.String(token.portrait);
 }
 
 auto ReadToken(ByteReader& reader, Token& token) -> bool {
@@ -113,6 +115,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::int32_t movement_used = 0;
   std::int32_t death_successes = 0;
   std::int32_t death_failures = 0;
+  std::string portrait;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -135,7 +138,8 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
     conditions.emplace_back(std::move(condition_name), rounds);
   }
   if (!reader.I32(movement_used) || !reader.I32(death_successes) ||
-      !reader.I32(death_failures) || death_successes < 0 ||
+      !reader.I32(death_failures) ||
+      !reader.String(portrait, kMaxImageNameLength) || death_successes < 0 ||
       death_successes > 3 || death_failures < 0 || death_failures > 3) {
     return false;
   }
@@ -145,7 +149,8 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       save_bonus < -100 || save_bonus > 100 || initiative_bonus < -100 ||
       initiative_bonus > 100 || movement_used < 0 || movement_used > 1000 ||
       kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
-      (color & 0xFF000000U) != 0) {
+      (color & 0xFF000000U) != 0 ||
+      (!portrait.empty() && !IsSafeImageName(portrait))) {
     return false;
   }
   token = Token{
@@ -169,6 +174,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .death_save_failures = death_failures,
       .kind = static_cast<TokenKind>(kind),
       .color = color,
+      .portrait = std::move(portrait),
       .cell = Cell{.x = x, .y = y},
   };
   return true;
@@ -289,7 +295,7 @@ auto ReadMapBackground(ByteReader& reader, MapBackground& background) -> bool {
   std::string image;
   std::int32_t opacity = 0;
   std::int32_t scale = 0;
-  if (!reader.String(image, kMaxBackgroundImageName) || !reader.I32(opacity) ||
+  if (!reader.String(image, kMaxImageNameLength) || !reader.I32(opacity) ||
       !reader.I32(scale)) {
     return false;
   }
@@ -548,6 +554,17 @@ auto DecodeSetTokenColorCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{SetTokenColor{.id = id, .color = color}};
+}
+
+auto DecodeSetTokenPortraitCommand(ByteReader& reader)
+    -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::string portrait;
+  if (!reader.U32(id) || !reader.String(portrait, kMaxImageNameLength) ||
+      !reader.Done() || (!portrait.empty() && !IsSafeImageName(portrait))) {
+    return std::nullopt;
+  }
+  return Command{SetTokenPortrait{.id = id, .portrait = std::move(portrait)}};
 }
 
 auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
@@ -963,6 +980,10 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, SetMapBackground>) {
           writer.U8(kCommandSetMapBackground);
           WriteMapBackground(writer, cmd.background);
+        } else if constexpr (std::is_same_v<T, SetTokenPortrait>) {
+          writer.U8(kCommandSetTokenPortrait);
+          writer.U32(cmd.id);
+          writer.String(cmd.portrait);
         }
       },
       command);
@@ -1031,6 +1052,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodePingCommand(reader);
     case kCommandSetMapBackground:
       return DecodeSetMapBackgroundCommand(reader);
+    case kCommandSetTokenPortrait:
+      return DecodeSetTokenPortraitCommand(reader);
     default:
       return std::nullopt;
   }

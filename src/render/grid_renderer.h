@@ -28,10 +28,16 @@ auto DrawWalls(SDL_Renderer* renderer, const GridMap& map, float cell_size,
                float offset_x, float offset_y) -> void;
 auto DrawCellHighlight(SDL_Renderer* renderer, Cell cell, float cell_size,
                        float offset_x, float offset_y) -> void;
+// Картинка токена, уже загруженная приложением; nullptr — цвет и имя.
+struct TokenArt {
+  SDL_Texture* portrait = nullptr;
+};
+
 auto DrawTokens(SDL_Renderer* renderer, const std::vector<Token>& tokens,
                 float cell_size, float offset_x, float offset_y,
                 TextRenderer* text, std::uint32_t selected_id,
-                std::uint32_t active_id) -> void;
+                std::uint32_t active_id,
+                const std::vector<TokenArt>* art = nullptr) -> void;
 auto DrawFog(SDL_Renderer* renderer, const FogOfWar& fog, float cell_size,
              float offset_x, float offset_y) -> void;
 

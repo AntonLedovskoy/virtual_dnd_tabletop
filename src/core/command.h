@@ -103,6 +103,12 @@ struct SetTokenColor {
   std::uint32_t color = 0;
 };
 
+// Владелец или DM: картинка-портрет рядом с .exe; пусто — цвет и инициалы.
+struct SetTokenPortrait {
+  TokenId id = 0;
+  std::string portrait;
+};
+
 // Владелец или DM: редактировать лист персонажа или монстра в интерфейсе.
 struct UpdateTokenSheet {
   TokenId id = 0;
@@ -174,11 +180,13 @@ struct SetMapBackground {
   MapBackground background;
 };
 
-using Command = std::variant<
-    MoveToken, Say, RollDice, RollExpression, AddToken, RemoveToken, SetTokenHp,
-    SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner, RenameToken,
-    SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
-    StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken, HealToken,
-    RestParty, AoeDamage, DeathSave, PingAt, SetMapBackground>;
+using Command =
+    std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
+                 RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
+                 ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
+                 SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
+                 StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken,
+                 HealToken, RestParty, AoeDamage, DeathSave, PingAt,
+                 SetMapBackground, SetTokenPortrait>;
 
 }  // namespace dnd

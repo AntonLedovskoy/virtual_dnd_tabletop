@@ -66,6 +66,9 @@ class GameState {
       -> std::optional<Token>;
   [[nodiscard]] auto SetTokenColor(TokenId id, std::uint32_t color)
       -> std::optional<Token>;
+  // Пустой portrait снимает картинку и возвращает цвет с инициалами.
+  [[nodiscard]] auto SetTokenPortrait(TokenId id, std::string portrait)
+      -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenSheet(TokenId id, int ac, int speed,
                                       std::string notes, int attack_bonus,
                                       int save_bonus, int initiative_bonus,

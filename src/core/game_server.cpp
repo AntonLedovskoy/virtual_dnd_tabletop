@@ -108,6 +108,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleSetTokenMaxHp(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, SetTokenColor>) {
           return HandleSetTokenColor(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, SetTokenPortrait>) {
+          return HandleSetTokenPortrait(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, UpdateTokenSheet>) {
           return HandleUpdateTokenSheet(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
@@ -815,6 +817,28 @@ auto GameServer::HandleSetTokenColor(const SetTokenColor& command,
       state_.SetTokenColor(command.id, command.color);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить токен"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  return outcome;
+}
+
+auto GameServer::HandleSetTokenPortrait(const SetTokenPortrait& command,
+                                        const std::string& actor,
+                                        bool can_control_all)
+    -> CommandOutcome {
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!CanControl(*token, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  const std::optional<Token> updated =
+      state_.SetTokenPortrait(command.id, command.portrait);
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "некорректный портрет"};
   }
   CommandOutcome outcome;
   outcome.accepted = true;

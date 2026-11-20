@@ -26,7 +26,7 @@ inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, N — монстр, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
     "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /map | "
-    "/kick";
+    "/portrait | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
@@ -76,11 +76,12 @@ inline constexpr std::array<std::string_view, 15> kHelpCommon = {
     "Команды: /damage N, /heal N",
     "/deathsave — при 0 HP",
 };
-inline constexpr std::array<std::string_view, 2> kHelpPlayer = {
+inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "C — забрать персонажа под курсором",
     "R — освободить своего персонажа",
+    "/portrait файл.png — портрет своего персонажа",
 };
-inline constexpr std::array<std::string_view, 13> kHelpDm = {
+inline constexpr std::array<std::string_view, 14> kHelpDm = {
     "P / N — персонаж / монстр под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -94,6 +95,7 @@ inline constexpr std::array<std::string_view, 13> kHelpDm = {
     "Enter в режиме F и /aoe 2d6 15 — урон по шаблону",
     "Ctrl+Z — отменить последнее действие DM",
     "/map карта.png — подложка, /map off — убрать",
+    "/portrait файл.png — портрет выбранного токена",
 };
 
 inline constexpr std::string_view kMenuTitle = "DND";
@@ -198,5 +200,7 @@ inline constexpr std::string_view kMapUsage =
     "Использование: /map карта.png | /map off | /map opacity 60 | "
     "/map scale 150";
 inline constexpr std::string_view kMapMissingImage = "Нет файла подложки: ";
+inline constexpr std::string_view kPortraitUsage =
+    "Использование: /portrait файл.png или /portrait off";
 
 }  // namespace dnd::strings

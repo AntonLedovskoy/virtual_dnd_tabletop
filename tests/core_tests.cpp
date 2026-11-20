@@ -1461,6 +1461,7 @@ auto TestSaveLoadRoundtrip() -> void {
                          .movement_used = 4,
                          .kind = dnd::TokenKind::kPlayer,
                          .color = 0x507AC8U,
+                         .portrait = "hero.png",
                          .cell = CellAt(1, 1)},
               dnd::Token{.id = 6,
                          .name = "goblin",
@@ -1526,6 +1527,8 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().kind == dnd::TokenKind::kPlayer,
            "token kind survives");
     Expect(loaded->tokens.front().color == 0x507AC8U, "token colour survives");
+    Expect(loaded->tokens.front().portrait == "hero.png",
+           "token portrait survives");
     Expect(loaded->tokens.front().cell == CellAt(1, 1), "token cell survives");
     Expect(loaded->next_token_id == 7, "next token id survives");
     Expect(loaded->encounter.active && loaded->encounter.round == 3,
@@ -1930,22 +1933,20 @@ auto TestPing() -> void {
 }
 
 auto TestMapBackground() -> void {
-  Expect(dnd::IsSafeBackgroundImageName("dungeon.png"),
-         "a plain png name is safe");
-  Expect(dnd::IsSafeBackgroundImageName("Dungeon.JPG"),
+  Expect(dnd::IsSafeImageName("dungeon.png"), "a plain png name is safe");
+  Expect(dnd::IsSafeImageName("Dungeon.JPG"),
          "extensions are case-insensitive");
-  Expect(dnd::IsSafeBackgroundImageName("map-1.jpeg"),
+  Expect(dnd::IsSafeImageName("map-1.jpeg"),
          "hyphens are allowed in image names");
-  Expect(!dnd::IsSafeBackgroundImageName(""), "an empty image name is unsafe");
-  Expect(!dnd::IsSafeBackgroundImageName("../secret.png"),
+  Expect(!dnd::IsSafeImageName(""), "an empty image name is unsafe");
+  Expect(!dnd::IsSafeImageName("../secret.png"),
          "parent directory escapes are rejected");
-  Expect(!dnd::IsSafeBackgroundImageName("maps/dungeon.png"),
-         "directories are rejected");
-  Expect(!dnd::IsSafeBackgroundImageName("C:\\dungeon.png"),
+  Expect(!dnd::IsSafeImageName("maps/dungeon.png"), "directories are rejected");
+  Expect(!dnd::IsSafeImageName("C:\\dungeon.png"),
          "windows paths are rejected");
-  Expect(!dnd::IsSafeBackgroundImageName("dungeon.exe"),
+  Expect(!dnd::IsSafeImageName("dungeon.exe"),
          "unknown extensions are rejected");
-  Expect(!dnd::IsSafeBackgroundImageName(std::string(200, 'a') + ".png"),
+  Expect(!dnd::IsSafeImageName(std::string(200, 'a') + ".png"),
          "overlong image names are rejected");
 
   Expect(dnd::IsValidMapBackground(dnd::MapBackground{}),
@@ -2039,6 +2040,79 @@ auto TestMapBackground() -> void {
           std::get<dnd::MapBackgroundUpdated>(*event_decoded)
                   .background.scale == 160,
       "map background event survives serialization");
+}
+
+auto TestTokenPortrait() -> void {
+  const dnd::GameSnapshot snapshot{
+      .map = dnd::GridMap(8, 8),
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(2, 1)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 6, 13);
+
+  const dnd::CommandOutcome owner_change = server.HandleCommand(
+      dnd::SetTokenPortrait{.id = 1, .portrait = "hero.png"}, "alice", false);
+  Expect(owner_change.accepted, "the owner sets a character portrait");
+  Expect(owner_change.events.size() == 1 &&
+             std::holds_alternative<dnd::TokenUpdated>(
+                 owner_change.events.front()),
+         "a portrait change updates the token");
+  if (!owner_change.events.empty() &&
+      std::holds_alternative<dnd::TokenUpdated>(owner_change.events.front())) {
+    Expect(std::get<dnd::TokenUpdated>(owner_change.events.front())
+                   .token.portrait == "hero.png",
+           "the token keeps the portrait file name");
+  }
+  Expect(server.State().Tokens().front().portrait == "hero.png",
+         "the world stores the portrait");
+
+  const dnd::CommandOutcome stranger_change = server.HandleCommand(
+      dnd::SetTokenPortrait{.id = 1, .portrait = "other.png"}, "bob", false);
+  Expect(!stranger_change.accepted,
+         "a stranger cannot change someone else's portrait");
+
+  const dnd::CommandOutcome dm_change = server.HandleCommand(
+      dnd::SetTokenPortrait{.id = 2, .portrait = "goblin.jpg"}, "dm", true);
+  Expect(dm_change.accepted, "the DM changes any portrait");
+
+  const dnd::CommandOutcome unsafe = server.HandleCommand(
+      dnd::SetTokenPortrait{.id = 1, .portrait = "../secret.png"}, "dm", true);
+  Expect(!unsafe.accepted, "an unsafe portrait name is rejected");
+
+  const dnd::CommandOutcome cleared = server.HandleCommand(
+      dnd::SetTokenPortrait{.id = 1, .portrait = ""}, "alice", false);
+  Expect(cleared.accepted && server.State().Tokens().front().portrait.empty(),
+         "an empty portrait clears the image");
+
+  const dnd::Command command{
+      dnd::SetTokenPortrait{.id = 1, .portrait = "hero.png"}};
+  const std::vector<std::uint8_t> bytes = dnd::EncodeCommand(command);
+  const std::optional<dnd::Command> decoded =
+      dnd::DecodeCommand(bytes.data(), bytes.size());
+  Expect(decoded.has_value() &&
+             std::holds_alternative<dnd::SetTokenPortrait>(*decoded) &&
+             std::get<dnd::SetTokenPortrait>(*decoded).id == 1 &&
+             std::get<dnd::SetTokenPortrait>(*decoded).portrait == "hero.png",
+         "portrait command survives serialization");
+
+  const std::vector<std::uint8_t> unsafe_bytes{
+      28,  1,   0,   0,   0,   13,  0,   0,   0,   '.', '.',
+      '/', 's', 'e', 'c', 'r', 'e', 't', '.', 'p', 'n', 'g'};
+  Expect(
+      !dnd::DecodeCommand(unsafe_bytes.data(), unsafe_bytes.size()).has_value(),
+      "an unsafe portrait is rejected by the decoder");
 }
 
 auto TestCommandEventSerialization() -> void {
@@ -2516,6 +2590,7 @@ auto main() -> int {
     TestChatAndDice();
     TestPing();
     TestMapBackground();
+    TestTokenPortrait();
     TestCommandEventSerialization();
     TestSaveLoadRoundtrip();
     TestCampaign();

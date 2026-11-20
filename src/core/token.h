@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/grid_map.h"
+#include "core/image_name.h"
 
 namespace dnd {
 
@@ -60,6 +61,8 @@ struct Token {
   TokenKind kind = TokenKind::kMonster;
   // 0xRRGGBB или 0, чтобы брать цвет из id токена.
   std::uint32_t color = 0;
+  // Имя картинки-портрета рядом с .exe; пусто — цвет и инициалы.
+  std::string portrait;
   Cell cell{};
 };
 
