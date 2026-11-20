@@ -130,6 +130,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleDeathSave(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, PingAt>) {
           return HandlePing(cmd, actor);
+        } else if constexpr (std::is_same_v<T, SetMapBackground>) {
+          return HandleSetMapBackground(cmd, can_control_all);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -923,6 +925,22 @@ auto GameServer::HandlePing(const PingAt& command, const std::string& actor)
   outcome.accepted = true;
   outcome.events.emplace_back(
       PingMarker{.cell = command.cell, .author = AuthorName(actor)});
+  return outcome;
+}
+
+auto GameServer::HandleSetMapBackground(const SetMapBackground& command,
+                                        bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "подложку карты меняет только DM"};
+  }
+  if (!state_.SetBackground(command.background)) {
+    return CommandOutcome{.reject_reason = "некорректная подложка карты"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(
+      MapBackgroundUpdated{.background = state_.Background()});
   return outcome;
 }
 

@@ -25,7 +25,8 @@ inline constexpr std::string_view kYourToken = "это ваш персонаж";
 inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, N — монстр, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
-    "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /kick";
+    "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /map | "
+    "/kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
@@ -79,7 +80,7 @@ inline constexpr std::array<std::string_view, 2> kHelpPlayer = {
     "C — забрать персонажа под курсором",
     "R — освободить своего персонажа",
 };
-inline constexpr std::array<std::string_view, 12> kHelpDm = {
+inline constexpr std::array<std::string_view, 13> kHelpDm = {
     "P / N — персонаж / монстр под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -92,6 +93,7 @@ inline constexpr std::array<std::string_view, 12> kHelpDm = {
     "/rest — короткий отдых, /longrest — длинный",
     "Enter в режиме F и /aoe 2d6 15 — урон по шаблону",
     "Ctrl+Z — отменить последнее действие DM",
+    "/map карта.png — подложка, /map off — убрать",
 };
 
 inline constexpr std::string_view kMenuTitle = "DND";
@@ -189,5 +191,12 @@ inline constexpr std::string_view kDeleteConfirm =
 inline constexpr std::string_view kUndoDone = "Действие отменено";
 inline constexpr std::string_view kUndoEmpty = "Нечего отменять";
 inline constexpr std::string_view kUndoDmOnly = "Отмена доступна только DM";
+
+inline constexpr std::string_view kMapDmOnly =
+    "Подложку карты меняет только DM";
+inline constexpr std::string_view kMapUsage =
+    "Использование: /map карта.png | /map off | /map opacity 60 | "
+    "/map scale 150";
+inline constexpr std::string_view kMapMissingImage = "Нет файла подложки: ";
 
 }  // namespace dnd::strings

@@ -100,11 +100,55 @@ auto TokenColor(const Token& token) -> SDL_Color {
 
 }  // namespace
 
-auto DrawGrid(SDL_Renderer* renderer, const GridMap& map, float cell_size,
-              float offset_x, float offset_y) -> void {
+auto ClearBoard(SDL_Renderer* renderer) -> void {
   SetDrawColor(renderer, kBackground);
   SDL_RenderClear(renderer);
+}
 
+auto DrawMapBackground(SDL_Renderer* renderer, SDL_Texture* texture,
+                       const GridMap& map, int opacity, int scale,
+                       float cell_size, float offset_x, float offset_y)
+    -> void {
+  if (texture == nullptr || opacity <= 0) {
+    return;
+  }
+  float texture_width = 0.0F;
+  float texture_height = 0.0F;
+  if (!SDL_GetTextureSize(texture, &texture_width, &texture_height) ||
+      texture_width <= 0.0F || texture_height <= 0.0F) {
+    return;
+  }
+  const float map_width = static_cast<float>(map.Width()) * cell_size;
+  const float map_height = static_cast<float>(map.Height()) * cell_size;
+  // Вписываем картинку в карту целиком, затем применяем масштаб. Пропорции
+  // сохраняются, картинка центрируется.
+  const float fit =
+      std::min(map_width / texture_width, map_height / texture_height) *
+      (static_cast<float>(scale) / 100.0F);
+  const SDL_FRect destination{
+      .x = offset_x + ((map_width - (texture_width * fit)) / 2.0F),
+      .y = offset_y + ((map_height - (texture_height * fit)) / 2.0F),
+      .w = texture_width * fit,
+      .h = texture_height * fit,
+  };
+  const SDL_Rect clip{
+      .x = static_cast<int>(offset_x),
+      .y = static_cast<int>(offset_y),
+      .w = static_cast<int>(map_width),
+      .h = static_cast<int>(map_height),
+  };
+  SDL_SetRenderClipRect(renderer, &clip);
+  SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+  const auto alpha =
+      static_cast<std::uint8_t>((opacity * SDL_ALPHA_OPAQUE + 50) / 100);
+  SDL_SetTextureAlphaMod(texture, alpha);
+  SDL_RenderTexture(renderer, texture, nullptr, &destination);
+  SDL_SetTextureAlphaMod(texture, SDL_ALPHA_OPAQUE);
+  SDL_SetRenderClipRect(renderer, nullptr);
+}
+
+auto DrawGrid(SDL_Renderer* renderer, const GridMap& map, float cell_size,
+              float offset_x, float offset_y) -> void {
   SetDrawColor(renderer, kGridLine);
   const auto width = static_cast<float>(map.Width()) * cell_size;
   const auto height = static_cast<float>(map.Height()) * cell_size;

@@ -1484,6 +1484,12 @@ auto TestSaveLoadRoundtrip() -> void {
               .radius = 4,
               .width = 3,
           },
+      .background =
+          dnd::MapBackground{
+              .image = "dungeon.png",
+              .opacity = 60,
+              .scale = 140,
+          },
   };
 
   const std::filesystem::path path =
@@ -1528,6 +1534,10 @@ auto TestSaveLoadRoundtrip() -> void {
                loaded->encounter.turn_index == 1,
            "turn order survives the roundtrip");
     Expect(loaded->aoe == original.aoe, "aoe template survives the roundtrip");
+    Expect(loaded->background.image == "dungeon.png" &&
+               loaded->background.opacity == 60 &&
+               loaded->background.scale == 140,
+           "map background survives the roundtrip");
   }
 
   std::filesystem::remove(path);
@@ -1917,6 +1927,118 @@ auto TestPing() -> void {
   view.Apply(dnd::ViewUpdated{.snapshot = server.ClientSnapshot(),
                               .fog = server.FogState()});
   Expect(view.Pings().empty(), "world refresh clears pings");
+}
+
+auto TestMapBackground() -> void {
+  Expect(dnd::IsSafeBackgroundImageName("dungeon.png"),
+         "a plain png name is safe");
+  Expect(dnd::IsSafeBackgroundImageName("Dungeon.JPG"),
+         "extensions are case-insensitive");
+  Expect(dnd::IsSafeBackgroundImageName("map-1.jpeg"),
+         "hyphens are allowed in image names");
+  Expect(!dnd::IsSafeBackgroundImageName(""), "an empty image name is unsafe");
+  Expect(!dnd::IsSafeBackgroundImageName("../secret.png"),
+         "parent directory escapes are rejected");
+  Expect(!dnd::IsSafeBackgroundImageName("maps/dungeon.png"),
+         "directories are rejected");
+  Expect(!dnd::IsSafeBackgroundImageName("C:\\dungeon.png"),
+         "windows paths are rejected");
+  Expect(!dnd::IsSafeBackgroundImageName("dungeon.exe"),
+         "unknown extensions are rejected");
+  Expect(!dnd::IsSafeBackgroundImageName(std::string(200, 'a') + ".png"),
+         "overlong image names are rejected");
+
+  Expect(dnd::IsValidMapBackground(dnd::MapBackground{}),
+         "no image with default opacity and scale is valid");
+  Expect(dnd::IsValidMapBackground(dnd::MapBackground{
+             .image = "dungeon.png", .opacity = 40, .scale = 150}),
+         "a normal background is valid");
+  Expect(!dnd::IsValidMapBackground(
+             dnd::MapBackground{.image = "dungeon.png", .opacity = 101}),
+         "opacity above 100 is rejected");
+  Expect(!dnd::IsValidMapBackground(
+             dnd::MapBackground{.image = "dungeon.png", .opacity = -1}),
+         "negative opacity is rejected");
+  Expect(!dnd::IsValidMapBackground(
+             dnd::MapBackground{.image = "dungeon.png", .scale = 5}),
+         "scale below the minimum is rejected");
+  Expect(
+      !dnd::IsValidMapBackground(dnd::MapBackground{.image = "../dungeon.png"}),
+      "an unsafe image name makes the background invalid");
+
+  const dnd::GameSnapshot snapshot{.map = dnd::GridMap(8, 6),
+                                   .next_token_id = 1};
+  dnd::GameServer server(snapshot, 6, 11);
+  const dnd::MapBackground background{
+      .image = "dungeon.png", .opacity = 45, .scale = 160};
+
+  const dnd::CommandOutcome player_change = server.HandleCommand(
+      dnd::SetMapBackground{.background = background}, "alice", false);
+  Expect(!player_change.accepted, "only the DM changes the map background");
+  Expect(server.State().Background().image.empty(),
+         "a rejected background does not change the world");
+
+  const dnd::CommandOutcome dm_change = server.HandleCommand(
+      dnd::SetMapBackground{.background = background}, "dm", true);
+  Expect(dm_change.accepted, "the DM sets the map background");
+  Expect(server.State().Background().image == "dungeon.png" &&
+             server.State().Background().opacity == 45 &&
+             server.State().Background().scale == 160,
+         "the background is stored in the world");
+  Expect(dm_change.events.size() == 1 &&
+             std::holds_alternative<dnd::MapBackgroundUpdated>(
+                 dm_change.events.front()),
+         "setting the background emits an update event");
+  if (!dm_change.events.empty() &&
+      std::holds_alternative<dnd::MapBackgroundUpdated>(
+          dm_change.events.front())) {
+    Expect(server.EventVisibleToPlayers(dm_change.events.front()),
+           "the background update reaches players");
+    dnd::ClientView view;
+    view.Apply(dm_change.events.front());
+    Expect(view.Background().image == "dungeon.png" &&
+               view.Background().opacity == 45 &&
+               view.Background().scale == 160,
+           "the client view keeps the background");
+  }
+
+  const dnd::CommandOutcome invalid = server.HandleCommand(
+      dnd::SetMapBackground{
+          .background =
+              dnd::MapBackground{.image = "dungeon.png", .opacity = 200}},
+      "dm", true);
+  Expect(!invalid.accepted, "an out-of-range background is rejected");
+
+  const dnd::CommandOutcome removed = server.HandleCommand(
+      dnd::SetMapBackground{.background = dnd::MapBackground{}}, "dm", true);
+  Expect(removed.accepted && server.State().Background().image.empty(),
+         "an empty background removes the image");
+
+  const dnd::Command command{dnd::SetMapBackground{.background = background}};
+  const std::vector<std::uint8_t> bytes = dnd::EncodeCommand(command);
+  const std::optional<dnd::Command> decoded =
+      dnd::DecodeCommand(bytes.data(), bytes.size());
+  Expect(
+      decoded.has_value() &&
+          std::holds_alternative<dnd::SetMapBackground>(*decoded) &&
+          std::get<dnd::SetMapBackground>(*decoded).background.image ==
+              "dungeon.png" &&
+          std::get<dnd::SetMapBackground>(*decoded).background.opacity == 45 &&
+          std::get<dnd::SetMapBackground>(*decoded).background.scale == 160,
+      "map background command survives serialization");
+
+  const dnd::Event event{dnd::MapBackgroundUpdated{.background = background}};
+  const std::vector<std::uint8_t> event_bytes = dnd::EncodeEvent(event);
+  const std::optional<dnd::Event> event_decoded =
+      dnd::DecodeEvent(event_bytes.data(), event_bytes.size());
+  Expect(
+      event_decoded.has_value() &&
+          std::holds_alternative<dnd::MapBackgroundUpdated>(*event_decoded) &&
+          std::get<dnd::MapBackgroundUpdated>(*event_decoded)
+                  .background.image == "dungeon.png" &&
+          std::get<dnd::MapBackgroundUpdated>(*event_decoded)
+                  .background.scale == 160,
+      "map background event survives serialization");
 }
 
 auto TestCommandEventSerialization() -> void {
@@ -2393,6 +2515,7 @@ auto main() -> int {
     TestAoeCommands();
     TestChatAndDice();
     TestPing();
+    TestMapBackground();
     TestCommandEventSerialization();
     TestSaveLoadRoundtrip();
     TestCampaign();

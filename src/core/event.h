@@ -62,8 +62,13 @@ struct PingMarker {
   std::string author;
 };
 
+// DM поставил, сдвинул или убрал подложку карты.
+struct MapBackgroundUpdated {
+  MapBackground background;
+};
+
 using Event = std::variant<TokenMoved, ViewUpdated, LogLineAdded, TokenAdded,
                            TokenRemoved, TokenUpdated, EncounterUpdated,
-                           AoeUpdated, PingMarker>;
+                           AoeUpdated, PingMarker, MapBackgroundUpdated>;
 
 }  // namespace dnd

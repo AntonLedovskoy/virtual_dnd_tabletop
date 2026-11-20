@@ -6,6 +6,7 @@
 #include "core/aoe.h"
 #include "core/encounter.h"
 #include "core/grid_map.h"
+#include "core/map_background.h"
 #include "core/token.h"
 
 namespace dnd {
@@ -168,12 +169,16 @@ struct PingAt {
   Cell cell{};
 };
 
-using Command =
-    std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
-                 RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
-                 ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
-                 SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
-                 StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken,
-                 HealToken, RestParty, AoeDamage, DeathSave, PingAt>;
+// Только DM: картинка под сеткой. Пустое image убирает подложку.
+struct SetMapBackground {
+  MapBackground background;
+};
+
+using Command = std::variant<
+    MoveToken, Say, RollDice, RollExpression, AddToken, RemoveToken, SetTokenHp,
+    SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner, RenameToken,
+    SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
+    StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken, HealToken,
+    RestParty, AoeDamage, DeathSave, PingAt, SetMapBackground>;
 
 }  // namespace dnd

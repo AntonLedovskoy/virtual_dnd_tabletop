@@ -94,6 +94,12 @@ class GameState {
   [[nodiscard]] auto Aoe() const -> const AoeTemplate& { return aoe_; }
   auto SetAoe(AoeTemplate aoe) -> bool;
 
+  // Подложка карты: имя файла и параметры отображения.
+  [[nodiscard]] auto Background() const -> const MapBackground& {
+    return background_;
+  }
+  auto SetBackground(MapBackground background) -> bool;
+
  private:
   auto FindToken(TokenId id) -> Token*;
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;
@@ -104,6 +110,7 @@ class GameState {
   TokenId next_token_id_ = 1;
   Encounter encounter_;
   AoeTemplate aoe_;
+  MapBackground background_;
 };
 
 }  // namespace dnd

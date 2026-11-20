@@ -132,6 +132,10 @@ class GameServer {
   // Метка «сюда»: любой участник, клетка проверяется по карте.
   [[nodiscard]] auto HandlePing(const PingAt& command, const std::string& actor)
       -> CommandOutcome;
+  // Подложку карты меняет только DM: это общий вид стола.
+  [[nodiscard]] auto HandleSetMapBackground(const SetMapBackground& command,
+                                            bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleNextTurn(bool can_control_all) -> CommandOutcome;
 
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;

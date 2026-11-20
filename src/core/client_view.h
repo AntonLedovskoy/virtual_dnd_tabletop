@@ -52,6 +52,9 @@ class ClientView {
     return encounter_;
   }
   [[nodiscard]] auto Aoe() const -> const AoeTemplate& { return aoe_; }
+  [[nodiscard]] auto Background() const -> const MapBackground& {
+    return background_;
+  }
   [[nodiscard]] auto Pings() const -> const std::vector<MapPing>& {
     return pings_;
   }
@@ -70,6 +73,7 @@ class ClientView {
   std::size_t appended_log_lines_ = 0;
   Encounter encounter_;
   AoeTemplate aoe_;
+  MapBackground background_;
   std::vector<MapPing> pings_;
 };
 

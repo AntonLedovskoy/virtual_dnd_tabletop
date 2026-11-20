@@ -1,5 +1,6 @@
 #include "app/app.h"
 
+#include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
 #include <algorithm>
@@ -131,6 +132,14 @@ auto SessionLogPath() -> std::filesystem::path {
     return std::filesystem::path(base) / "session.log";
   }
   return {"session.log"};
+}
+
+// Ресурсы (подложка, портреты) ищутся рядом с .exe: сцена хранит только имя.
+auto AssetPath(std::string_view name) -> std::filesystem::path {
+  if (const char* base = SDL_GetBasePath()) {
+    return std::filesystem::path(base) / std::string(name);
+  }
+  return {std::string(name)};
 }
 
 auto ParseNumber(std::string_view text, int& value) -> bool {
@@ -328,6 +337,10 @@ auto App::Initialize() -> bool {
 
 auto App::Shutdown() -> void {
   session_log_.Close();
+  if (background_texture_ != nullptr) {
+    SDL_DestroyTexture(background_texture_);
+    background_texture_ = nullptr;
+  }
   text_.reset();
   if (font_ != nullptr) {
     TTF_CloseFont(font_);
@@ -1628,6 +1641,76 @@ auto App::SubmitPing(Cell cell) -> void {
   SendCommand(PingAt{.cell = cell});
 }
 
+auto App::BackgroundTexture(std::string_view image) -> SDL_Texture* {
+  if (image == background_texture_name_) {
+    return background_texture_;
+  }
+  if (background_texture_ != nullptr) {
+    SDL_DestroyTexture(background_texture_);
+    background_texture_ = nullptr;
+  }
+  background_texture_name_ = std::string(image);
+  if (image.empty() || !IsSafeBackgroundImageName(image)) {
+    return nullptr;
+  }
+  background_texture_ =
+      IMG_LoadTexture(renderer_, AssetPath(image).string().c_str());
+  return background_texture_;
+}
+
+auto App::DrawBackground(const GridMap& map, const MapBackground& background)
+    -> void {
+  SDL_Texture* texture = BackgroundTexture(background.image);
+  DrawMapBackground(renderer_, texture, map, background.opacity,
+                    background.scale, cell_size_, camera_x_, camera_y_);
+  if (texture != nullptr || background.image.empty() || text_ == nullptr) {
+    return;
+  }
+  // Файл не найден: сетка остаётся рабочей, а подпись говорит, чего не хватает.
+  text_->Draw(std::string(strings::kMapMissingImage) + background.image,
+              camera_x_ + 8.0F, camera_y_ + 8.0F,
+              SDL_Color{.r = 0xff, .g = 0x90, .b = 0x90, .a = SDL_ALPHA_OPAQUE},
+              640.0F);
+}
+
+auto App::SubmitMapCommand(std::string_view args) -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kMapDmOnly));
+    return;
+  }
+  if (args.empty()) {
+    view_.AddLocalLine(std::string(strings::kMapUsage));
+    return;
+  }
+
+  MapBackground next = server_.State().Background();
+  if (args == "off") {
+    next = MapBackground{};
+  } else if (args.starts_with("opacity ")) {
+    int value = 0;
+    if (!ParseSignedNumber(args.substr(8), value) ||
+        value < kMinBackgroundOpacity || value > kMaxBackgroundOpacity) {
+      view_.AddLocalLine(std::string(strings::kMapUsage));
+      return;
+    }
+    next.opacity = value;
+  } else if (args.starts_with("scale ")) {
+    int value = 0;
+    if (!ParseSignedNumber(args.substr(6), value) ||
+        value < kMinBackgroundScale || value > kMaxBackgroundScale) {
+      view_.AddLocalLine(std::string(strings::kMapUsage));
+      return;
+    }
+    next.scale = value;
+  } else if (IsSafeBackgroundImageName(args)) {
+    next.image = std::string(args);
+  } else {
+    view_.AddLocalLine(std::string(strings::kMapUsage));
+    return;
+  }
+  SendCommand(SetMapBackground{.background = std::move(next)});
+}
+
 auto App::SendCommand(const Command& command) -> void {
   if (options_.mode == AppMode::kClient) {
     net_client_.SendCommand(command);
@@ -2173,6 +2256,11 @@ auto App::SubmitChat() -> void {
   }
   if (text == "/ping") {
     SubmitPing(CellFromPixel(mouse_x_, mouse_y_));
+    return;
+  }
+  if (text == "/map" || text.starts_with("/map ")) {
+    SubmitMapCommand(text.size() > 5 ? std::string_view(text).substr(5)
+                                     : std::string_view{});
     return;
   }
   if (options_.mode == AppMode::kHost && text.starts_with("/kick ")) {
@@ -3038,6 +3126,8 @@ auto App::Iterate() -> void {
   }
 
   if (in_editor_) {
+    ClearBoard(renderer_);
+    DrawBackground(scene_.map, scene_.background);
     DrawGrid(renderer_, scene_.map, cell_size_, camera_x_, camera_y_);
     DrawWalls(renderer_, scene_.map, cell_size_, camera_x_, camera_y_);
     DrawTokens(renderer_, scene_.tokens, cell_size_, camera_x_, camera_y_,
@@ -3089,6 +3179,8 @@ auto App::Iterate() -> void {
   }
 
   const bool is_dm = options_.mode == AppMode::kHost || client_is_dm_;
+  ClearBoard(renderer_);
+  DrawBackground(view_.Map(), view_.Background());
   DrawGrid(renderer_, view_.Map(), cell_size_, camera_x_, camera_y_);
   DrawWalls(renderer_, view_.Map(), cell_size_, camera_x_, camera_y_);
   const Encounter& encounter = view_.EncounterState();

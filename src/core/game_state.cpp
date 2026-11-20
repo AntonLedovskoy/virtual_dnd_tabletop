@@ -38,7 +38,8 @@ GameState::GameState(GameSnapshot snapshot)
       tokens_(std::move(snapshot.tokens)),
       next_token_id_(snapshot.next_token_id),
       encounter_(std::move(snapshot.encounter)),
-      aoe_(snapshot.aoe) {}
+      aoe_(snapshot.aoe),
+      background_(std::move(snapshot.background)) {}
 
 auto GameState::Snapshot() const -> GameSnapshot {
   return GameSnapshot{
@@ -47,6 +48,7 @@ auto GameState::Snapshot() const -> GameSnapshot {
       .next_token_id = next_token_id_,
       .encounter = encounter_,
       .aoe = aoe_,
+      .background = background_,
   };
 }
 
@@ -370,6 +372,14 @@ auto GameState::SetAoe(AoeTemplate aoe) -> bool {
     return false;
   }
   aoe_ = aoe;
+  return true;
+}
+
+auto GameState::SetBackground(MapBackground background) -> bool {
+  if (!IsValidMapBackground(background)) {
+    return false;
+  }
+  background_ = std::move(background);
   return true;
 }
 

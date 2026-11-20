@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "core/byte_io.h"
+#include "core/map_background.h"
 
 namespace dnd {
 namespace {
@@ -46,6 +47,7 @@ constexpr std::uint8_t kCommandRestParty = 23;
 constexpr std::uint8_t kCommandAoeDamage = 24;
 constexpr std::uint8_t kCommandDeathSave = 25;
 constexpr std::uint8_t kCommandPing = 26;
+constexpr std::uint8_t kCommandSetMapBackground = 27;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -56,6 +58,7 @@ constexpr std::uint8_t kEventTokenUpdated = 6;
 constexpr std::uint8_t kEventEncounterUpdated = 7;
 constexpr std::uint8_t kEventAoeUpdated = 8;
 constexpr std::uint8_t kEventPingMarker = 9;
+constexpr std::uint8_t kEventMapBackgroundUpdated = 10;
 
 auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.U32(token.id);
@@ -273,6 +276,42 @@ auto DecodeSetAoeCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{SetAoe{.aoe = aoe}};
+}
+
+auto WriteMapBackground(ByteWriter& writer, const MapBackground& background)
+    -> void {
+  writer.String(background.image);
+  writer.I32(background.opacity);
+  writer.I32(background.scale);
+}
+
+auto ReadMapBackground(ByteReader& reader, MapBackground& background) -> bool {
+  std::string image;
+  std::int32_t opacity = 0;
+  std::int32_t scale = 0;
+  if (!reader.String(image, kMaxBackgroundImageName) || !reader.I32(opacity) ||
+      !reader.I32(scale)) {
+    return false;
+  }
+  const MapBackground decoded{
+      .image = std::move(image),
+      .opacity = opacity,
+      .scale = scale,
+  };
+  if (!IsValidMapBackground(decoded)) {
+    return false;
+  }
+  background = decoded;
+  return true;
+}
+
+auto DecodeSetMapBackgroundCommand(ByteReader& reader)
+    -> std::optional<Command> {
+  MapBackground background;
+  if (!ReadMapBackground(reader, background) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{SetMapBackground{.background = std::move(background)}};
 }
 
 auto DecodeDamageCommand(ByteReader& reader) -> std::optional<Command> {
@@ -585,6 +624,15 @@ auto DecodePingMarkerEvent(ByteReader& reader) -> std::optional<Event> {
       PingMarker{.cell = Cell{.x = x, .y = y}, .author = std::move(author)}};
 }
 
+auto DecodeMapBackgroundUpdatedEvent(ByteReader& reader)
+    -> std::optional<Event> {
+  MapBackground background;
+  if (!ReadMapBackground(reader, background) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{MapBackgroundUpdated{.background = std::move(background)}};
+}
+
 auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   Encounter encounter;
   if (!ReadEncounter(reader, encounter) || !reader.Done()) {
@@ -692,6 +740,7 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
   writer.U32(snapshot.next_token_id);
   WriteEncounter(writer, snapshot.encounter);
   WriteAoe(writer, snapshot.aoe);
+  WriteMapBackground(writer, snapshot.background);
   return writer.Data();
 }
 
@@ -741,8 +790,9 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
   }
   Encounter encounter;
   AoeTemplate aoe;
+  MapBackground background;
   if (!ReadEncounter(reader, encounter) || !ReadAoe(reader, aoe) ||
-      !reader.Done()) {
+      !ReadMapBackground(reader, background) || !reader.Done()) {
     return std::nullopt;
   }
 
@@ -752,6 +802,7 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
       .next_token_id = next_token_id,
       .encounter = std::move(encounter),
       .aoe = aoe,
+      .background = std::move(background),
   };
 }
 
@@ -909,6 +960,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandPing);
           writer.I32(cmd.cell.x);
           writer.I32(cmd.cell.y);
+        } else if constexpr (std::is_same_v<T, SetMapBackground>) {
+          writer.U8(kCommandSetMapBackground);
+          WriteMapBackground(writer, cmd.background);
         }
       },
       command);
@@ -975,6 +1029,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeDeathSaveCommand(reader);
     case kCommandPing:
       return DecodePingCommand(reader);
+    case kCommandSetMapBackground:
+      return DecodeSetMapBackgroundCommand(reader);
     default:
       return std::nullopt;
   }
@@ -1026,6 +1082,9 @@ auto EncodeEvent(const Event& event) -> std::vector<std::uint8_t> {
           writer.I32(ev.cell.x);
           writer.I32(ev.cell.y);
           writer.String(ev.author);
+        } else if constexpr (std::is_same_v<T, MapBackgroundUpdated>) {
+          writer.U8(kEventMapBackgroundUpdated);
+          WriteMapBackground(writer, ev.background);
         }
       },
       event);
@@ -1058,6 +1117,8 @@ auto DecodeEvent(const std::uint8_t* data, std::size_t size)
       return DecodeAoeUpdatedEvent(reader);
     case kEventPingMarker:
       return DecodePingMarkerEvent(reader);
+    case kEventMapBackgroundUpdated:
+      return DecodeMapBackgroundUpdatedEvent(reader);
     default:
       return std::nullopt;
   }

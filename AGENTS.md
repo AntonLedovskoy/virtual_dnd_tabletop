@@ -1,76 +1,68 @@
 # AGENTS.md
 
-Виртуальный стол для D&D на C++20 + SDL3. Один исполняемый файл (`dnd`)
-работает либо как авторитетный хост/DM, либо как TCP-клиент. README и CI нет;
-источник истины — сборочные скрипты и тесты. План разработки и список
-известных слабых мест — в `PLAN.md`.
+Virtual D&D tabletop, C++20 + SDL3. One `dnd` binary: authoritative host/DM or
+TCP client. No README/CI: build scripts and tests are the source of truth;
+roadmap and weak spots in `PLAN.md`.
 
-Комментарии в коде и документация — на русском. Сообщения коммитов — тоже на
-русском.
+Language: code, comments, docs in Russian; identifiers and terms in English.
+Local rules win where stricter than global (language, live UI checks).
 
-## Сборка и тесты
+## Build and tests
 
-- Windows: `.\build.bat` (по умолчанию debug). Профили: `-p debug|release|relwithdebinfo|minsize`; `-c` принудительно перенастраивает; `-j N` задаёт число задач; `-t` (или `--tidy`) после сборки прогоняет `clang-tidy` по своим файлам `.cpp` и падает на любом замечании.
-- `build.bat` запускает `build.sh` в MSYS2 UCRT64. Ожидает MSYS2 в `C:\msys64` или `%MSYS2_ROOT%`; не запускайте `build.sh` напрямую из PowerShell.
-- Бинарники лежат в `.build/<profile>/` (например, `.build/debug/dnd.exe`).
-- Первая конфигурация скачивает SDL3, SDL3_ttf и SDL3_image через CMake FetchContent (нужна сеть, несколько минут). Дальше `.build/<profile>` переиспользуется, если не передан `-c`.
-- Свои цели собираются с `-Wall -Wextra -Wpedantic`; зависимости — со своими настройками. Новые предупреждения в своём коде считаются ошибкой.
-- Все тесты: `ctest --test-dir .build/debug --output-on-failure`
-- Один набор: `ctest --test-dir .build/debug -R core_tests` или запуск `.build/debug/dnd_core_tests.exe` напрямую.
-- Тесты — обычные `main()` с хелпером `Expect`, без фреймворка. Фильтра по отдельному тесту нет; чтобы изолировать случай, добавьте `TestX()` и вызовите его из `main()` в `tests/core_tests.cpp` или `tests/net_tests.cpp`.
-- `net_tests` занимает временный localhost-порт и ждёт с таймаутами 3 секунды; внешние сервисы не нужны.
-- GUI требует дисплея; отлаживайте через `.vscode/launch.json`, а не из тестов.
-- Проверки интерфейса делаются на живом GUI и подтверждаются скриншотами окна (клиентской области), а не только `ctest`. Запустите хост и клиент, пройдите сценарий; для каждого изменённого визуального поведения приложите снимок. Ввод можно подавать через SendInput/`SendKeys` в клиентских координатах, но результат подтверждайте снимком.
+- Windows: `.\build.bat` (debug default). `-p debug|release|relwithdebinfo|minsize`, `-c` reconfigure, `-j N` jobs, `-t`/`--tidy` runs `clang-tidy` on our `.cpp`, fails on any finding.
+- `build.bat` runs `build.sh` in MSYS2 UCRT64 (`C:\msys64` or `%MSYS2_ROOT%`); never run `build.sh` from PowerShell.
+- Binaries in `.build/<profile>/`, e.g. `.build/debug/dnd.exe`.
+- First configure fetches SDL3, SDL3_ttf, SDL3_image via FetchContent (network, minutes); `.build/<profile>` reused unless `-c`.
+- Our targets: `-Wall -Wextra -Wpedantic`; deps use own flags; new warnings in our code = error.
+- All tests: `ctest --test-dir .build/debug --output-on-failure`; one suite: `-R core_tests` or `.build/debug/dnd_core_tests.exe`.
+- Tests: plain `main()` + `Expect`, no framework or per-test filter — add `TestX()` and call it from `main()` in `tests/core_tests.cpp`/`tests/net_tests.cpp`.
+- `net_tests`: temp localhost port, 3 s timeouts, no external services.
+- GUI needs a display: debug via `.vscode/launch.json`, not tests.
+- UI: verify on live GUI with client-area screenshots, not `ctest`. Run host + client, walk the scenario, snapshot each changed visual behavior. SendInput/`SendKeys` in client coordinates is fine, outcome must be a snapshot.
 
-## Архитектура
+## Architecture
 
-- `src/core`: игровая логика без SDL. `GameState` хранит правила, `GameServer` проверяет команды, владение, туман и кубы, `ClientView` — единственное состояние, которое может читать рендеринг, `LocalTransport` — внутрипроцессная очередь команд/событий. Криптография для входа — `src/core/sha256` (SHA-256/HMAC) и `src/core/password` (запрос и отпечаток пароля).
-- `src/net`: TCP-фрейминг, сокеты и клиент/сервер. `NetServer` не авторитетен; `App` владеет `GameServer` и передаёт ему команды участников.
-- `src/app`: окно/ввод SDL, меню Host/Join и цикл хоста/клиента. `src/render`: только отрисовка. Точка входа — `src/main.cpp` на колбэках SDL3 (`SDL_MAIN_USE_CALLBACKS`).
-- Текст идёт через `render/text_renderer` (`TTF_Text` + `TTF_DrawRendererText`, пул объектов). Вызывайте `BeginFrame()` раз в кадр; не возвращайте `TTF_RenderText_Blended` с созданием текстур на каждый кадр.
-- Обычный запуск показывает меню Host/Join/Map. `--host`, `--port` или `--connect HOST[:PORT]` сразу запускают режим; `--editor` открывает редактор карт; `--menu` принудительно показывает меню. Клиенты также принимают `--name`, обе стороны — `--password`.
-- Хост всегда DM и играет локально. Порт по умолчанию 7777. Имена игроков непустые и уникальные; хост исключает командой `/kick ИМЯ`.
-- Редактор карт сохраняет `scene.dndscene` рядом с `.exe` и использует формат снапшота. Клавиши: `1`–`5` — кисти, `[`/`]` — ширина, `-`/`=` — высота, `Tab` — сцены кампании, `F2` — панель редактора, `F5` — сохранить выбранную сцену, `F9` — загрузить `scene.dndscene`, `Enter` — хост, `Esc` — меню. В панели сцен `↑`/`↓` или `1`–`9` выбирают, `Enter` открывает сцену в редакторе, `N` создаёт новую сцену из текущей карты. Панорама — средней кнопкой, зум — колесом, в редакторе и в игре.
-- `L` открывает лист выбранного токена (КД, скорость, бонусы атаки/спасброска, урон, заметки), `B` — встроенный бестиарий у DM. Шаблоны бестиария лежат в `src/core/bestiary`; при спавне копируются в токен.
-- Игрок через claim владеет только одним персонажем; `R` освобождает его. DM может назначать несколько токенов через `/owner`. Подсказки в нижней панели и панели токена зависят от роли.
-- Обрыв связи у клиента не сбрасывает стол: показывается баннер «Связь потеряна, переподключение…», и раз в 2 с (`kReconnectDelay`) идёт `NetClient::Reconnect`. После нового `Welcome` мир перезаливается полностью, а `PruneStaleViewState` сбрасывает выделение и закрывает панели пропавших токенов. Персонаж упавшего игрока остаётся за владельцем; DM снимает владельца `/owner` с пустым именем. Кик `/kick ИМЯ` добавляет имя в `banned_names_` до перезапуска хоста, поэтому кикнутый не вернётся сам.
-- `PageUp`/`PageDown` и колесо над нижней панелью листают лог, `End` возвращает к свежим строкам; по умолчанию лог сам держится за низ. `F1` открывает модальную справку по клавишам для текущей роли (`DrawHelpPanel`), `Esc` или `F1` закрывают её; текст справки — в `src/app/strings.h`.
-- Лог сессии дописывается в `session.log` рядом с `.exe` (`src/core/session_log.h`): `[время] автор: текст`, файл не стирается между запусками, перед строками новой сессии идёт заголовок. `App::FlushSessionLog` пишет только новые строки, ориентируясь на `ClientView::AppendedLogLines`.
-- Мышь в списках: клик по строке инициативы выбирает токен, по игроку — первого его персонажа, по сцене — выделяет, двойной клик открывает сцену (и в редакторе). Геометрия строк общая с отрисовкой: `InitiativeTokenAt`, `PlayerRowAt`, `SceneRowAt` в `src/render/ui_renderer`.
-- `Ctrl+=`/`Ctrl+-` меняют масштаб интерфейса (100/125/150/200%), `Ctrl+0` возвращает 100%. Масштаб — это логическое разрешение через `SDL_SetRenderLogicalPresentation`; раскладка берёт размеры из `RenderSize()`, события мыши переводятся `SDL_ConvertEventToRenderCoordinates`.
-- `Alt`+ПКМ или `/ping` ставит метку «сюда» под курсором: команда `PingAt` превращается в событие `PingMarker`, его видит весь стол 4 секунды (`kPingSeconds`). Метки хранятся в `ClientView::Pings` и чистятся `PrunePings`; в снимок и сохранение они не попадают.
-- Кубы: `/roll d20+5`, `2d6+3`, `adv d20+5`, `dis d20-1`. В игре `A` — атака (Shift+A — с преимуществом), `S` — спасбросок, `I` — инициатива. Парсер и броски — в `src/core/dice`.
-- `K` открывает состояния выбранного токена, `M` — подсветку дальности движения, `Alt`+ЛКМ — линейку расстояний. Временные HP и состояния хранятся в токене; дальность считается `ReachableCells` в `src/core/grid_map`. Скорости и расстояния — в метрах, одна клетка = 1,5 м (`src/core/units.h`).
-- Урон и лечение идут командами `DamageToken`/`HealToken` (чат `/damage N`, `/heal N` по выбранному токену): временные HP принимают урон первыми, при 0 HP сервер ставит состояние «без сознания» (`kUnconscious`), лечение его снимает. Отдых объявляет только DM: `/rest` возвращает половину максимума HP, `/longrest` — все HP и снимает временные HP с состояниями; оба пишут строку в лог. Поведение — `GameState::DamageToken`, `HealToken`, `RestParty`, обработчики в `GameServer`.
-- Состояние — `Condition{name, rounds}`: `rounds > 0` тикает вниз в начале хода своего токена и исчезает на нуле, `0` держится до ручного снятия. Панель `K` ставит стандартные состояния на 10 ходов (`kDefaultConditionRounds`) и показывает остаток; лист даёт «Бонус инициативы», а `StartEncounter` сам кидает d20 + бонус за каждый токен и пишет итог в лог.
-- Концентрация проверяется при уроне: d20 + `save_bonus` против 10 или половины урона, провал снимает состояние «концентрация» (`kConcentration`) и пишет итог в лог.
-- Спасбросок от смерти: `/deathsave` для токена с 0 HP, бросает d20. 10+ — успех, 1–9 — провал, 20 — возвращает 1 HP; 3 провала ставят «мёртв» (`kDead`), 3 успеха снимают «без сознания» и стабилизируют. Счётчики `death_save_successes`/`death_save_failures` живут в `Token`, удар по лежачему добавляет провал, лечение и отдых сбрасывают счётчики.
-- В активном бою игрок не может пройти за ход больше скорости: сервер считает `PathCostCells` и списывает шаги в `Token::movement_used`. `M` подсвечивает остаток, в панели токена строка «Осталось хода». Запас сбрасывается в начале хода токена, при старте и конце боя; DM (`can_control_all`) двигает свободно и запас не тратит. Вне боя ограничения нет.
-- `F` включает режим шаблона области: `1`–`3` — круг/конус/линия, `←`/`→` — поворот, `↑`/`↓` — радиус или длина, `,`/`.` — ширина линии, курсор задаёт источник. `Shift+F` и `Esc` убирают шаблон, `F` только выходит из режима. Шаблон живёт в `GameSnapshot` (`AoeTemplate`), ставит его только DM, видят все.
-- `Enter` в режиме `F` готовит чат с `/aoe `; команда `/aoe 2d6 15` (урон и сложность спасброска) бросает урон один раз, затем каждому токену под шаблоном — спасбросок d20 + `save_bonus`: успех уменьшает урон вдвое, провал наносит полный. Клетки берёт `AoeCells`, урон проводит `GameState::DamageToken`, итоги пишутся в лог.
-- Видимость и права проверяются в `GameServer` (`ClientSnapshot`, `EventVisibleToPlayers`, `can_control_all`), а не в рендерере. Игроки не могут добавлять/удалять токены и управлять боем.
-- Туман партии считается по всем токенам `TokenKind::kPlayer`; NPC и монстры обзор не дают. Незанятые токены персонажей заблокированы до claim; свободные NPC с пустым owner игроки могут двигать. DM может назначать и снимать владельцев.
-- `F5` сохраняет, `F9` загружает. Файл `savegame.bin` рядом с `.exe` через `SDL_GetBasePath()`; сохранение и загрузка доступны только хосту.
-- Кампания — набор сцен (`Campaign`/`Scene` в `src/core/campaign.h`) в `campaign.dndcamp` рядом с `.exe` (`src/core/campaign_io.h`, magic `DNDC`). Сцена хранит полный `GameSnapshot`, имя и заметку; активная сцена всегда зеркалит мир хоста (смена сцены, `F5`/`F9`, старт хоста, сохранение из редактора).
-- DM открывает список сцен по `Tab` (или `/scene`), переключает `1`–`9` либо `↑`/`↓` + `Enter`, переименовывает по `R`, правит заметку по `E`, создаёт копию текущей по `N`, удаляет по `Del` дважды; `/scene ИМЯ` переключает по имени, `/scene new` создаёт сцену, `/scene rename СТАРОЕ НОВОЕ` переименовывает (имя может содержать пробелы; разбор — `ParseSceneRename`). Игрокам сцены недоступны. Смена сцены сбрасывает бой и уходит клиентам как `ViewUpdated`.
-- `Scene` хранит `name` и `note`; заметка видна под именем в панели сцен. Дубликаты имён запрещены (`IsSceneNameAvailable`, `RenameScene`), `NextSceneName` подбирает свободное. Формат кампании — `kCampaignVersion = 4`.
-- Автосейв кампании у хоста: принятая команда, меняющая мир (движение, бой, листы), ставит флаг, и через 8 с (`kAutosaveDelay`) активная сцена пишется в `campaign.dndcamp`. Чат и броски флаг не ставят. `SaveCampaign` снимает флаг только при успешной записи. Меню хоста показывает имя активной сцены и число сцен.
-- Удаление токена и сцены подтверждается вторым `Del` в течение 3 с (`kDeleteConfirmDelay`); первое нажатие показывает предупреждение. `Ctrl+Z` у хоста отменяет последнее действие DM: кольцевой буфер из 10 `GameSnapshot` (`undo_stack_`), снимок берётся до команды, меняющей мир. Отмена возвращает и бой; смена сцены, загрузка и старт хоста очищают буфер, а структура кампании (создание/удаление сцен) не отменяется.
+- `src/core` — logic without SDL: `GameState` (rules), `GameServer` (validates commands, ownership, fog, dice), `ClientView` (only state rendering reads), `LocalTransport` (in-process command/event queue); login crypto in `src/core/sha256` (SHA-256/HMAC), `src/core/password`.
+- `src/net` — TCP framing, sockets, client/server; `NetServer` not authoritative, `App` owns `GameServer`, forwards peer commands. `src/app` — SDL window/input, Host/Join menu, host/client loop; `src/render` — drawing only; entry `src/main.cpp` on SDL3 callbacks (`SDL_MAIN_USE_CALLBACKS`).
+- Text only via `render/text_renderer` (`TTF_Text` + `TTF_DrawRendererText`, pooled objects, `BeginFrame()` per frame); per-frame `TTF_RenderText_Blended` textures forbidden.
+- Startup: Host/Join/Map menu; `--host`, `--port`, `--connect HOST[:PORT]` start a mode, `--editor` map editor, `--menu` menu. Clients take `--name`, both sides `--password`. Host is always DM, plays locally, port 7777; names non-empty, unique, `/kick NAME` removes a player.
+- Editor saves `scene.dndscene` next to `.exe` (snapshot format). Keys: `1`–`5` brushes, `[`/`]` width, `-`/`=` height, `Tab` scenes, `F2` panel, `F5` save scene, `F9` load `scene.dndscene`, `Enter` host, `Esc` menu; scene panel `↑`/`↓`/`1`–`9` select, `Enter` open, `N` new scene from map. Pan middle-drag, zoom wheel, editor and game.
+- `L` token sheet (AC, speed, attack/save bonuses, damage, notes), `B` DM bestiary (`src/core/bestiary`, templates copied into token on spawn). Claim = one character per player, `R` releases; DM assigns several via `/owner`. Hints depend on role.
+- Connection loss never resets the table: banner "Connection lost, reconnecting…", `NetClient::Reconnect` every 2 s (`kReconnectDelay`). New `Welcome` resends the world; `PruneStaleViewState` clears selection, closes panels of vanished tokens. Dropped player keeps their character; `/owner` with empty name clears ownership; `/kick NAME` bans until host restart.
+- Log: `PageUp`/`PageDown`/wheel over bottom panel scroll, `End` to newest, default sticks to bottom. `F1` modal key help (`DrawHelpPanel`, text in `src/app/strings.h`), `Esc`/`F1` closes. `session.log` next to `.exe` (`src/core/session_log.h`) stores `[time] author: text`, survives runs, new session starts with header; `App::FlushSessionLog` writes only new lines via `ClientView::AppendedLogLines`.
+- List mouse: initiative row selects token, player row their first character, scene row selects, double click opens scene (editor too). Row geometry shared with rendering: `InitiativeTokenAt`, `PlayerRowAt`, `SceneRowAt` in `src/render/ui_renderer`.
+- `Ctrl+=`/`Ctrl+-` UI scale 100/125/150/200%, `Ctrl+0` 100%: logical resolution via `SDL_SetRenderLogicalPresentation`, layout from `RenderSize()`, mouse via `SDL_ConvertEventToRenderCoordinates`.
+- `Alt`+RMB or `/ping` drops a "here" marker: `PingAt` → `PingMarker` event for all, 4 s (`kPingSeconds`); in `ClientView::Pings`, pruned by `PrunePings`, never saved.
+- Map backdrop: `MapBackground{image, opacity, scale}` in `GameSnapshot`, only the file name travels over the network and the file lives next to each `.exe`; missing file leaves the grid plus a label. DM `/map FILE`, `/map off`, `/map opacity N`, `/map scale N` (`SetMapBackground` → `MapBackgroundUpdated`); render order `ClearBoard` → `DrawMapBackground` → `DrawGrid`, image clipped to the map.
+- Dice: `/roll d20+5`, `2d6+3`, `adv d20+5`, `dis d20-1`; `A` attack (Shift+A advantage), `S` save, `I` initiative. Parser/rolls in `src/core/dice`.
+- `K` conditions, `M` movement reach, `Alt`+LMB ruler. Temp HP, conditions in token; reach via `ReachableCells` (`src/core/grid_map`); meters, cell 1.5 m (`src/core/units.h`).
+- Damage/heal: `DamageToken`/`HealToken` (`/damage N`, `/heal N` on selected token): temp HP first, 0 HP → "unconscious" (`kUnconscious`), healing clears it. Rest DM-only: `/rest` half max HP, `/longrest` full HP, clears temp HP and conditions; both log (`GameState::DamageToken`, `HealToken`, `RestParty`).
+- `Condition{name, rounds}`: `rounds > 0` ticks at own turn start, gone at zero; `0` until removed. `K` panel: standard conditions 10 rounds (`kDefaultConditionRounds`), shows remainder; sheet gives initiative bonus, `StartEncounter` rolls d20 + bonus per token, logs.
+- Concentration on damage: d20 + `save_bonus` vs 10 or half damage; failure drops "concentration" (`kConcentration`), logs.
+- Death saves: `/deathsave` at 0 HP rolls d20 (10+ success, 1–9 failure, 20 → 1 HP); 3 failures = "dead" (`kDead`), 3 successes remove "unconscious", stabilize. `death_save_successes`/`death_save_failures` in `Token`; downed hit adds a failure, healing/rest reset.
+- Combat: player capped by speed per turn — server computes `PathCostCells`, deducts `Token::movement_used`. `M` shows remainder, panel shows "Movement left"; reset at own turn start, combat start/end. DM (`can_control_all`) moves freely, spends nothing; no cap outside combat.
+- `F` area template: `1`–`3` circle/cone/line, `←`/`→` rotation, `↑`/`↓` radius/length, `,`/`.` line width, cursor origin; `Shift+F`/`Esc` remove template, `F` only leaves mode. Template (`AoeTemplate`) in `GameSnapshot`, DM-only, visible to all. `Enter` primes `/aoe `; `/aoe 2d6 15` (damage, DC) rolls damage once, each token under template saves d20 + `save_bonus`, success halves. `AoeCells` for cells, damage via `GameState::DamageToken`, logged.
+- Visibility/permissions in `GameServer` (`ClientSnapshot`, `EventVisibleToPlayers`, `can_control_all`), not renderer; players cannot add/remove tokens or control combat.
+- Party fog from all `TokenKind::kPlayer` tokens; NPCs/monsters grant no vision. Unclaimed characters locked; free NPCs with empty owner movable by players; DM assigns/clears owners.
+- `F5` save, `F9` load `savegame.bin` next to `.exe` (`SDL_GetBasePath()`); host only.
+- Campaign = scenes (`Campaign`/`Scene` in `src/core/campaign.h`) in `campaign.dndcamp` next to `.exe` (`src/core/campaign_io.h`, magic `DNDC`). Scene = full `GameSnapshot` + name + note; active scene mirrors host world (switch, `F5`/`F9`, host start, editor save).
+- Scenes DM-only: `Tab`/`/scene` list, `1`–`9` or `↑`/`↓`+`Enter` switch, `R` rename, `E` note, `N` copy current, `Del` twice deletes; `/scene NAME`, `/scene new`, `/scene rename OLD NEW` (spaces ok, `ParseSceneRename`). Switch resets combat, clients get `ViewUpdated`.
+- `Scene::name`/`note` — note under name in panel. Duplicate names rejected (`IsSceneNameAvailable`, `RenameScene`), `NextSceneName` picks free; `kCampaignVersion = 4`.
+- Host autosave: world-changing command (movement, combat, sheets) sets flag, after 8 s (`kAutosaveDelay`) active scene writes to `campaign.dndcamp`; chat/rolls don't set it; `SaveCampaign` clears flag only on successful write. Host menu shows active scene and scene count.
+- Token/scene delete needs second `Del` within 3 s (`kDeleteConfirmDelay`), first warns. `Ctrl+Z` host: undo last DM action, ring buffer of 10 `GameSnapshot` (`undo_stack_`), snapshot taken before the world-changing command, combat restored too; scene switch/load/host start clear it; campaign structure (create/delete scenes) not undoable.
 
-## Сериализация и протокол
+## Serialization and protocol
 
-- `src/core/serialization.cpp` — ручной little-endian бинарный формат, общий для сохранений и TCP. Декодеры намеренно строгие: отвергают обрезанные данные, лишние байты и значения вне диапазона.
-- Изменение любого сериализуемого поля `Token`, `GameSnapshot`, `Command` или `Event` требует правки encode и decode, расширения `core_tests`/`net_tests` и поднятия `kSaveVersion` в `src/core/scene_io.h` и `kProtocolVersion` в `src/net/protocol.h`. Несовпадение версий отвергает сохранения и клиентов.
-- `Hello` содержит имя игрока и отпечаток пароля; сам пароль по сети не ходит. Сразу после подключения хост шлёт `Challenge` со случайным nonce (16 байт), клиент отвечает `Hello` с HMAC-SHA256(пароль, nonce) — `src/core/password`, `src/core/sha256`. Сервер проверяет отпечаток и рассылает `Roster` после входа, выхода и кика. Версия протокола идёт в заголовке `Hello`; при несовпадении хост отвечает `Reject` с обеими версиями и просьбой обновить игру, поэтому раскладку первых пяти байт сообщения (`DecodeHelloVersion`) менять нельзя.
-- Попытки входа ограничены тем же лимитом сообщений, что и команды: при переборе сервер закрывает соединение, а не держит его в памяти.
-- Защита хоста от шумных пиров: не больше `kMaxPeers` (8) подключений с отказом «на хосте нет свободных мест», не больше `kMaxCommandsPerSecond` (30) команд в секунду на игрока (лишние молча отбрасываются), очередь отправки ограничена `kMaxOutgoingBytes` (1 МиБ) — при переполнении рвётся соединение, а не хост. Для соединений включён `TCP_NODELAY`.
-- Файл сохранения: magic `DNDS`, версия, длина payload, закодированный снапшот.
-- Файл кампании: magic `DNDC`, `kCampaignVersion` (`src/core/campaign_io.h`), длина payload, затем число сцен, активная сцена и для каждой сцены имя с вложенным снапшотом. Версия кампании поднимается отдельно от `kSaveVersion`.
+- `src/core/serialization.cpp` — hand-written little-endian format for saves and TCP; strict decoders reject truncated data, extra bytes, out-of-range values.
+- Serialized field change in `Token`, `GameSnapshot`, `Command`, `Event` → update encode/decode, extend `core_tests`/`net_tests`, bump `kSaveVersion` (`src/core/scene_io.h`) and `kProtocolVersion` (`src/net/protocol.h`); mismatch rejects saves and clients.
+- Login: `Hello` = player name + password fingerprint (password never sent). Host sends `Challenge` with 16-byte nonce, client answers `Hello` with HMAC-SHA256(password, nonce) (`src/core/password`, `src/core/sha256`); server checks fingerprint, broadcasts `Roster` on join/leave/kick. Protocol version in `Hello` header; mismatch → `Reject` with both versions, so first five bytes (`DecodeHelloVersion`) layout is frozen. Login attempts share the message rate limit; brute force closes the connection.
+- Noisy peers: `kMaxPeers` (8) connections (else "no free slots on the host"), `kMaxCommandsPerSecond` (30) commands/s per player (excess silently dropped), send queue `kMaxOutgoingBytes` (1 MiB) — overflow drops the connection, not the host; `TCP_NODELAY` on.
+- Save: magic `DNDS`, version, payload length, snapshot. Campaign: magic `DNDC`, `kCampaignVersion` (`src/core/campaign_io.h`), payload length, scene count, active scene, scenes (name + nested snapshot); campaign version bumped separately from `kSaveVersion`.
 
-## Стиль
+## Style
 
-- Google C++ style через `.clang-format` (80 колонок, отступ 2); везде используются trailing return types `auto Fn() -> T`.
-- `.clang-tidy` проверяет имена: типы/функции CamelCase, локальные/переменные `lower_case`, приватные члены с `_` в конце, константы `kCamelCase`.
-- Заголовки проекта подключаются от `src/`, например `#include "core/game_state.h"`.
-- Строки интерфейса для игрока — на русском, в `src/app/strings.h`. Для backspace/обрезки используйте `core/utf8.h`, а не побайтовые `pop_back`/`resize`.
-- `dnd_core` не должен зависеть от SDL; SDL — только в `src/app` и `src/render`.
+- Google C++ via `.clang-format` (80 columns, 2-space indent), trailing return types `auto Fn() -> T`.
+- `.clang-tidy` names: types/functions CamelCase, locals/variables `lower_case`, private members trailing `_`, constants `kCamelCase`.
+- Project headers from `src/`, e.g. `#include "core/game_state.h"`.
+- Player strings Russian, in `src/app/strings.h`; use `core/utf8.h` for backspace/truncation, not byte-wise `pop_back`/`resize`.
+- `dnd_core` must not depend on SDL; SDL only in `src/app` and `src/render`.

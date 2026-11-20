@@ -187,6 +187,12 @@ class App {
   auto BeginSceneEdit(SceneEditField field) -> void;
   auto CancelSceneEdit() -> void;
   auto CommitSceneEdit() -> void;
+  // Подложка карты: текстура из файла рядом с .exe и её отрисовка под сеткой.
+  auto BackgroundTexture(std::string_view image) -> SDL_Texture*;
+  auto DrawBackground(const GridMap& map, const MapBackground& background)
+      -> void;
+  // Разбирает хвост команды «/map ...».
+  auto SubmitMapCommand(std::string_view args) -> void;
   auto LoadFont() -> void;
 
   [[nodiscard]] auto CellFromPixel(float x, float y) const -> Cell;
@@ -287,6 +293,10 @@ class App {
   float log_top_ = 0.0F;
   // Верх панели игроков: по нему считается строка под мышью.
   float players_top_ = 0.0F;
+
+  // Кэш картинки подложки: одна текстура на текущее имя файла.
+  SDL_Texture* background_texture_ = nullptr;
+  std::string background_texture_name_;
 
   std::deque<GameSnapshot> undo_stack_;
   TokenId pending_delete_token_ = 0;
