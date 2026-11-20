@@ -120,13 +120,6 @@ auto ScenePath() -> std::filesystem::path {
   return {"scene.dndscene"};
 }
 
-auto CampaignPath() -> std::filesystem::path {
-  if (const char* base = SDL_GetBasePath()) {
-    return std::filesystem::path(base) / "campaign.dndcamp";
-  }
-  return {"campaign.dndcamp"};
-}
-
 auto SessionLogPath() -> std::filesystem::path {
   if (const char* base = SDL_GetBasePath()) {
     return std::filesystem::path(base) / "session.log";
@@ -135,11 +128,15 @@ auto SessionLogPath() -> std::filesystem::path {
 }
 
 // Ресурсы (подложка, портреты) ищутся рядом с .exe: сцена хранит только имя.
-auto AssetPath(std::string_view name) -> std::filesystem::path {
+auto BaseDirectory() -> std::filesystem::path {
   if (const char* base = SDL_GetBasePath()) {
-    return std::filesystem::path(base) / std::string(name);
+    return {base};
   }
-  return {std::string(name)};
+  return {};
+}
+
+auto AssetPath(std::string_view name) -> std::filesystem::path {
+  return BaseDirectory() / std::string(name);
 }
 
 auto ParseNumber(std::string_view text, int& value) -> bool {
@@ -307,21 +304,20 @@ auto App::Initialize() -> bool {
   local_addresses_ = LocalIpv4Addresses();
   OpenSessionLog();
 
-  const std::optional<Campaign> loaded_campaign = ReadCampaign(CampaignPath());
-  if (loaded_campaign.has_value()) {
-    campaign_ = *loaded_campaign;
-  } else {
+  RefreshCampaignLibrary();
+  if (!LoadSelectedCampaign()) {
+    // Файла ещё нет: начинаем с отдельной сцены или со стартовой карты.
     const std::optional<GameSnapshot> loaded_scene = ReadSnapshot(ScenePath());
     if (loaded_scene.has_value()) {
       scene_ = *loaded_scene;
     }
     campaign_ = MakeCampaign(scene_, "Сцена 1");
+    // Кампания — источник стартового мира; бой в новой сессии не продолжается.
+    scene_ = campaign_.scenes[campaign_.active].snapshot;
+    scene_.encounter = Encounter{};
+    server_.Reset(scene_);
+    view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   }
-  // Кампания — источник стартового мира; бой в новой сессии не продолжается.
-  scene_ = campaign_.scenes[campaign_.active].snapshot;
-  scene_.encounter = Encounter{};
-  server_.Reset(scene_);
-  view_.Reset(server_.DmSnapshot(), server_.FullFogState());
 
   if (options_.start_editor) {
     StartEditor();
@@ -385,9 +381,10 @@ auto App::StartHost() -> bool {
 
   options_.mode = AppMode::kHost;
   options_.port = port;
-  // Из редактора хостится отредактированная сцена, из меню — активная сцена
-  // кампании.
+  // Из редактора хостится отредактированная сцена, из меню — выбранная
+  // кампания с диска.
   if (!in_editor_) {
+    (void)LoadSelectedCampaign();
     scene_ = campaign_.scenes[campaign_.active].snapshot;
   }
   GameSnapshot start = scene_;
@@ -662,6 +659,7 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
       in_editor_ = false;
       menu_.tab = MenuTab::kHost;
       menu_.status.clear();
+      RefreshCampaignLibrary();
       return;
     case SDLK_TAB:
       OpenEditorScenes();
@@ -950,6 +948,16 @@ auto App::HandleMenuTextInput(const char* text) -> void {
 }
 
 auto App::HandleMenuKeyDown(const SDL_KeyboardEvent& key) -> void {
+  // Стрелки и цифровой блок одинаково листают библиотеку кампаний.
+  const bool up = key.key == SDLK_UP || key.key == SDLK_KP_8 ||
+                  key.scancode == SDL_SCANCODE_UP;
+  const bool down = key.key == SDLK_DOWN || key.key == SDLK_KP_2 ||
+                    key.scancode == SDL_SCANCODE_DOWN;
+  if (menu_.tab == MenuTab::kHost && (up || down)) {
+    SelectCampaign(down ? 1 : -1);
+    menu_.active_field = MenuField::kNone;
+    return;
+  }
   if (key.key == SDLK_LEFT || key.key == SDLK_RIGHT) {
     const int step = key.key == SDLK_RIGHT ? 1 : 2;
     menu_.tab = static_cast<MenuTab>((static_cast<int>(menu_.tab) + step) % 3);
@@ -1013,7 +1021,9 @@ auto App::HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void {
 
   menu_.active_field = MenuField::kNone;
   if (menu_.tab == MenuTab::kHost) {
-    if (PointInside(layout.port_field, button.x, button.y)) {
+    if (PointInside(layout.campaign_line, button.x, button.y)) {
+      SelectCampaign(1);
+    } else if (PointInside(layout.port_field, button.x, button.y)) {
       menu_.active_field = MenuField::kPort;
     } else if (PointInside(layout.password_field, button.x, button.y)) {
       menu_.active_field = MenuField::kPassword;
@@ -2729,11 +2739,73 @@ auto App::LoadGame() -> void {
 }
 
 auto App::SaveCampaign() -> void {
-  if (!WriteCampaign(campaign_, CampaignPath())) {
+  const std::string file = campaign_files_.empty()
+                               ? std::string("campaign.dndcamp")
+                               : campaign_files_[campaign_index_];
+  if (!WriteCampaign(campaign_, AssetPath(file))) {
     SDL_Log("campaign save failed");
     return;
   }
   campaign_dirty_ = false;
+}
+
+auto App::RefreshCampaignLibrary() -> void {
+  const std::string current = campaign_files_.empty()
+                                  ? std::string{}
+                                  : campaign_files_[campaign_index_];
+  campaign_files_ = ListCampaignFiles(BaseDirectory());
+  if (campaign_files_.empty()) {
+    campaign_files_.emplace_back("campaign.dndcamp");
+    campaign_index_ = 0;
+    return;
+  }
+  campaign_index_ = 0;
+  const std::string target =
+      current.empty() ? std::string("campaign.dndcamp") : current;
+  for (std::size_t i = 0; i < campaign_files_.size(); ++i) {
+    if (campaign_files_[i] == target) {
+      campaign_index_ = i;
+      return;
+    }
+  }
+}
+
+auto App::LoadSelectedCampaign() -> bool {
+  if (campaign_files_.empty()) {
+    return false;
+  }
+  const std::string& file = campaign_files_[campaign_index_];
+  const std::filesystem::path path = AssetPath(file);
+  std::error_code error;
+  if (!std::filesystem::exists(path, error)) {
+    // Пустой слот: кампания создастся при первом сохранении.
+    return false;
+  }
+  const std::optional<Campaign> loaded = ReadCampaign(path);
+  if (!loaded.has_value()) {
+    menu_.status = "Не удалось прочитать " + file;
+    return false;
+  }
+  campaign_ = *loaded;
+  scene_ = campaign_.scenes[campaign_.active].snapshot;
+  scene_.encounter = Encounter{};
+  server_.Reset(scene_);
+  view_.Reset(server_.DmSnapshot(), server_.FullFogState());
+  menu_.status.clear();
+  return true;
+}
+
+auto App::SelectCampaign(int delta) -> void {
+  if (campaign_files_.empty() || delta == 0) {
+    return;
+  }
+  const auto count = static_cast<int>(campaign_files_.size());
+  int next = (static_cast<int>(campaign_index_) + delta) % count;
+  if (next < 0) {
+    next += count;
+  }
+  campaign_index_ = static_cast<std::size_t>(next);
+  (void)LoadSelectedCampaign();
 }
 
 auto App::MarkCampaignDirty() -> void {
@@ -3217,6 +3289,11 @@ auto App::Iterate() -> void {
     menu_.scene_name = campaign_.active < campaign_.scenes.size()
                            ? campaign_.scenes[campaign_.active].name
                            : std::string{};
+    menu_.campaign_count = campaign_files_.size();
+    menu_.campaign_index = campaign_index_;
+    menu_.campaign_file = campaign_files_.empty()
+                              ? std::string{}
+                              : campaign_files_[campaign_index_];
     DrawMenu(renderer_, text_.get(), menu_, local_addresses_);
     SDL_RenderPresent(renderer_);
     return;

@@ -19,4 +19,9 @@ auto WriteCampaign(const Campaign& campaign, const std::filesystem::path& path)
     -> bool;
 auto ReadCampaign(const std::filesystem::path& path) -> std::optional<Campaign>;
 
+// Имена файлов *.dndcamp в каталоге, по алфавиту. Ошибка чтения каталога
+// даёт пустой список.
+auto ListCampaignFiles(const std::filesystem::path& directory)
+    -> std::vector<std::string>;
+
 }  // namespace dnd

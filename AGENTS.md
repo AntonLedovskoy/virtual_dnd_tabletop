@@ -46,10 +46,10 @@ Local rules win where stricter than global (language, live UI checks).
 - Visibility/permissions in `GameServer` (`ClientSnapshot`, `EventVisibleToPlayers`, `can_control_all`), not renderer; players cannot add/remove tokens or control combat.
 - Party fog from all `TokenKind::kPlayer` tokens; NPCs/monsters grant no vision. Unclaimed characters locked; free NPCs with empty owner movable by players; DM assigns/clears owners.
 - `F5` save, `F9` load `savegame.bin` next to `.exe` (`SDL_GetBasePath()`); host only.
-- Campaign = scenes (`Campaign`/`Scene` in `src/core/campaign.h`) in `campaign.dndcamp` next to `.exe` (`src/core/campaign_io.h`, magic `DNDC`). Scene = full `GameSnapshot` + name + note; active scene mirrors host world (switch, `F5`/`F9`, host start, editor save).
+- Campaign = scenes (`Campaign`/`Scene` in `src/core/campaign.h`) in `.dndcamp` files next to `.exe` (`src/core/campaign_io.h`, magic `DNDC`, library via `ListCampaignFiles`); the host tab selects the file with `↑`/`↓` or a click, host start and autosave use that file. Scene = full `GameSnapshot` + name + note; active scene mirrors host world (switch, `F5`/`F9`, host start, editor save).
 - Scenes DM-only: `Tab`/`/scene` list, `1`–`9` or `↑`/`↓`+`Enter` switch, `R` rename, `E` note, `N` copy current, `Del` twice deletes; `/scene NAME`, `/scene new`, `/scene rename OLD NEW` (spaces ok, `ParseSceneRename`). Switch resets combat, clients get `ViewUpdated`.
 - `Scene::name`/`note` — note under name in panel. Duplicate names rejected (`IsSceneNameAvailable`, `RenameScene`), `NextSceneName` picks free; `kCampaignVersion = 4`.
-- Host autosave: world-changing command (movement, combat, sheets) sets flag, after 8 s (`kAutosaveDelay`) active scene writes to `campaign.dndcamp`; chat/rolls don't set it; `SaveCampaign` clears flag only on successful write. Host menu shows active scene and scene count.
+- Host autosave: world-changing command (movement, combat, sheets) sets flag, after 8 s (`kAutosaveDelay`) active scene writes to the selected campaign file; chat/rolls don't set it; `SaveCampaign` clears flag only on successful write. Host menu shows campaign file, active scene and scene count.
 - Token/scene delete needs second `Del` within 3 s (`kDeleteConfirmDelay`), first warns. `Ctrl+Z` host: undo last DM action, ring buffer of 10 `GameSnapshot` (`undo_stack_`), snapshot taken before the world-changing command, combat restored too; scene switch/load/host start clear it; campaign structure (create/delete scenes) not undoable.
 
 ## Serialization and protocol

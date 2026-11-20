@@ -1690,6 +1690,28 @@ auto TestCampaign() -> void {
   Expect(!dnd::ReadCampaign(bad_path).has_value(),
          "truncated campaign is rejected");
   std::filesystem::remove(bad_path);
+
+  // Библиотека кампаний: только *.dndcamp, по алфавиту.
+  const std::filesystem::path library =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_library";
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(library, cleanup_error);
+  std::filesystem::create_directories(library);
+  Expect(dnd::WriteCampaign(campaign, library / "b_campaign.dndcamp"),
+         "second campaign writes");
+  Expect(dnd::WriteCampaign(campaign, library / "a_campaign.dndcamp"),
+         "first campaign writes");
+  {
+    std::ofstream out(library / "notes.txt", std::ios::binary);
+    out.write("not a campaign", 14);
+  }
+  const std::vector<std::string> files = dnd::ListCampaignFiles(library);
+  Expect(files.size() == 2 && files.front() == "a_campaign.dndcamp" &&
+             files.back() == "b_campaign.dndcamp",
+         "campaign library lists only .dndcamp files sorted");
+  Expect(dnd::ListCampaignFiles(library / "nowhere").empty(),
+         "a missing campaign directory lists nothing");
+  std::filesystem::remove_all(library, cleanup_error);
 }
 
 // Испорченные байты — обычное дело при обрыве связи или битом файле.

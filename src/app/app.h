@@ -153,6 +153,11 @@ class App {
   auto SaveGame() -> void;
   auto LoadGame() -> void;
   auto SaveCampaign() -> void;
+  // Библиотека кампаний: файлы *.dndcamp рядом с .exe и выбор при старте.
+  auto RefreshCampaignLibrary() -> void;
+  // Читает выбранный файл в campaign_/scene_/server_/view_; false — не вышло.
+  auto LoadSelectedCampaign() -> bool;
+  auto SelectCampaign(int delta) -> void;
   // Сохраняет мир хоста в активную сцену кампании.
   auto StoreActiveScene() -> void;
   // Изменение мира: кампания уйдёт на диск после kAutosaveDelay.
@@ -219,6 +224,9 @@ class App {
   LocalTransport transport_;
   NetServer net_server_;
   NetClient net_client_;
+  // Файлы кампаний рядом с .exe (только имена), отсортированы.
+  std::vector<std::string> campaign_files_;
+  std::size_t campaign_index_ = 0;
 
   MenuState menu_;
   std::vector<std::string> local_addresses_;

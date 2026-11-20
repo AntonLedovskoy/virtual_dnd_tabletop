@@ -84,8 +84,10 @@ auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
         SDL_FRect{field_x, panel_y + 190.0F, field_width, kFieldHeight};
     layout.password_field =
         SDL_FRect{field_x, panel_y + 290.0F, field_width, kFieldHeight};
+    layout.campaign_line =
+        SDL_FRect{field_x, panel_y + 344.0F, field_width, 24.0F};
     layout.action_button =
-        SDL_FRect{field_x, panel_y + 390.0F, field_width, 50.0F};
+        SDL_FRect{field_x, panel_y + 430.0F, field_width, 50.0F};
   } else {
     layout.address_field =
         SDL_FRect{field_x, panel_y + 160.0F, field_width, kFieldHeight};
@@ -153,16 +155,23 @@ auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
     DrawField(renderer, text, layout.password_field,
               std::string(strings::kPasswordOptional), state.password,
               state.active_field == MenuField::kPassword, true);
-    // Что именно начнётся по кнопке: имя активной сцены и размер кампании.
+    // Что именно начнётся по кнопке: файл кампании, активная сцена и размер.
+    const std::string campaign =
+        state.campaign_file.empty() ? "—" : state.campaign_file;
+    text->Draw(
+        std::string(strings::kCampaignFile) + campaign + " (" +
+            std::to_string(
+                state.campaign_count == 0 ? 0 : state.campaign_index + 1) +
+            "/" + std::to_string(state.campaign_count) + ")",
+        layout.campaign_line.x, layout.campaign_line.y, kText, field_width);
     const std::string scene = state.scene_name.empty() ? "—" : state.scene_name;
-    text->Draw(std::string(strings::kCampaignScene) + scene, panel_x + 40.0F,
-               layout.password_field.y + layout.password_field.h + 10.0F, kText,
-               field_width);
-    text->Draw(std::string(strings::kCampaignSceneCount) +
+    text->Draw(std::string(strings::kCampaignScene) + scene + " | " +
+                   std::string(strings::kCampaignSceneCount) +
                    std::to_string(state.scene_count),
-               panel_x + 40.0F,
-               layout.password_field.y + layout.password_field.h + 32.0F, kHint,
+               panel_x + 40.0F, layout.campaign_line.y + 22.0F, kText,
                field_width);
+    text->Draw(std::string(strings::kCampaignHint), panel_x + 40.0F,
+               layout.campaign_line.y + 46.0F, kHint, field_width);
   } else if (state.tab == MenuTab::kJoin) {
     DrawField(renderer, text, layout.address_field,
               std::string(strings::kAddress), state.address,

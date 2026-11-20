@@ -1,8 +1,10 @@
 #include "core/campaign_io.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -138,6 +140,28 @@ auto ReadCampaign(const std::filesystem::path& path)
     return std::nullopt;
   }
   return DecodeCampaign(payload.data(), payload.size());
+}
+
+auto ListCampaignFiles(const std::filesystem::path& directory)
+    -> std::vector<std::string> {
+  std::vector<std::string> files;
+  std::error_code error;
+  if (directory.empty()) {
+    return files;
+  }
+  for (const auto& entry :
+       std::filesystem::directory_iterator(directory, error)) {
+    if (error || entry.path().extension() != ".dndcamp") {
+      continue;
+    }
+    if (!entry.is_regular_file(error) || error) {
+      error.clear();
+      continue;
+    }
+    files.push_back(entry.path().filename().string());
+  }
+  std::ranges::sort(files);
+  return files;
 }
 
 }  // namespace dnd

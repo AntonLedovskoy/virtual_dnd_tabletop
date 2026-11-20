@@ -32,6 +32,10 @@ struct MenuState {
   // Активная сцена кампании для вкладки хоста.
   std::string scene_name;
   std::size_t scene_count = 0;
+  // Выбранный файл кампании: имя и позиция в библиотеке.
+  std::string campaign_file;
+  std::size_t campaign_index = 0;
+  std::size_t campaign_count = 0;
 };
 
 struct MenuLayout {
@@ -43,6 +47,8 @@ struct MenuLayout {
   SDL_FRect name_field;
   SDL_FRect password_field;
   SDL_FRect action_button;
+  // Строка выбора кампании на вкладке хоста.
+  SDL_FRect campaign_line;
 };
 
 auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
