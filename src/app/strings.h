@@ -23,15 +23,15 @@ inline constexpr std::string_view kClaimHint = "C — забрать персо�
 inline constexpr std::string_view kReleaseHint = "R — освободить персонажа";
 inline constexpr std::string_view kYourToken = "это ваш персонаж";
 inline constexpr std::string_view kDmSpawnHint =
-    "P — персонаж, N — монстр, B — бестиарий, Del — удалить";
+    "P — персонаж, N — монстр, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
     "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
     "B бестиарий | F шаблон | K состояния | L лист | M дальность | "
-    "Alt+ЛКМ линейка | Tab сцены | P персонаж, N монстр, Del удалить, "
-    "+/- HP, [ ] иниц., T бой, G ход";
+    "Alt+ЛКМ линейка | Tab сцены | P персонаж, N монстр, Del дважды удалить, "
+    "+/- HP, [ ] иниц., T бой, G ход, Ctrl+Z отмена";
 inline constexpr std::string_view kChatHintPlayer =
     "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
     "C забрать | R освободить | K состояния | L лист | M дальность | "
@@ -78,9 +78,9 @@ inline constexpr std::array<std::string_view, 2> kHelpPlayer = {
     "C — забрать персонажа под курсором",
     "R — освободить своего персонажа",
 };
-inline constexpr std::array<std::string_view, 11> kHelpDm = {
+inline constexpr std::array<std::string_view, 12> kHelpDm = {
     "P / N — персонаж / монстр под курсором",
-    "Del — удалить выбранный токен",
+    "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
     "B — бестиарий",
     "Tab — сцены (R имя, E заметка)",
@@ -90,6 +90,7 @@ inline constexpr std::array<std::string_view, 11> kHelpDm = {
     "Команды: /rename, /owner, /maxhp, /kick",
     "/rest — короткий отдых, /longrest — длинный",
     "Enter в режиме F и /aoe 2d6 15 — урон по шаблону",
+    "Ctrl+Z — отменить последнее действие DM",
 };
 
 inline constexpr std::string_view kMenuTitle = "DND";
@@ -172,7 +173,7 @@ inline constexpr std::string_view kBestiaryDmOnly =
 inline constexpr std::string_view kScenesTitle = "Сцены";
 inline constexpr std::string_view kScenesHint =
     "1–9 — переключить | ↑ ↓ и Enter — выбрать | R — имя | E — заметка | "
-    "N — новая копия | Del — удалить | Esc — закрыть";
+    "N — новая копия | Del дважды — удалить | Esc — закрыть";
 inline constexpr std::string_view kScenesDmOnly = "Сцены переключает только DM";
 inline constexpr std::string_view kScenesEmpty = "Сцена не найдена";
 inline constexpr std::string_view kSceneNameLabel = "Новое имя: ";
@@ -182,5 +183,10 @@ inline constexpr std::string_view kSceneNameEmpty =
 inline constexpr std::string_view kSceneNameTaken = "Имя сцены уже занято";
 inline constexpr std::string_view kSceneRenameUsage =
     "Использование: /scene rename СТАРОЕ НОВОЕ";
+inline constexpr std::string_view kDeleteConfirm =
+    "Нажмите Del ещё раз в течение 3 секунд";
+inline constexpr std::string_view kUndoDone = "Действие отменено";
+inline constexpr std::string_view kUndoEmpty = "Нечего отменять";
+inline constexpr std::string_view kUndoDmOnly = "Отмена доступна только DM";
 
 }  // namespace dnd::strings

@@ -44,6 +44,9 @@ constexpr float kFontSize = 16.0F;
 constexpr std::chrono::seconds kReconnectDelay{2};
 // Пауза после изменения мира: серия ходов не должна писать файл каждый кадр.
 constexpr std::chrono::seconds kAutosaveDelay{8};
+// Повторное Del в этот срок подтверждает удаление токена или сцены.
+constexpr std::chrono::seconds kDeleteConfirmDelay{3};
+constexpr std::size_t kUndoDepth = 10;
 constexpr std::size_t kMaxChatInput = 200;
 
 constexpr TokenId kHeroId = 1;
@@ -362,6 +365,9 @@ auto App::StartHost() -> bool {
   start.encounter = Encounter{};
   scene_ = start;
   server_.Reset(std::move(start));
+  ClearUndo();
+  pending_delete_token_ = 0;
+  pending_delete_scene_ = kNoScene;
   in_game_ = true;
   in_editor_ = false;
   client_connecting_ = false;
@@ -461,6 +467,7 @@ auto App::StartEditor() -> void {
   editor_scenes_active_ = false;
   editor_scenes_selected_ = editor_scene_;
   editor_scenes_status_.clear();
+  ClearUndo();
   selected_id_ = 0;
   dragging_ = false;
   drag_target_.reset();
@@ -1214,6 +1221,10 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     }
     return;
   }
+  if ((key.mod & SDL_KMOD_CTRL) != 0 && key.key == SDLK_Z) {
+    UndoLastAction();
+    return;
+  }
   if (HandleAoeKeyDown(key)) {
     return;
   }
@@ -1322,9 +1333,7 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
       spawn_at_cursor(TokenKind::kPlayer);
       break;
     case SDLK_DELETE:
-      if (selected_id_ != 0) {
-        SendCommand(RemoveToken{.id = selected_id_});
-      }
+      RequestDeleteSelectedToken();
       break;
     case SDLK_EQUALS:
     case SDLK_KP_PLUS:
@@ -2179,7 +2188,17 @@ auto App::ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void {
 
 auto App::PumpHost() -> void {
   while (const std::optional<Command> command = transport_.NextCommand()) {
-    ApplyOutcome(0, server_.HandleCommand(*command, "", true));
+    const GameSnapshot before = server_.Snapshot();
+    const CommandOutcome outcome = server_.HandleCommand(*command, "", true);
+    // В историю отмены попадают только действия, меняющие мир, а не чат.
+    const bool world_changed =
+        std::ranges::any_of(outcome.events, [](const Event& event) -> bool {
+          return !std::holds_alternative<LogLineAdded>(event);
+        });
+    if (outcome.accepted && world_changed) {
+      PushUndo(before);
+    }
+    ApplyOutcome(0, outcome);
   }
 
   std::vector<PeerJoined> joined;
@@ -2427,8 +2446,20 @@ auto App::Announce(std::string text) -> void {
 }
 
 auto App::ResetWorld(GameSnapshot snapshot) -> void {
+  ClearUndo();
   // Бой принадлежит прошлому миру: в новой сцене он начинается заново.
-  snapshot.encounter = Encounter{};
+  ApplyWorld(std::move(snapshot), true);
+}
+
+auto App::RestoreUndoWorld(GameSnapshot snapshot) -> void {
+  // Отмена возвращает и бой: состояние до действия должно совпасть.
+  ApplyWorld(std::move(snapshot), false);
+}
+
+auto App::ApplyWorld(GameSnapshot snapshot, bool reset_encounter) -> void {
+  if (reset_encounter) {
+    snapshot.encounter = Encounter{};
+  }
   server_.Reset(std::move(snapshot));
   scene_ = server_.Snapshot();
   transport_ = LocalTransport{};
@@ -2445,9 +2476,76 @@ auto App::ResetWorld(GameSnapshot snapshot) -> void {
   sheet_active_ = false;
   conditions_active_ = false;
   bestiary_active_ = false;
+  pending_delete_token_ = 0;
+  pending_delete_scene_ = kNoScene;
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   CenterCamera();
   BroadcastWorld();
+}
+
+auto App::PushUndo(GameSnapshot snapshot) -> void {
+  undo_stack_.push_back(std::move(snapshot));
+  while (undo_stack_.size() > kUndoDepth) {
+    undo_stack_.pop_front();
+  }
+}
+
+auto App::ClearUndo() -> void { undo_stack_.clear(); }
+
+auto App::UndoLastAction() -> void {
+  if (options_.mode != AppMode::kHost || !in_game_) {
+    view_.AddLocalLine(std::string(strings::kUndoDmOnly));
+    return;
+  }
+  if (undo_stack_.empty()) {
+    view_.AddLocalLine(std::string(strings::kUndoEmpty));
+    return;
+  }
+  GameSnapshot snapshot = std::move(undo_stack_.back());
+  undo_stack_.pop_back();
+  RestoreUndoWorld(std::move(snapshot));
+  MarkCampaignDirty();
+  view_.AddLocalLine(std::string(strings::kUndoDone));
+}
+
+auto App::RequestDeleteSelectedToken() -> void {
+  if (selected_id_ == 0) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (pending_delete_token_ == selected_id_ &&
+      now <= pending_delete_token_at_) {
+    const TokenId id = selected_id_;
+    pending_delete_token_ = 0;
+    SendCommand(RemoveToken{.id = id});
+    return;
+  }
+  pending_delete_token_ = selected_id_;
+  pending_delete_token_at_ = now + kDeleteConfirmDelay;
+  view_.AddLocalLine(std::string(strings::kDeleteConfirm));
+}
+
+auto App::RequestDeleteActiveScene() -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
+    return;
+  }
+  if (campaign_.scenes.size() <= 1) {
+    scenes_status_ = "Нельзя удалить последнюю сцену";
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (pending_delete_scene_ == campaign_.active &&
+      now <= pending_delete_scene_at_) {
+    pending_delete_scene_ = kNoScene;
+    scenes_status_.clear();
+    DeleteActiveScene();
+    return;
+  }
+  pending_delete_scene_ = campaign_.active;
+  pending_delete_scene_at_ = now + kDeleteConfirmDelay;
+  scenes_status_ = std::string(strings::kDeleteConfirm);
 }
 
 auto App::SwitchScene(std::size_t index) -> void {
@@ -2492,6 +2590,7 @@ auto App::CreateScene() -> void {
     return;
   }
   StoreActiveScene();
+  ClearUndo();
   // Новая сцена — копия текущей: DM сразу расставляет в ней монстров.
   std::string name = NextSceneName(campaign_);
   if (!dnd::IsSceneNameAvailable(campaign_, name)) {
@@ -2597,7 +2696,7 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       CreateScene();
       return;
     case SDLK_DELETE:
-      DeleteActiveScene();
+      RequestDeleteActiveScene();
       return;
     default:
       break;

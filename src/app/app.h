@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -143,7 +144,17 @@ class App {
   auto CheckAutosave() -> void;
   // Заменяет мир и пересобирает вид хоста, клиентам уходит ViewUpdated.
   auto ResetWorld(GameSnapshot snapshot) -> void;
+  // Восстановление мира без сброса боя (для Ctrl+Z).
+  auto RestoreUndoWorld(GameSnapshot snapshot) -> void;
+  auto ApplyWorld(GameSnapshot snapshot, bool reset_encounter) -> void;
   auto BroadcastWorld() -> void;
+  // Отмена последнего действия DM: храним до 10 предыдущих снапшотов.
+  auto PushUndo(GameSnapshot snapshot) -> void;
+  auto UndoLastAction() -> void;
+  auto ClearUndo() -> void;
+  // Удаление токена и сцены требует повторного Del в течение 3 секунд.
+  auto RequestDeleteSelectedToken() -> void;
+  auto RequestDeleteActiveScene() -> void;
   // Пишет строку лога всем за столом (смена сцены и подобное).
   auto Announce(std::string text) -> void;
   auto SwitchScene(std::size_t index) -> void;
@@ -252,6 +263,12 @@ class App {
   std::size_t log_count_ = 0;
   // Верхняя граница панели лога в прошлом кадре; 0 — панели не было.
   float log_top_ = 0.0F;
+
+  std::deque<GameSnapshot> undo_stack_;
+  TokenId pending_delete_token_ = 0;
+  std::chrono::steady_clock::time_point pending_delete_token_at_;
+  std::size_t pending_delete_scene_ = kNoScene;
+  std::chrono::steady_clock::time_point pending_delete_scene_at_;
 
   TokenId selected_id_ = 0;
   bool dragging_ = false;
