@@ -2042,35 +2042,50 @@ auto App::HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void {
     bestiary_active_ = false;
     return;
   }
-  if (key.key >= SDLK_1 && key.key <= SDLK_5) {
-    SpawnBestiary(static_cast<int>(key.key - SDLK_1));
+  if (key.key >= SDLK_1 && key.key <= SDLK_9) {
+    const bool group = (key.mod & SDL_KMOD_SHIFT) != 0;
+    SpawnBestiary(static_cast<int>(key.key - SDLK_1), group);
   }
 }
 
-auto App::SpawnBestiary(int index) -> void {
+auto App::SpawnBestiary(int index, bool group) -> void {
   const auto& bestiary = DefaultBestiary();
-  if (std::cmp_greater_equal(index, bestiary.size())) {
+  if (index < 0 || std::cmp_greater_equal(index, bestiary.size())) {
     return;
   }
-  const Cell cell = CellFromPixel(mouse_x_, mouse_y_);
-  if (!view_.Map().Contains(cell) || view_.Map().IsBlocked(cell)) {
+  const Cell origin = CellFromPixel(mouse_x_, mouse_y_);
+  if (!view_.Map().Contains(origin) || view_.Map().IsBlocked(origin)) {
     view_.AddLocalLine("Нельзя поставить монстра в эту клетку");
     return;
   }
   const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(index)];
-  SendCommand(AddToken{
-      .name = monster.name,
-      .cell = cell,
-      .owner = "dm",
-      .kind = TokenKind::kMonster,
-      .max_hp = monster.max_hp,
-      .ac = monster.ac,
-      .speed = monster.speed,
-      .notes = monster.notes,
-      .attack_bonus = monster.attack_bonus,
-      .save_bonus = monster.save_bonus,
-      .damage = monster.damage,
-  });
+  const int count = group ? MonsterGroupSize(rng_) : 1;
+  const std::vector<Cell> cells =
+      MonsterGroupCells(view_.Map(), origin, count, view_.Tokens());
+  if (cells.empty()) {
+    view_.AddLocalLine("Нельзя поставить монстра в эту клетку");
+    return;
+  }
+  const bool numbered = cells.size() > 1;
+  for (std::size_t i = 0; i < cells.size(); ++i) {
+    std::string name = monster.name;
+    if (numbered) {
+      name += " " + std::to_string(i + 1);
+    }
+    SendCommand(AddToken{
+        .name = std::move(name),
+        .cell = cells[i],
+        .owner = "dm",
+        .kind = TokenKind::kMonster,
+        .max_hp = monster.max_hp,
+        .ac = monster.ac,
+        .speed = monster.speed,
+        .notes = monster.notes,
+        .attack_bonus = monster.attack_bonus,
+        .save_bonus = monster.save_bonus,
+        .damage = monster.damage,
+    });
+  }
   bestiary_active_ = false;
 }
 

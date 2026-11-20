@@ -661,7 +661,7 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
   text->Draw(std::string(strings::kBestiaryTitle), left, cursor_y, kAuthorText,
              content_width);
   cursor_y += text->LineHeight() + 10.0F;
-  const int rows = std::min<int>(5, static_cast<int>(bestiary.size()));
+  const int rows = std::min<int>(9, static_cast<int>(bestiary.size()));
   for (int i = 0; i < rows; ++i) {
     const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(i)];
     const std::string line = std::to_string(i + 1) + ". " + monster.name +

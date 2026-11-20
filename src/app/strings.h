@@ -85,7 +85,7 @@ inline constexpr std::array<std::string_view, 14> kHelpDm = {
     "P / N — персонаж / монстр под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
-    "B — бестиарий",
+    "B — бестиарий (Shift+цифра — группа)",
     "Tab — сцены (R имя, E заметка)",
     "T — бой, G — следующий ход",
     "F — шаблон области, Shift+F — убрать",
@@ -171,7 +171,7 @@ inline constexpr std::string_view kSheetNoAccess =
     "Нельзя редактировать чужого персонажа";
 inline constexpr std::string_view kBestiaryTitle = "Бестиарий";
 inline constexpr std::string_view kBestiaryHint =
-    "1–5 — поставить под курсор | Esc — закрыть";
+    "1–9 — поставить одного | Shift+1–9 — группа 3–5 | Esc — закрыть";
 inline constexpr std::string_view kBestiaryDmOnly =
     "Бестиарий доступен только DM";
 

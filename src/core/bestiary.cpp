@@ -1,5 +1,9 @@
 #include "core/bestiary.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <utility>
+
 namespace dnd {
 
 auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
@@ -57,8 +61,95 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .damage = "2d8+4",
           .notes = "Дубина: +6, 2d8+4; большой размер",
       },
+      MonsterTemplate{
+          .name = "Зомби",
+          .ac = 8,
+          .max_hp = 22,
+          .speed = 6,
+          .attack_bonus = 3,
+          .save_bonus = 0,
+          .damage = "1d6+1",
+          .notes = "Удар: +3, 1d6+1; стойкость нежити",
+      },
+      MonsterTemplate{
+          .name = "Орк",
+          .ac = 13,
+          .max_hp = 15,
+          .speed = 9,
+          .attack_bonus = 5,
+          .save_bonus = 0,
+          .damage = "1d12+3",
+          .notes = "Секира: +5, 1d12+3; ярость при виде крови",
+      },
+      MonsterTemplate{
+          .name = "Кобольд",
+          .ac = 12,
+          .max_hp = 5,
+          .speed = 9,
+          .attack_bonus = 4,
+          .save_bonus = 0,
+          .damage = "1d4+2",
+          .notes = "Кинжал: +4, 1d4+2; тактика стаи, ловушки",
+      },
+      MonsterTemplate{
+          .name = "Гигантский паук",
+          .ac = 14,
+          .max_hp = 26,
+          .speed = 12,
+          .attack_bonus = 5,
+          .save_bonus = 0,
+          .damage = "1d8+3",
+          .notes = "Укус: +5, 1d8+3 и яд; паутина, лазание",
+      },
   };
   return kBestiary;
+}
+
+auto MonsterGroupSize(std::mt19937& rng) -> int {
+  std::uniform_int_distribution<int> distribution(kMinMonsterGroup,
+                                                  kMaxMonsterGroup);
+  return distribution(rng);
+}
+
+auto MonsterGroupCells(const GridMap& map, Cell origin, int count,
+                       const std::vector<Token>& tokens) -> std::vector<Cell> {
+  std::vector<Cell> cells;
+  if (count <= 0 || !map.Contains(origin) || map.IsBlocked(origin)) {
+    return cells;
+  }
+  const auto occupied = [&tokens](Cell cell) -> bool {
+    return std::ranges::any_of(tokens, [cell](const Token& token) -> bool {
+      return token.cell == cell;
+    });
+  };
+  if (occupied(origin)) {
+    return cells;
+  }
+  cells.push_back(origin);
+
+  const int max_radius = std::max(map.Width(), map.Height());
+  for (int radius = 1;
+       radius <= max_radius && std::cmp_less(cells.size(), count); ++radius) {
+    // Кольцо вокруг origin: клетки дальней от центра границы квадрата.
+    for (int y = origin.y - radius; y <= origin.y + radius; ++y) {
+      for (int x = origin.x - radius; x <= origin.x + radius; ++x) {
+        const Cell cell{.x = x, .y = y};
+        if (!map.Contains(cell) || map.IsBlocked(cell) || occupied(cell)) {
+          continue;
+        }
+        const int dx = std::abs(x - origin.x);
+        const int dy = std::abs(y - origin.y);
+        if (std::max(dx, dy) != radius) {
+          continue;
+        }
+        cells.push_back(cell);
+        if (std::cmp_greater_equal(cells.size(), count)) {
+          return cells;
+        }
+      }
+    }
+  }
+  return cells;
 }
 
 }  // namespace dnd

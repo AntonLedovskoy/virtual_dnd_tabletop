@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -132,7 +133,8 @@ class App {
   [[nodiscard]] auto CanEditToken(const Token& token) const -> bool;
   auto OpenBestiary() -> void;
   auto HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void;
-  auto SpawnBestiary(int index) -> void;
+  // Ставит одного монстра или группу из 3–5 под курсором.
+  auto SpawnBestiary(int index, bool group) -> void;
   auto OpenConditions() -> void;
   auto CloseConditions() -> void;
   auto ToggleCondition(int index) -> void;
@@ -302,6 +304,8 @@ class App {
   std::string background_texture_name_;
   // Кэш портретов токенов по имени файла.
   std::map<std::string, SDL_Texture*> portrait_textures_;
+  // Размер группы монстров; сид не важен, важна неповторяемость.
+  std::mt19937 rng_{std::random_device{}()};
 
   std::deque<GameSnapshot> undo_stack_;
   TokenId pending_delete_token_ = 0;

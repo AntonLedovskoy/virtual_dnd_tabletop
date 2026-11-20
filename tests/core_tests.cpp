@@ -870,6 +870,7 @@ auto TestDiceExpression() -> void {
 
 auto TestBestiary() -> void {
   const auto& bestiary = dnd::DefaultBestiary();
+  Expect(bestiary.size() == 9, "bestiary has nine templates");
   Expect(!bestiary.empty(), "bestiary is not empty");
   if (!bestiary.empty()) {
     Expect(!bestiary.front().name.empty(), "bestiary entries have names");
@@ -878,8 +879,50 @@ auto TestBestiary() -> void {
     Expect(!bestiary.front().damage.empty(),
            "bestiary entries have damage expressions");
   }
+  for (const dnd::MonsterTemplate& monster : bestiary) {
+    Expect(!monster.name.empty() && monster.ac > 0 && monster.max_hp > 0 &&
+               !monster.damage.empty() && !monster.notes.empty(),
+           "every bestiary template is complete");
+  }
   Expect(dnd::DefaultConditions().size() >= 8,
          "default conditions are available");
+
+  // Тесту нужен повторяемый поток, а не криптостойкость.
+  // NOLINTNEXTLINE(bugprone-random-generator-seed)
+  std::mt19937 rng(7);
+  bool saw_minimum = false;
+  bool saw_maximum = false;
+  for (int i = 0; i < 200; ++i) {
+    const int size = dnd::MonsterGroupSize(rng);
+    Expect(size >= dnd::kMinMonsterGroup && size <= dnd::kMaxMonsterGroup,
+           "group size stays within 3..5");
+    saw_minimum = saw_minimum || size == dnd::kMinMonsterGroup;
+    saw_maximum = saw_maximum || size == dnd::kMaxMonsterGroup;
+  }
+  Expect(saw_minimum && saw_maximum, "group size covers the whole range");
+
+  dnd::GridMap map(6, 6);
+  map.SetBlocked(CellAt(1, 1), true);
+  const std::vector<dnd::Token> tokens{
+      dnd::Token{.id = 1, .name = "hero", .cell = CellAt(3, 3)}};
+  const std::vector<dnd::Cell> cells =
+      dnd::MonsterGroupCells(map, CellAt(3, 3), 3, tokens);
+  Expect(cells.empty(), "a group cannot start on an occupied cell");
+
+  const std::vector<dnd::Cell> around =
+      dnd::MonsterGroupCells(map, CellAt(2, 2), 4, tokens);
+  Expect(around.size() == 4 && around.front() == CellAt(2, 2),
+         "the group starts at the cursor and fills the neighbourhood");
+  Expect(std::ranges::find(around, CellAt(1, 1)) == around.end(),
+         "walls are skipped when placing a group");
+  Expect(std::ranges::find(around, CellAt(3, 3)) == around.end(),
+         "tokens are skipped when placing a group");
+
+  const std::vector<dnd::Cell> squeezed =
+      dnd::MonsterGroupCells(dnd::GridMap(1, 1), CellAt(0, 0), 5, {});
+  Expect(squeezed.size() == 1, "a tiny map fits only the cursor cell");
+  Expect(dnd::MonsterGroupCells(map, CellAt(9, 9), 3, {}).empty(),
+         "an off-map origin places nothing");
 }
 
 auto TestDynamicFogObservers() -> void {
