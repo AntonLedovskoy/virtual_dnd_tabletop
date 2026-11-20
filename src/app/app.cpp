@@ -41,6 +41,8 @@ constexpr int kMapWidth = 24;
 constexpr int kMapHeight = 12;
 constexpr int kSightRadius = 6;
 constexpr float kFontSize = 16.0F;
+// Шаги масштаба интерфейса: 100%, 125%, 150%, 200%.
+constexpr std::array<float, 4> kUiScales{1.0F, 1.25F, 1.5F, 2.0F};
 constexpr std::chrono::seconds kReconnectDelay{2};
 // Пауза после изменения мира: серия ходов не должна писать файл каждый кадр.
 constexpr std::chrono::seconds kAutosaveDelay{8};
@@ -122,6 +124,13 @@ auto CampaignPath() -> std::filesystem::path {
     return std::filesystem::path(base) / "campaign.dndcamp";
   }
   return {"campaign.dndcamp"};
+}
+
+auto SessionLogPath() -> std::filesystem::path {
+  if (const char* base = SDL_GetBasePath()) {
+    return std::filesystem::path(base) / "session.log";
+  }
+  return {"session.log"};
 }
 
 auto ParseNumber(std::string_view text, int& value) -> bool {
@@ -277,10 +286,9 @@ auto App::Initialize() -> bool {
     return false;
   }
   SDL_StartTextInput(window_);
-  // Nearest-сэмплинг сохраняет текст чётким при масштабировании из-за DPI.
-  SDL_SetDefaultTextureScaleMode(renderer_, SDL_SCALEMODE_NEAREST);
   // Итерации по vsync; безопасно, если драйвер не поддерживает vsync.
   SDL_SetRenderVSync(renderer_, 1);
+  ApplyUiScale();
 
   LoadFont();
   text_ = std::make_unique<TextRenderer>(renderer_, font_);
@@ -288,6 +296,7 @@ auto App::Initialize() -> bool {
     SDL_Log("text renderer initialization failed: %s", SDL_GetError());
   }
   local_addresses_ = LocalIpv4Addresses();
+  OpenSessionLog();
 
   const std::optional<Campaign> loaded_campaign = ReadCampaign(CampaignPath());
   if (loaded_campaign.has_value()) {
@@ -318,6 +327,7 @@ auto App::Initialize() -> bool {
 }
 
 auto App::Shutdown() -> void {
+  session_log_.Close();
   text_.reset();
   if (font_ != nullptr) {
     TTF_CloseFont(font_);
@@ -385,6 +395,8 @@ auto App::StartHost() -> bool {
   log_top_ = 0.0F;
   players_.clear();
   players_.emplace_back("DM (хост)");
+  player_owners_.clear();
+  player_owners_.emplace_back();
   local_addresses_ = LocalIpv4Addresses();
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   CenterCamera();
@@ -556,7 +568,7 @@ auto App::ResizeScene(int width, int height) -> void {
 auto App::CenterCamera() -> void {
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer_, &window_width, &window_height)) {
+  if (!RenderSize(renderer_, window_width, window_height)) {
     return;
   }
   const GridMap& map = in_editor_ ? scene_.map : view_.Map();
@@ -692,6 +704,24 @@ auto App::OpenEditorScenes() -> void {
 auto App::CloseEditorScenes() -> void {
   editor_scenes_active_ = false;
   editor_scenes_status_.clear();
+}
+
+auto App::HandleEditorScenesMouseDown(const SDL_MouseButtonEvent& button)
+    -> void {
+  if (button.button != SDL_BUTTON_LEFT) {
+    return;
+  }
+  const std::size_t index =
+      SceneRowAt(renderer_, text_.get(), campaign_.scenes,
+                 editor_scenes_selected_, button.x, button.y);
+  if (index == kNoScene) {
+    return;
+  }
+  editor_scenes_selected_ = index;
+  editor_scenes_status_.clear();
+  if (button.clicks >= 2) {
+    SwitchEditorScene(index);
+  }
 }
 
 auto App::HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
@@ -934,7 +964,7 @@ auto App::HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void {
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer_, &window_width, &window_height)) {
+  if (!RenderSize(renderer_, window_width, window_height)) {
     return;
   }
   const MenuLayout layout =
@@ -988,8 +1018,73 @@ auto App::HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void {
 auto App::UpdatePlayersFromRoster(const std::vector<RosterEntry>& roster)
     -> void {
   players_.clear();
+  player_owners_.clear();
   for (const RosterEntry& entry : roster) {
     players_.push_back(entry.is_dm ? "DM (хост)" : entry.name);
+    // У хоста токены принадлежат имени DM, у игроков — своему имени.
+    player_owners_.push_back(entry.is_dm ? std::string{} : entry.name);
+  }
+}
+
+// Клик по списку игроков выбирает первого персонажа этого игрока: это
+// быстрый способ открыть его лист, не ища токен на карте.
+auto App::SelectPlayerToken(int row) -> void {
+  if (row < 0 || static_cast<std::size_t>(row) >= player_owners_.size()) {
+    return;
+  }
+  const std::string& owner = player_owners_[static_cast<std::size_t>(row)];
+  if (owner.empty()) {
+    return;
+  }
+  for (const Token& token : view_.Tokens()) {
+    if (token.owner == owner) {
+      selected_id_ = token.id;
+      dragging_ = false;
+      drag_target_.reset();
+      return;
+    }
+  }
+}
+
+auto App::ApplyUiScale() -> void {
+  if (renderer_ == nullptr) {
+    return;
+  }
+  int width = 0;
+  int height = 0;
+  if (!SDL_GetRenderOutputSize(renderer_, &width, &height) || width <= 0 ||
+      height <= 0) {
+    return;
+  }
+  const float scale = kUiScales[static_cast<std::size_t>(ui_scale_index_)];
+  // Nearest держит пиксели карты чёткими; увеличенный интерфейс сглаживаем,
+  // иначе текст распадается на квадраты.
+  SDL_SetDefaultTextureScaleMode(
+      renderer_, scale > 1.0F ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+  if (scale <= 1.0F) {
+    SDL_SetRenderLogicalPresentation(renderer_, 0, 0,
+                                     SDL_LOGICAL_PRESENTATION_DISABLED);
+    return;
+  }
+  const int logical_width =
+      std::max(1, static_cast<int>(static_cast<float>(width) / scale));
+  const int logical_height =
+      std::max(1, static_cast<int>(static_cast<float>(height) / scale));
+  if (!SDL_SetRenderLogicalPresentation(renderer_, logical_width,
+                                        logical_height,
+                                        SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
+    SDL_Log("ui scale failed: %s", SDL_GetError());
+  }
+}
+
+auto App::CycleUiScale(int steps) -> void {
+  const int count = static_cast<int>(kUiScales.size());
+  ui_scale_index_ = std::clamp(ui_scale_index_ + steps, 0, count - 1);
+  ApplyUiScale();
+  if (in_game_ && !in_editor_) {
+    const auto percent = static_cast<int>(
+        kUiScales[static_cast<std::size_t>(ui_scale_index_)] * 100.0F);
+    view_.AddLocalLine("Масштаб интерфейса: " + std::to_string(percent) + "%");
   }
 }
 
@@ -1022,7 +1117,31 @@ auto App::LoadFont() -> void {
   SDL_Log("no usable font found; token labels are disabled");
 }
 
-auto App::HandleEvent(const SDL_Event& event) -> void {
+auto App::HandleEvent(SDL_Event event) -> void {
+  // События мыши приходят в координатах окна: при масштабе интерфейса
+  // переводим их в координаты отрисовки, иначе панели не попадут под курсор.
+  (void)SDL_ConvertEventToRenderCoordinates(renderer_, &event);
+  if (event.type == SDL_EVENT_WINDOW_RESIZED ||
+      event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+    ApplyUiScale();
+  }
+  // Ctrl+= и Ctrl+- меняют масштаб интерфейса в любом режиме и на любой
+  // панели; Ctrl+0 возвращает 100%.
+  if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+      (event.key.mod & SDL_KMOD_CTRL) != 0) {
+    if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
+      CycleUiScale(1);
+      return;
+    }
+    if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
+      CycleUiScale(-1);
+      return;
+    }
+    if (event.key.key == SDLK_0) {
+      CycleUiScale(-static_cast<int>(kUiScales.size()));
+      return;
+    }
+  }
   // Справку ловим раньше остальных панелей: F1 должен открываться всегда,
   // даже поверх листа персонажа или строки чата.
   if (in_game_ && !in_editor_ && event.type == SDL_EVENT_KEY_DOWN &&
@@ -1086,6 +1205,9 @@ auto App::HandleEvent(const SDL_Event& event) -> void {
       case SDL_EVENT_TEXT_INPUT:
         HandleScenesTextInput(event.text.text);
         break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        HandleScenesMouseDown(event.button);
+        break;
       case SDL_EVENT_KEY_DOWN:
         HandleScenesKeyDown(event.key);
         break;
@@ -1097,8 +1219,15 @@ auto App::HandleEvent(const SDL_Event& event) -> void {
 
   if (in_editor_) {
     if (editor_scenes_active_) {
-      if (event.type == SDL_EVENT_KEY_DOWN) {
-        HandleEditorScenesKeyDown(event.key);
+      switch (event.type) {
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+          HandleEditorScenesMouseDown(event.button);
+          break;
+        case SDL_EVENT_KEY_DOWN:
+          HandleEditorScenesKeyDown(event.key);
+          break;
+        default:
+          break;
       }
       return;
     }
@@ -1143,6 +1272,10 @@ auto App::HandleEvent(const SDL_Event& event) -> void {
           pan_last_y_ = event.button.y;
         } else if (event.button.button == SDL_BUTTON_LEFT) {
           HandleMouseDown(event.button);
+        } else if (event.button.button == SDL_BUTTON_RIGHT &&
+                   (SDL_GetModState() & SDL_KMOD_ALT) != 0) {
+          // Alt+ПКМ — метка «сюда» для всего стола.
+          SubmitPing(CellFromPixel(event.button.x, event.button.y));
         }
       }
       break;
@@ -1365,6 +1498,25 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
 }
 
 auto App::HandleMouseDown(const SDL_MouseButtonEvent& button) -> void {
+  // Панели списков рисуются поверх карты и первыми забирают клик.
+  const TokenId listed = InitiativeTokenAt(renderer_, text_.get(),
+                                           view_.Tokens(), button.x, button.y);
+  if (listed != 0) {
+    selected_id_ = listed;
+    dragging_ = false;
+    drag_target_.reset();
+    measure_start_.reset();
+    measure_end_.reset();
+    return;
+  }
+  const int player_row = PlayerRowAt(renderer_, text_.get(), players_.size(),
+                                     players_top_, button.x, button.y);
+  if (player_row >= 0) {
+    SelectPlayerToken(player_row);
+    measure_start_.reset();
+    measure_end_.reset();
+    return;
+  }
   const Cell cell = CellFromPixel(button.x, button.y);
   if (aoe_mode_) {
     mouse_x_ = button.x;
@@ -1452,6 +1604,14 @@ auto App::TokenAt(Cell cell) const -> TokenId {
 
 auto App::SubmitMove(Cell target) -> void {
   SendCommand(MoveToken{.id = selected_id_, .target = target});
+}
+
+auto App::SubmitPing(Cell cell) -> void {
+  if (!view_.Map().Contains(cell)) {
+    view_.AddLocalLine("Метка за пределами карты");
+    return;
+  }
+  SendCommand(PingAt{.cell = cell});
 }
 
 auto App::SendCommand(const Command& command) -> void {
@@ -1997,6 +2157,10 @@ auto App::SubmitChat() -> void {
     ClaimSelectedToken();
     return;
   }
+  if (text == "/ping") {
+    SubmitPing(CellFromPixel(mouse_x_, mouse_y_));
+    return;
+  }
   if (options_.mode == AppMode::kHost && text.starts_with("/kick ")) {
     const std::string name = text.substr(6);
     if (name.empty()) {
@@ -2229,8 +2393,11 @@ auto App::PumpHost() -> void {
 
   players_.clear();
   players_.emplace_back("DM (хост)");
+  player_owners_.clear();
+  player_owners_.emplace_back();
   for (const PeerInfo& peer : net_server_.Peers()) {
     players_.push_back(peer.name);
+    player_owners_.push_back(peer.name);
   }
 }
 
@@ -2349,6 +2516,30 @@ auto App::SyncLogScroll() -> void {
   const int total = static_cast<int>(size);
   const int max_scroll = std::max(0, total - kLogVisibleLines);
   log_scroll_ = std::clamp(log_scroll_, 0, max_scroll);
+}
+
+auto App::OpenSessionLog() -> void {
+  const std::string path = SessionLogPath().string();
+  if (!session_log_.Open(path, CurrentTimeSeconds())) {
+    SDL_Log("session log is unavailable: %s", path.c_str());
+  }
+}
+
+auto App::FlushSessionLog() -> void {
+  const std::uint64_t appended = view_.AppendedLogLines();
+  if (!session_log_.IsOpen()) {
+    log_written_ = static_cast<std::size_t>(appended);
+    return;
+  }
+  // Буфер ограничен, поэтому пишем не больше, чем в нём лежит.
+  const std::size_t pending = std::min<std::size_t>(
+      static_cast<std::size_t>(appended - log_written_), view_.Log().size());
+  const std::size_t first = view_.Log().size() - pending;
+  for (std::size_t i = first; i < view_.Log().size(); ++i) {
+    session_log_.Append(view_.Log()[i]);
+  }
+  log_written_ = static_cast<std::size_t>(appended);
+  session_log_.Flush();
 }
 
 auto App::SaveGame() -> void {
@@ -2652,6 +2843,24 @@ auto App::CloseScenes() -> void {
   scenes_status_.clear();
 }
 
+auto App::HandleScenesMouseDown(const SDL_MouseButtonEvent& button) -> void {
+  if (button.button != SDL_BUTTON_LEFT ||
+      scenes_edit_ != SceneEditField::kNone) {
+    return;
+  }
+  const std::size_t index = SceneRowAt(renderer_, text_.get(), campaign_.scenes,
+                                       scenes_selected_, button.x, button.y);
+  if (index == kNoScene) {
+    return;
+  }
+  scenes_selected_ = index;
+  scenes_status_.clear();
+  if (button.clicks >= 2) {
+    CloseScenes();
+    SwitchScene(index);
+  }
+}
+
 auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
   if (scenes_edit_ != SceneEditField::kNone) {
     if (key.key == SDLK_ESCAPE) {
@@ -2838,6 +3047,7 @@ auto App::Iterate() -> void {
     PumpHost();
   }
   SyncLogScroll();
+  FlushSessionLog();
   CheckAutosave();
 
   if (!in_game_) {
@@ -2894,6 +3104,10 @@ auto App::Iterate() -> void {
           : 0;
   DrawTokens(renderer_, shown, cell_size_, camera_x_, camera_y_, text_.get(),
              selected_id_, active_id);
+  const std::uint32_t now = CurrentTimeSeconds();
+  view_.PrunePings(now);
+  DrawPings(renderer_, view_.Pings(), now, cell_size_, camera_x_, camera_y_,
+            text_.get());
   if (measure_start_.has_value() && measure_end_.has_value()) {
     DrawRuler(renderer_, *measure_start_, *measure_end_, cell_size_, camera_x_,
               camera_y_);
@@ -2937,6 +3151,7 @@ auto App::Iterate() -> void {
       DrawTokenPanel(renderer_, text_.get(), selected, options_.player_name,
                      is_client, can_claim, can_release, movement);
   const float players_y = token_bottom > 0.0F ? token_bottom + 12.0F : 280.0F;
+  players_top_ = players_y;
   DrawPlayersPanel(renderer_, text_.get(), players_, players_y);
   if (dragging_ && drag_target_.has_value()) {
     DrawCellHighlight(renderer_, *drag_target_, cell_size_, camera_x_,

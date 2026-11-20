@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/client_view.h"
 #include "core/grid_map.h"
 #include "core/visibility.h"
 
@@ -39,5 +40,10 @@ auto DrawRuler(SDL_Renderer* renderer, Cell from, Cell to, float cell_size,
 // Шаблон области, который DM показывает столу.
 auto DrawAoe(SDL_Renderer* renderer, const std::vector<Cell>& cells,
              float cell_size, float offset_x, float offset_y) -> void;
+
+// Метки «сюда»: гаснут сами через kPingSeconds от created_at.
+auto DrawPings(SDL_Renderer* renderer, const std::vector<MapPing>& pings,
+               std::uint32_t now, float cell_size, float offset_x,
+               float offset_y, TextRenderer* text) -> void;
 
 }  // namespace dnd

@@ -5,6 +5,7 @@
 
 #include "app/strings.h"
 #include "render/text_renderer.h"
+#include "render/ui_renderer.h"
 
 namespace dnd {
 namespace {
@@ -105,8 +106,7 @@ auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
               const std::vector<std::string>& local_addresses) -> void {
   int window_width = 0;
   int window_height = 0;
-  if (text == nullptr ||
-      !SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (text == nullptr || !RenderSize(renderer, window_width, window_height)) {
     return;
   }
   SetDrawColor(renderer, kBackground);

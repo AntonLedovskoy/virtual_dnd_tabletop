@@ -129,6 +129,9 @@ class GameServer {
   [[nodiscard]] auto HandleEndEncounter(bool can_control_all) -> CommandOutcome;
   [[nodiscard]] auto HandleSetAoe(const SetAoe& command, bool can_control_all)
       -> CommandOutcome;
+  // Метка «сюда»: любой участник, клетка проверяется по карте.
+  [[nodiscard]] auto HandlePing(const PingAt& command, const std::string& actor)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleNextTurn(bool can_control_all) -> CommandOutcome;
 
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;

@@ -45,6 +45,7 @@ constexpr std::uint8_t kCommandHealToken = 22;
 constexpr std::uint8_t kCommandRestParty = 23;
 constexpr std::uint8_t kCommandAoeDamage = 24;
 constexpr std::uint8_t kCommandDeathSave = 25;
+constexpr std::uint8_t kCommandPing = 26;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -54,6 +55,7 @@ constexpr std::uint8_t kEventTokenRemoved = 5;
 constexpr std::uint8_t kEventTokenUpdated = 6;
 constexpr std::uint8_t kEventEncounterUpdated = 7;
 constexpr std::uint8_t kEventAoeUpdated = 8;
+constexpr std::uint8_t kEventPingMarker = 9;
 
 auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.U32(token.id);
@@ -318,6 +320,15 @@ auto DecodeDeathSaveCommand(ByteReader& reader) -> std::optional<Command> {
   return Command{DeathSave{.id = id}};
 }
 
+auto DecodePingCommand(ByteReader& reader) -> std::optional<Command> {
+  std::int32_t x = 0;
+  std::int32_t y = 0;
+  if (!reader.I32(x) || !reader.I32(y) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{PingAt{.cell = Cell{.x = x, .y = y}}};
+}
+
 auto DecodeStartEncounterCommand(ByteReader& reader) -> std::optional<Command> {
   if (!reader.Done()) {
     return std::nullopt;
@@ -560,6 +571,18 @@ auto DecodeAoeUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
     return std::nullopt;
   }
   return Event{AoeUpdated{.aoe = aoe}};
+}
+
+auto DecodePingMarkerEvent(ByteReader& reader) -> std::optional<Event> {
+  std::int32_t x = 0;
+  std::int32_t y = 0;
+  std::string author;
+  if (!reader.I32(x) || !reader.I32(y) ||
+      !reader.String(author, kMaxNameLength) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{
+      PingMarker{.cell = Cell{.x = x, .y = y}, .author = std::move(author)}};
 }
 
 auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
@@ -882,6 +905,10 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, DeathSave>) {
           writer.U8(kCommandDeathSave);
           writer.U32(cmd.id);
+        } else if constexpr (std::is_same_v<T, PingAt>) {
+          writer.U8(kCommandPing);
+          writer.I32(cmd.cell.x);
+          writer.I32(cmd.cell.y);
         }
       },
       command);
@@ -946,6 +973,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeAoeDamageCommand(reader);
     case kCommandDeathSave:
       return DecodeDeathSaveCommand(reader);
+    case kCommandPing:
+      return DecodePingCommand(reader);
     default:
       return std::nullopt;
   }
@@ -992,6 +1021,11 @@ auto EncodeEvent(const Event& event) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, AoeUpdated>) {
           writer.U8(kEventAoeUpdated);
           WriteAoe(writer, ev.aoe);
+        } else if constexpr (std::is_same_v<T, PingMarker>) {
+          writer.U8(kEventPingMarker);
+          writer.I32(ev.cell.x);
+          writer.I32(ev.cell.y);
+          writer.String(ev.author);
         }
       },
       event);
@@ -1022,6 +1056,8 @@ auto DecodeEvent(const std::uint8_t* data, std::size_t size)
       return DecodeEncounterUpdatedEvent(reader);
     case kEventAoeUpdated:
       return DecodeAoeUpdatedEvent(reader);
+    case kEventPingMarker:
+      return DecodePingMarkerEvent(reader);
     default:
       return std::nullopt;
   }

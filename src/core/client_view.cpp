@@ -16,6 +16,8 @@ auto ClientView::Reset(GameSnapshot snapshot, const FogSnapshot& fog) -> void {
   map_ = std::move(snapshot.map);
   tokens_ = std::move(snapshot.tokens);
   fog_.Restore(fog);
+  // Мир пересобран: старые метки указывали на прежнюю карту.
+  pings_.clear();
 }
 
 auto ClientView::Apply(const Event& event) -> void {
@@ -44,8 +46,16 @@ auto ClientView::Apply(const Event& event) -> void {
           encounter_ = ev.encounter;
         } else if constexpr (std::is_same_v<T, AoeUpdated>) {
           aoe_ = ev.aoe;
+        } else if constexpr (std::is_same_v<T, PingMarker>) {
+          pings_.push_back(MapPing{.cell = ev.cell,
+                                   .author = ev.author,
+                                   .created_at = CurrentTimeSeconds()});
+          if (pings_.size() > kMaxMapPings) {
+            pings_.erase(pings_.begin());
+          }
         } else if constexpr (std::is_same_v<T, LogLineAdded>) {
           log_.push_back(ev.line);
+          ++appended_log_lines_;
           if (log_.size() > kMaxLogLines) {
             log_.erase(log_.begin());
           }
@@ -60,9 +70,16 @@ auto ClientView::AddLocalLine(std::string text) -> void {
       .text = std::move(text),
       .timestamp = CurrentTimeSeconds(),
   });
+  ++appended_log_lines_;
   if (log_.size() > kMaxLogLines) {
     log_.erase(log_.begin());
   }
+}
+
+auto ClientView::PrunePings(std::uint32_t now) -> void {
+  std::erase_if(pings_, [now](const MapPing& ping) -> bool {
+    return now >= ping.created_at && now - ping.created_at >= kPingSeconds;
+  });
 }
 
 auto ClientView::FindToken(TokenId id) -> Token* {

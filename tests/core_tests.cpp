@@ -3,6 +3,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <random>
 #include <span>
@@ -25,6 +26,7 @@
 #include "core/password.h"
 #include "core/scene_io.h"
 #include "core/serialization.h"
+#include "core/session_log.h"
 #include "core/sha256.h"
 #include "core/utf8.h"
 #include "core/visibility.h"
@@ -1802,6 +1804,7 @@ auto TestChatAndDice() -> void {
     view.Apply(event);
   }
   Expect(view.Log().size() == 1, "client view stores log lines");
+  Expect(view.AppendedLogLines() == 1, "client view counts stored lines");
   view.Apply(dnd::ViewUpdated{
       .snapshot = server.ClientSnapshot(),
       .fog = server.FogState(),
@@ -1813,6 +1816,107 @@ auto TestChatAndDice() -> void {
              view.Log().back().author.empty() &&
              view.Log().back().timestamp != 0,
          "local feedback stays in the client log");
+  Expect(view.AppendedLogLines() == 2,
+         "local feedback is counted for the session log");
+}
+
+auto TestSessionLog() -> void {
+  const dnd::LogLine chat{
+      .author = "alice", .text = "привет", .timestamp = 1763650000};
+  const std::string formatted = dnd::FormatSessionLogLine(chat);
+  Expect(formatted.size() > 19 && formatted.front() == '[' &&
+             formatted.find("] alice: привет\n") != std::string::npos,
+         "session log line carries time, author and text");
+  Expect(dnd::FormatSessionLogLine(dnd::LogLine{.text = "без времени"}) ==
+             "без времени\n",
+         "session log line without time stays plain");
+
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_session.log";
+  std::filesystem::remove(path);
+  {
+    dnd::SessionLog log;
+    Expect(log.Open(path.string(), 1763650000), "session log opens");
+    Expect(log.IsOpen(), "session log reports the open file");
+    log.Append(chat);
+    log.Append(dnd::LogLine{.text = "вторая строка"});
+    log.Flush();
+    log.Close();
+    Expect(!log.IsOpen(), "session log closes the file");
+  }
+  {
+    // Повторный запуск дописывает, а не стирает прошлую сессию.
+    dnd::SessionLog log;
+    Expect(log.Open(path.string(), 1763651000), "session log reopens");
+    log.Append(chat);
+    log.Close();
+  }
+  std::ifstream in(path, std::ios::binary);
+  const std::string content{std::istreambuf_iterator<char>(in),
+                            std::istreambuf_iterator<char>()};
+  Expect(content.find("=== сессия ") != std::string::npos,
+         "session log marks its start");
+  Expect(content.find("вторая строка\n") != std::string::npos,
+         "session log stores system lines");
+  std::size_t author_hits = 0;
+  for (std::size_t at = content.find("alice: привет"); at != std::string::npos;
+       at = content.find("alice: привет", at + 1)) {
+    ++author_hits;
+  }
+  Expect(author_hits == 2, "session log appends to the previous file");
+  in.close();
+  std::filesystem::remove(path);
+
+  dnd::SessionLog broken;
+  Expect(!broken.Open((std::filesystem::temp_directory_path() /
+                       "dnd_core_tests_no_such_dir" / "session.log")
+                          .string(),
+                      1763650000) &&
+             !broken.IsOpen(),
+         "unwritable session log reports failure");
+}
+
+auto TestPing() -> void {
+  const dnd::GridMap map(10, 10);
+  const dnd::GameSnapshot snapshot{.map = map, .next_token_id = 1};
+  dnd::GameServer server(snapshot, 6, 7);
+
+  const dnd::CommandOutcome ping =
+      server.HandleCommand(dnd::PingAt{.cell = CellAt(3, 4)}, "alice", false);
+  Expect(ping.accepted && ping.events.size() == 1 &&
+             std::holds_alternative<dnd::PingMarker>(ping.events.front()),
+         "ping is accepted and becomes a marker event");
+  if (!ping.events.empty() &&
+      std::holds_alternative<dnd::PingMarker>(ping.events.front())) {
+    const auto& marker = std::get<dnd::PingMarker>(ping.events.front());
+    Expect(marker.cell == CellAt(3, 4) && marker.author == "alice",
+           "ping keeps the cell and the author");
+    Expect(server.EventVisibleToPlayers(ping.events.front()),
+           "ping is visible to every player");
+  }
+  Expect(
+      !server.HandleCommand(dnd::PingAt{.cell = CellAt(10, 0)}, "alice", false)
+           .accepted,
+      "off-map ping is rejected");
+
+  dnd::ClientView view;
+  for (const dnd::Event& event : ping.events) {
+    view.Apply(event);
+  }
+  Expect(view.Pings().size() == 1 &&
+             view.Pings().front().cell == CellAt(3, 4) &&
+             view.Pings().front().author == "alice",
+         "client view stores the ping");
+  const std::uint32_t created = view.Pings().front().created_at;
+  view.PrunePings(created + dnd::kPingSeconds - 1);
+  Expect(view.Pings().size() == 1, "fresh ping survives pruning");
+  view.PrunePings(created + dnd::kPingSeconds);
+  Expect(view.Pings().empty(), "expired ping is pruned");
+
+  view.Apply(dnd::PingMarker{.cell = CellAt(2, 2), .author = "bob"});
+  view.Apply(dnd::ViewUpdated{.snapshot = server.ClientSnapshot(),
+                              .fog = server.FogState()});
+  Expect(view.Pings().empty(), "world refresh clears pings");
 }
 
 auto TestCommandEventSerialization() -> void {
@@ -1848,6 +1952,26 @@ auto TestCommandEventSerialization() -> void {
               "adv d20+5" &&
           std::get<dnd::RollExpression>(*expression_decoded).label == "Атака",
       "roll expression survives serialization");
+
+  const dnd::Command ping_command{dnd::PingAt{.cell = CellAt(4, 5)}};
+  const std::vector<std::uint8_t> ping_bytes = dnd::EncodeCommand(ping_command);
+  const std::optional<dnd::Command> ping_decoded =
+      dnd::DecodeCommand(ping_bytes.data(), ping_bytes.size());
+  Expect(ping_decoded.has_value() &&
+             std::holds_alternative<dnd::PingAt>(*ping_decoded) &&
+             std::get<dnd::PingAt>(*ping_decoded).cell == CellAt(4, 5),
+         "ping command survives serialization");
+
+  const dnd::Event marker{
+      dnd::PingMarker{.cell = CellAt(4, 5), .author = "Аня"}};
+  const std::vector<std::uint8_t> marker_bytes = dnd::EncodeEvent(marker);
+  const std::optional<dnd::Event> marker_decoded =
+      dnd::DecodeEvent(marker_bytes.data(), marker_bytes.size());
+  Expect(marker_decoded.has_value() &&
+             std::holds_alternative<dnd::PingMarker>(*marker_decoded) &&
+             std::get<dnd::PingMarker>(*marker_decoded).cell == CellAt(4, 5) &&
+             std::get<dnd::PingMarker>(*marker_decoded).author == "Аня",
+         "ping marker survives serialization");
 
   const dnd::Event line{dnd::LogLineAdded{
       .line =
@@ -2268,10 +2392,12 @@ auto main() -> int {
     TestAoe();
     TestAoeCommands();
     TestChatAndDice();
+    TestPing();
     TestCommandEventSerialization();
     TestSaveLoadRoundtrip();
     TestCampaign();
     TestDamagedPayloads();
+    TestSessionLog();
     TestSha256();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());

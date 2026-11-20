@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <string>
 
+#include "core/client_view.h"
 #include "core/token.h"
 #include "render/text_renderer.h"
 
@@ -45,6 +46,7 @@ constexpr SDL_Color kMoveBorder{.r = 0x9c, .g = 0xc8, .b = 0xff, .a = 0xb0};
 constexpr SDL_Color kRuler{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = 0xff};
 constexpr SDL_Color kAoeFill{.r = 0xff, .g = 0x6b, .b = 0x4a, .a = 0x48};
 constexpr SDL_Color kAoeBorder{.r = 0xff, .g = 0x9a, .b = 0x7a, .a = 0xc0};
+constexpr SDL_Color kPing{.r = 0xff, .g = 0xe0, .b = 0x5a, .a = 0xff};
 
 constexpr std::array<SDL_Color, 4> kTokenColors{{
     {.r = 0xc8, .g = 0x50, .b = 0x46, .a = SDL_ALPHA_OPAQUE},
@@ -265,6 +267,45 @@ auto DrawAoe(SDL_Renderer* renderer, const std::vector<Cell>& cells,
     SDL_RenderFillRect(renderer, &rect);
     SetDrawColor(renderer, kAoeBorder);
     SDL_RenderRect(renderer, &rect);
+  }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+}
+
+auto DrawPings(SDL_Renderer* renderer, const std::vector<MapPing>& pings,
+               std::uint32_t now, float cell_size, float offset_x,
+               float offset_y, TextRenderer* text) -> void {
+  if (renderer == nullptr) {
+    return;
+  }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  for (const MapPing& ping : pings) {
+    if (now < ping.created_at || now - ping.created_at >= kPingSeconds) {
+      continue;
+    }
+    const auto age = static_cast<float>(now - ping.created_at);
+    // Метка гаснет к концу жизни, но не исчезает скачком.
+    const float fade = std::clamp(
+        1.0F - (age / static_cast<float>(kPingSeconds)), 0.35F, 1.0F);
+    SDL_Color color = kPing;
+    color.a = static_cast<std::uint8_t>(fade * 255.0F);
+    const SDL_FRect outer =
+        CellRect(ping.cell, cell_size, offset_x, offset_y, 2.0F);
+    SetDrawColor(renderer, color);
+    SDL_RenderRect(renderer, &outer);
+    const SDL_FRect inner =
+        CellRect(ping.cell, cell_size, offset_x, offset_y, cell_size * 0.3F);
+    SDL_RenderRect(renderer, &inner);
+    const SDL_FPoint center =
+        CellCenter(ping.cell, cell_size, offset_x, offset_y);
+    const float arm = cell_size * 0.2F;
+    SDL_RenderLine(renderer, center.x - arm, center.y, center.x + arm,
+                   center.y);
+    SDL_RenderLine(renderer, center.x, center.y - arm, center.x,
+                   center.y + arm);
+    if (text != nullptr && !ping.author.empty()) {
+      text->Draw(ping.author, outer.x, outer.y - 18.0F, kPing,
+                 cell_size * 3.0F);
+    }
   }
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }

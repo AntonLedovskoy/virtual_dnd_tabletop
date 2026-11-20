@@ -120,6 +120,19 @@ auto TestTcpHandshakeAndEvents() -> void {
              std::holds_alternative<dnd::Say>(commands.front().command),
          "chat command survives the wire");
 
+  commands.clear();
+  client.SendCommand(dnd::PingAt{.cell = CellAt(3, 3)});
+  const auto ping_deadline = Now() + std::chrono::seconds(3);
+  while (commands.empty() && Now() < ping_deadline) {
+    server.Poll(joined, commands, dropped);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(
+      !commands.empty() &&
+          std::holds_alternative<dnd::PingAt>(commands.front().command) &&
+          std::get<dnd::PingAt>(commands.front().command).cell == CellAt(3, 3),
+      "ping command survives the wire");
+
   server.BroadcastEvent(
       dnd::TokenMoved{.id = 1, .from = CellAt(1, 1), .to = CellAt(2, 2)});
   const auto event_deadline = Now() + std::chrono::seconds(3);
@@ -132,6 +145,22 @@ auto TestTcpHandshakeAndEvents() -> void {
     Expect(std::holds_alternative<dnd::TokenMoved>(update.events.front()),
            "broadcast decodes to TokenMoved");
   }
+
+  update.events.clear();
+  server.BroadcastEvent(
+      dnd::PingMarker{.cell = CellAt(3, 3), .author = "tester"});
+  const auto marker_deadline = Now() + std::chrono::seconds(3);
+  while (update.events.empty() && Now() < marker_deadline) {
+    client.Poll(update);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(
+      update.events.size() == 1 &&
+          std::holds_alternative<dnd::PingMarker>(update.events.front()) &&
+          std::get<dnd::PingMarker>(update.events.front()).cell ==
+              CellAt(3, 3) &&
+          std::get<dnd::PingMarker>(update.events.front()).author == "tester",
+      "ping marker survives the wire");
 }
 
 auto TestViewUpdateRoundtrip() -> void {

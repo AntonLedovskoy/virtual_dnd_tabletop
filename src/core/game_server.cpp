@@ -128,6 +128,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleAoeDamage(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, DeathSave>) {
           return HandleDeathSave(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, PingAt>) {
+          return HandlePing(cmd, actor);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -909,6 +911,18 @@ auto GameServer::HandleSetAoe(const SetAoe& command, bool can_control_all)
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(AoeUpdated{.aoe = state_.Aoe()});
+  return outcome;
+}
+
+auto GameServer::HandlePing(const PingAt& command, const std::string& actor)
+    -> CommandOutcome {
+  if (!state_.Map().Contains(command.cell)) {
+    return CommandOutcome{.reject_reason = "Метка за пределами карты"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(
+      PingMarker{.cell = command.cell, .author = AuthorName(actor)});
   return outcome;
 }
 

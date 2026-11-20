@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,6 +20,10 @@ class TextRenderer;
 // Сколько строк лога помещается в нижнюю панель.
 inline constexpr int kLogVisibleLines = 7;
 
+// Размер области рисования в координатах интерфейса: при включённом
+// логическом масштабе это его логические размеры, иначе — размер вывода.
+auto RenderSize(SDL_Renderer* renderer, int& width, int& height) -> bool;
+
 // Нижняя панель с общим логом стола и строкой ввода чата. scroll — на
 // сколько строк прокручено вверх от самых свежих. Возвращает верхнюю границу
 // панели или 0, если она не нарисована.
@@ -30,6 +35,11 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
                          const std::vector<Token>& tokens,
                          const Encounter& encounter) -> void;
+
+// Токен из панели инициативы под точкой; 0 — мимо панели.
+auto InitiativeTokenAt(SDL_Renderer* renderer, TextRenderer* text,
+                       const std::vector<Token>& tokens, float px, float py)
+    -> TokenId;
 
 // Что писать о запасе движения: игрок вне боя не ограничен, DM — тоже.
 enum class MovementInfo : std::uint8_t {
@@ -49,6 +59,11 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
                       const std::vector<std::string>& players, float panel_y)
     -> void;
+
+// Номер строки игрока под точкой в панели, нарисованной на panel_y; -1 —
+// мимо. Раскладка та же, что у DrawPlayersPanel.
+auto PlayerRowAt(SDL_Renderer* renderer, TextRenderer* text,
+                 std::size_t players, float panel_y, float px, float py) -> int;
 
 enum class SheetField : std::uint8_t {
   kAc = 0,
@@ -87,6 +102,11 @@ auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
                      std::size_t selected, const std::string& edit_label,
                      const std::string& edit_text, const std::string& status,
                      std::string_view hint) -> void;
+
+// Сцена под точкой в модальной панели сцен; kNoScene — мимо списка.
+auto SceneRowAt(SDL_Renderer* renderer, TextRenderer* text,
+                const std::vector<Scene>& scenes, std::size_t selected,
+                float px, float py) -> std::size_t;
 
 // Баннер поверх стола: связь с хостом потеряна, идёт переподключение.
 auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,

@@ -40,9 +40,29 @@ constexpr SDL_Color kErrorText{
 constexpr int kPadding = 12;
 constexpr std::size_t kVisibleSceneRows = 6;
 constexpr int kLineSpacing = 4;
+// Геометрия панелей общая для отрисовки и попадания мышью.
+constexpr int kPanelPadding = 10;
+constexpr int kInitiativePanelWidth = 230;
+constexpr int kInitiativePanelTop = 12;
+constexpr int kInitiativeMaxRows = 10;
+constexpr int kPlayersPanelWidth = 220;
+constexpr int kPlayersPanelX = 12;
+constexpr int kPlayersMaxRows = 8;
+constexpr float kScenesPanelWidth = 760.0F;
+constexpr float kScenesPanelHeight = 420.0F;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+}
+
+auto SortByInitiative(std::vector<const Token*>& sorted) -> void {
+  std::ranges::stable_sort(sorted,
+                           [](const Token* left, const Token* right) -> bool {
+                             if (left->initiative != right->initiative) {
+                               return left->initiative > right->initiative;
+                             }
+                             return left->name < right->name;
+                           });
 }
 
 auto KindLabel(TokenKind kind) -> std::string_view {
@@ -75,12 +95,30 @@ auto FormatLogTime(std::uint32_t timestamp) -> std::string {
 
 }  // namespace
 
+auto RenderSize(SDL_Renderer* renderer, int& width, int& height) -> bool {
+  if (renderer == nullptr) {
+    return false;
+  }
+  int logical_width = 0;
+  int logical_height = 0;
+  SDL_RendererLogicalPresentation mode = SDL_LOGICAL_PRESENTATION_DISABLED;
+  if (SDL_GetRenderLogicalPresentation(renderer, &logical_width,
+                                       &logical_height, &mode) &&
+      mode != SDL_LOGICAL_PRESENTATION_DISABLED && logical_width > 0 &&
+      logical_height > 0) {
+    width = logical_width;
+    height = logical_height;
+    return true;
+  }
+  return SDL_GetRenderOutputSize(renderer, &width, &height);
+}
+
 auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                   const std::vector<LogLine>& lines, bool typing,
                   const std::string& input, bool is_dm, int scroll) -> float {
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return 0.0F;
   }
   if (window_width <= 0 || window_height <= 0) {
@@ -179,7 +217,7 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
   if (window_width <= 0 || window_height <= 0) {
@@ -191,39 +229,32 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
   for (const Token& token : tokens) {
     sorted.push_back(&token);
   }
-  std::ranges::stable_sort(sorted,
-                           [](const Token* left, const Token* right) -> bool {
-                             if (left->initiative != right->initiative) {
-                               return left->initiative > right->initiative;
-                             }
-                             return left->name < right->name;
-                           });
+  SortByInitiative(sorted);
 
-  constexpr int panel_width = 230;
-  constexpr int panel_padding = 10;
-  constexpr int max_rows = 10;
   const int line_height = static_cast<int>(text->LineHeight()) + 4;
-  const int rows = std::min<int>(max_rows, static_cast<int>(sorted.size()));
-  const int panel_height = ((rows + 1) * line_height) + (2 * panel_padding);
-  const auto panel_x = static_cast<float>(window_width - panel_width - 12);
-
-  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  const int rows =
+      std::min<int>(kInitiativeMaxRows, static_cast<int>(sorted.size()));
+  const int panel_height = ((rows + 1) * line_height) + (2 * kPanelPadding);
+  const auto panel_x =
+      static_cast<float>(window_width - kInitiativePanelWidth - 12);
+  const auto panel_top = static_cast<float>(kInitiativePanelTop);
   const SDL_FRect panel{
       .x = panel_x,
-      .y = 12.0F,
-      .w = static_cast<float>(panel_width),
+      .y = panel_top,
+      .w = static_cast<float>(kInitiativePanelWidth),
       .h = static_cast<float>(panel_height),
   };
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   SetDrawColor(renderer, kPanelBackground);
   SDL_RenderFillRect(renderer, &panel);
   SetDrawColor(renderer, kPanelBorder);
   SDL_RenderRect(renderer, &panel);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-  const auto text_x = panel_x + static_cast<float>(panel_padding);
+  const auto text_x = panel_x + static_cast<float>(kPanelPadding);
   const auto max_text_width =
-      static_cast<float>(panel_width - (2 * panel_padding));
-  auto y = 12.0F + static_cast<float>(panel_padding);
+      static_cast<float>(kInitiativePanelWidth - (2 * kPanelPadding));
+  auto y = panel_top + static_cast<float>(kPanelPadding);
   const std::string title = encounter.active
                                 ? std::string(strings::kInitiative) + " — " +
                                       std::string(strings::kRound) + " " +
@@ -256,7 +287,7 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return 0.0F;
   }
   if (window_width <= 0 || window_height <= 0) {
@@ -375,20 +406,17 @@ auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
   if (renderer == nullptr || text == nullptr || players.empty()) {
     return;
   }
-  constexpr int panel_width = 220;
-  constexpr int panel_x = 12;
-  constexpr int panel_padding = 10;
-  constexpr int max_rows = 8;
-
+  const auto panel_padding = static_cast<float>(kPanelPadding);
   const int line_height = static_cast<int>(text->LineHeight()) + 4;
-  const int rows = std::min<int>(max_rows, static_cast<int>(players.size()));
-  const int panel_height = ((rows + 1) * line_height) + (2 * panel_padding);
+  const int rows =
+      std::min<int>(kPlayersMaxRows, static_cast<int>(players.size()));
+  const int panel_height = ((rows + 1) * line_height) + (2 * kPanelPadding);
 
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   const SDL_FRect panel{
-      .x = static_cast<float>(panel_x),
+      .x = static_cast<float>(kPlayersPanelX),
       .y = panel_y,
-      .w = static_cast<float>(panel_width),
+      .w = static_cast<float>(kPlayersPanelWidth),
       .h = static_cast<float>(panel_height),
   };
   SetDrawColor(renderer, kPanelBackground);
@@ -397,10 +425,10 @@ auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
   SDL_RenderRect(renderer, &panel);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-  const auto text_x = static_cast<float>(panel_x + panel_padding);
+  const auto text_x = static_cast<float>(kPlayersPanelX) + panel_padding;
   const auto max_text_width =
-      static_cast<float>(panel_width - (2 * panel_padding));
-  auto y = static_cast<float>(panel_y + panel_padding);
+      static_cast<float>(kPlayersPanelWidth - (2 * kPanelPadding));
+  auto y = panel_y + panel_padding;
   text->Draw(std::string(strings::kPlayers), text_x, y, kAuthorText,
              max_text_width);
   y += static_cast<float>(line_height);
@@ -409,6 +437,108 @@ auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
                max_text_width);
     y += static_cast<float>(line_height);
   }
+}
+
+auto InitiativeTokenAt(SDL_Renderer* renderer, TextRenderer* text,
+                       const std::vector<Token>& tokens, float px, float py)
+    -> TokenId {
+  if (renderer == nullptr || text == nullptr || tokens.empty()) {
+    return 0;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!RenderSize(renderer, window_width, window_height)) {
+    return 0;
+  }
+  const auto panel_x =
+      static_cast<float>(window_width - kInitiativePanelWidth - 12);
+  if (px < panel_x || px > panel_x + kInitiativePanelWidth) {
+    return 0;
+  }
+  const int line_height = static_cast<int>(text->LineHeight()) + 4;
+  const int rows =
+      std::min<int>(kInitiativeMaxRows, static_cast<int>(tokens.size()));
+  const auto first_row_y =
+      static_cast<float>(kInitiativePanelTop + kPanelPadding + line_height);
+  if (py < first_row_y) {
+    return 0;
+  }
+  const auto row =
+      static_cast<int>((py - first_row_y) / static_cast<float>(line_height));
+  if (row < 0 || row >= rows) {
+    return 0;
+  }
+  std::vector<const Token*> sorted;
+  sorted.reserve(tokens.size());
+  for (const Token& token : tokens) {
+    sorted.push_back(&token);
+  }
+  SortByInitiative(sorted);
+  return sorted[static_cast<std::size_t>(row)]->id;
+}
+
+auto PlayerRowAt(SDL_Renderer* renderer, TextRenderer* text,
+                 std::size_t players, float panel_y, float px, float py)
+    -> int {
+  if (renderer == nullptr || text == nullptr || players == 0) {
+    return -1;
+  }
+  if (px < kPlayersPanelX || px > kPlayersPanelX + kPlayersPanelWidth) {
+    return -1;
+  }
+  const int line_height = static_cast<int>(text->LineHeight()) + 4;
+  const int rows = std::min<int>(kPlayersMaxRows, static_cast<int>(players));
+  const auto first_row_y =
+      panel_y + static_cast<float>(kPanelPadding + line_height);
+  if (py < first_row_y) {
+    return -1;
+  }
+  const auto row =
+      static_cast<int>((py - first_row_y) / static_cast<float>(line_height));
+  if (row < 0 || row >= rows) {
+    return -1;
+  }
+  return row;
+}
+
+auto SceneRowAt(SDL_Renderer* renderer, TextRenderer* text,
+                const std::vector<Scene>& scenes, std::size_t selected,
+                float px, float py) -> std::size_t {
+  if (renderer == nullptr || text == nullptr || scenes.empty()) {
+    return kNoScene;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!RenderSize(renderer, window_width, window_height)) {
+    return kNoScene;
+  }
+  const float x = (static_cast<float>(window_width) - kScenesPanelWidth) / 2.0F;
+  const float y =
+      (static_cast<float>(window_height) - kScenesPanelHeight) / 2.0F;
+  if (px < x || px > x + kScenesPanelWidth || py < y ||
+      py > y + kScenesPanelHeight) {
+    return kNoScene;
+  }
+  std::size_t first = 0;
+  if (scenes.size() > kVisibleSceneRows) {
+    first = selected > kVisibleSceneRows / 2
+                ? selected - (kVisibleSceneRows / 2)
+                : 0;
+    first = std::min(first, scenes.size() - kVisibleSceneRows);
+  }
+  const float rows_top = y + 18.0F + text->LineHeight() + 10.0F;
+  const float row_height =
+      (text->LineHeight() + 2.0F) + (text->LineHeight() + 6.0F);
+  const float rows_bottom = y + kScenesPanelHeight - 56.0F;
+  if (py < rows_top || py >= rows_bottom) {
+    return kNoScene;
+  }
+  const auto row = static_cast<std::size_t>((py - rows_top) / row_height);
+  if (row >= kVisibleSceneRows) {
+    return kNoScene;
+  }
+  const std::size_t index = first + row;
+  return index < scenes.size() ? index : kNoScene;
 }
 
 namespace {
@@ -443,7 +573,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
   constexpr float width = 640.0F;
@@ -510,7 +640,7 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
   constexpr float width = 560.0F;
@@ -552,7 +682,7 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
   constexpr float width = 520.0F;
@@ -604,11 +734,11 @@ auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
-  constexpr float width = 760.0F;
-  constexpr float height = 420.0F;
+  constexpr float width = kScenesPanelWidth;
+  constexpr float height = kScenesPanelHeight;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -677,7 +807,7 @@ auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
   constexpr float width = 520.0F;
@@ -707,7 +837,7 @@ auto DrawHelpPanel(SDL_Renderer* renderer, TextRenderer* text, bool is_dm)
   }
   int window_width = 0;
   int window_height = 0;
-  if (!SDL_GetRenderOutputSize(renderer, &window_width, &window_height)) {
+  if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
   const std::span<const std::string_view> role_lines =

@@ -16,6 +16,7 @@
 #include "core/client_view.h"
 #include "core/game_server.h"
 #include "core/local_transport.h"
+#include "core/session_log.h"
 #include "net/net_client.h"
 #include "net/net_server.h"
 #include "render/editor_renderer.h"
@@ -58,7 +59,11 @@ class App {
   auto Initialize() -> bool;
   auto Shutdown() -> void;
 
-  auto HandleEvent(const SDL_Event& event) -> void;
+  auto HandleEvent(SDL_Event event) -> void;
+  // Масштаб интерфейса для стола с проектором: логическое разрешение меньше
+  // окна, поэтому панели и текст рисуются крупнее.
+  auto ApplyUiScale() -> void;
+  auto CycleUiScale(int steps) -> void;
   auto Iterate() -> void;
 
  private:
@@ -78,6 +83,7 @@ class App {
   auto OpenEditorScenes() -> void;
   auto CloseEditorScenes() -> void;
   auto HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto HandleEditorScenesMouseDown(const SDL_MouseButtonEvent& button) -> void;
   auto SwitchEditorScene(std::size_t index) -> void;
   auto CreateEditorScene() -> void;
   auto HandlePanMotion(const SDL_MouseMotionEvent& motion) -> void;
@@ -89,6 +95,8 @@ class App {
   auto FocusNextMenuField(int direction) -> void;
   auto MenuTextBuffer() -> std::string*;
   auto UpdatePlayersFromRoster(const std::vector<RosterEntry>& roster) -> void;
+  // Клик по ростору выбирает персонажа игрока.
+  auto SelectPlayerToken(int row) -> void;
   auto PumpHost() -> void;
   auto PumpClient() -> void;
   // После полной пересинхронизации выбранный токен мог исчезнуть: сбрасываем
@@ -98,6 +106,9 @@ class App {
   auto ScrollLog(int lines) -> void;
   // Держит прокрученный лог на тех же строках, когда приходят новые.
   auto SyncLogScroll() -> void;
+  // Пишет новые строки лога в session.log рядом с .exe.
+  auto OpenSessionLog() -> void;
+  auto FlushSessionLog() -> void;
   auto ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void;
   auto HandleMouseDown(const SDL_MouseButtonEvent& button) -> void;
   auto HandleMouseUp(const SDL_MouseButtonEvent& button) -> void;
@@ -105,6 +116,8 @@ class App {
   auto HandleKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleDmHotkey(SDL_Keycode key) -> void;
   auto SubmitMove(Cell target) -> void;
+  // Показывает всему столу клетку «сюда» (Alt+ПКМ или /ping).
+  auto SubmitPing(Cell cell) -> void;
   auto SendCommand(const Command& command) -> void;
   auto SubmitChat() -> void;
   auto OpenSheet() -> void;
@@ -163,6 +176,8 @@ class App {
   auto OpenScenes() -> void;
   auto CloseScenes() -> void;
   auto HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void;
+  // Клик по сцене выбирает её, двойной — открывает.
+  auto HandleScenesMouseDown(const SDL_MouseButtonEvent& button) -> void;
   auto HandleScenesTextInput(const char* text) -> void;
   auto SwitchSceneByName(std::string_view name) -> void;
   // Переименовывает сцену по индексу; false, если имя пустое или занято.
@@ -197,6 +212,8 @@ class App {
   MenuState menu_;
   std::vector<std::string> local_addresses_;
   std::vector<std::string> players_;
+  // Владелец токенов для каждой строки ростера; пусто у DM.
+  std::vector<std::string> player_owners_;
   bool in_game_ = false;
   bool in_editor_ = false;
   // Сцена, которую редактор сейчас правит и куда пишет F5.
@@ -261,8 +278,15 @@ class App {
   bool help_active_ = false;
   int log_scroll_ = 0;
   std::size_t log_count_ = 0;
+  // Индекс в kUiScales: 1.0, 1.25, 1.5, 2.0.
+  int ui_scale_index_ = 0;
+  // Файл сессии и число строк, которые в него уже попали.
+  SessionLog session_log_;
+  std::size_t log_written_ = 0;
   // Верхняя граница панели лога в прошлом кадре; 0 — панели не было.
   float log_top_ = 0.0F;
+  // Верх панели игроков: по нему считается строка под мышью.
+  float players_top_ = 0.0F;
 
   std::deque<GameSnapshot> undo_stack_;
   TokenId pending_delete_token_ = 0;

@@ -162,12 +162,18 @@ struct SetAoe {
   AoeTemplate aoe;
 };
 
+// Любой участник ставит метку «сюда»: все, включая DM, видят её на карте
+// несколько секунд. Метка не меняет мир и не сохраняется.
+struct PingAt {
+  Cell cell{};
+};
+
 using Command =
     std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
                  RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
                  ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
                  SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
                  StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken,
-                 HealToken, RestParty, AoeDamage, DeathSave>;
+                 HealToken, RestParty, AoeDamage, DeathSave, PingAt>;
 
 }  // namespace dnd

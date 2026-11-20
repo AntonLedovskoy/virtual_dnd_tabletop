@@ -56,8 +56,14 @@ struct AoeUpdated {
   AoeTemplate aoe;
 };
 
-using Event =
-    std::variant<TokenMoved, ViewUpdated, LogLineAdded, TokenAdded,
-                 TokenRemoved, TokenUpdated, EncounterUpdated, AoeUpdated>;
+// Кто-то показал столу клетку. Метка живёт в ClientView пару секунд.
+struct PingMarker {
+  Cell cell{};
+  std::string author;
+};
+
+using Event = std::variant<TokenMoved, ViewUpdated, LogLineAdded, TokenAdded,
+                           TokenRemoved, TokenUpdated, EncounterUpdated,
+                           AoeUpdated, PingMarker>;
 
 }  // namespace dnd

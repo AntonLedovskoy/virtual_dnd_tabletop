@@ -13,6 +13,17 @@
 
 namespace dnd {
 
+// Сколько секунд на карте живёт метка «сюда» и сколько их держим разом.
+inline constexpr std::uint32_t kPingSeconds = 4;
+inline constexpr std::size_t kMaxMapPings = 8;
+
+// Метка «сюда» от любого участника; поле created_at — секунды Unix.
+struct MapPing {
+  Cell cell{};
+  std::string author;
+  std::uint32_t created_at = 0;
+};
+
 // Всё, что разрешено знать клиенту: собственная копия мира и срез
 // видимости, полученный от сервера. Рендеринг читает только отсюда.
 class ClientView {
@@ -32,10 +43,20 @@ class ClientView {
   }
   [[nodiscard]] auto Fog() const -> const FogOfWar& { return fog_; }
   [[nodiscard]] auto Log() const -> const std::vector<LogLine>& { return log_; }
+  // Сколько строк лога пришло за всё время: по этой величине App понимает,
+  // какие строки ещё не записаны в файл сессии.
+  [[nodiscard]] auto AppendedLogLines() const -> std::size_t {
+    return appended_log_lines_;
+  }
   [[nodiscard]] auto EncounterState() const -> const Encounter& {
     return encounter_;
   }
   [[nodiscard]] auto Aoe() const -> const AoeTemplate& { return aoe_; }
+  [[nodiscard]] auto Pings() const -> const std::vector<MapPing>& {
+    return pings_;
+  }
+  // Убирает метки, которым больше kPingSeconds.
+  auto PrunePings(std::uint32_t now) -> void;
 
  private:
   static constexpr std::size_t kMaxLogLines = 200;
@@ -46,8 +67,10 @@ class ClientView {
   std::vector<Token> tokens_;
   FogOfWar fog_;
   std::vector<LogLine> log_;
+  std::size_t appended_log_lines_ = 0;
   Encounter encounter_;
   AoeTemplate aoe_;
+  std::vector<MapPing> pings_;
 };
 
 }  // namespace dnd
