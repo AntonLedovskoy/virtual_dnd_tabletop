@@ -85,8 +85,8 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
                      const std::vector<Scene>& scenes, std::size_t active,
                      std::size_t selected, const std::string& edit_label,
-                     const std::string& edit_text, const std::string& status)
-    -> void;
+                     const std::string& edit_text, const std::string& status,
+                     std::string_view hint) -> void;
 
 // Баннер поверх стола: связь с хостом потеряна, идёт переподключение.
 auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,

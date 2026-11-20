@@ -450,6 +450,17 @@ auto App::StartEditor() -> void {
   menu_.status.clear();
   editor_status_.clear();
   editor_panel_visible_ = true;
+  // Редактор начинает с активной сцены кампании; F5 пишет именно её.
+  if (campaign_.active < campaign_.scenes.size()) {
+    editor_scene_ = campaign_.active;
+    scene_ = campaign_.scenes[editor_scene_].snapshot;
+    scene_.encounter = Encounter{};
+  } else {
+    editor_scene_ = 0;
+  }
+  editor_scenes_active_ = false;
+  editor_scenes_selected_ = editor_scene_;
+  editor_scenes_status_.clear();
   selected_id_ = 0;
   dragging_ = false;
   drag_target_.reset();
@@ -477,14 +488,20 @@ auto App::SubmitMenu() -> void {
 }
 
 auto App::SaveScene() -> void {
+  if (editor_scene_ >= campaign_.scenes.size()) {
+    editor_status_ = "Сцена не выбрана";
+    return;
+  }
   if (!WriteSnapshot(scene_, ScenePath())) {
     editor_status_ = "Не удалось сохранить сцену";
     return;
   }
-  // Редактор правит активную сцену кампании: она же уходит в файл кампании.
-  campaign_.scenes[campaign_.active].snapshot = scene_;
+  // F5 пишет ту сцену, которую выбрал DM в панели редактора.
+  campaign_.scenes[editor_scene_].snapshot = scene_;
+  campaign_.active = editor_scene_;
   SaveCampaign();
-  editor_status_ = std::string(strings::kEditorSceneSaved);
+  editor_status_ = std::string(strings::kEditorSceneSaved) + ": " +
+                   campaign_.scenes[editor_scene_].name;
 }
 
 auto App::LoadScene() -> void {
@@ -609,6 +626,9 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
       menu_.status.clear();
       return;
     case SDLK_TAB:
+      OpenEditorScenes();
+      return;
+    case SDLK_F2:
       editor_panel_visible_ = !editor_panel_visible_;
       return;
     case SDLK_F5:
@@ -654,6 +674,103 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
     default:
       break;
   }
+}
+
+auto App::OpenEditorScenes() -> void {
+  editor_scenes_active_ = true;
+  editor_scenes_selected_ = editor_scene_;
+  editor_scenes_status_.clear();
+}
+
+auto App::CloseEditorScenes() -> void {
+  editor_scenes_active_ = false;
+  editor_scenes_status_.clear();
+}
+
+auto App::HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
+  switch (key.key) {
+    case SDLK_ESCAPE:
+    case SDLK_TAB:
+      CloseEditorScenes();
+      return;
+    case SDLK_UP:
+      if (editor_scenes_selected_ > 0) {
+        --editor_scenes_selected_;
+      }
+      return;
+    case SDLK_DOWN:
+      if (editor_scenes_selected_ + 1 < campaign_.scenes.size()) {
+        ++editor_scenes_selected_;
+      }
+      return;
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER:
+      SwitchEditorScene(editor_scenes_selected_);
+      return;
+    case SDLK_N:
+      CreateEditorScene();
+      return;
+    case SDLK_F5:
+      SaveScene();
+      return;
+    default:
+      break;
+  }
+  if (key.key >= SDLK_1 && key.key <= SDLK_9) {
+    const auto index = static_cast<std::size_t>(key.key - SDLK_1);
+    if (index < campaign_.scenes.size()) {
+      editor_scenes_selected_ = index;
+      SwitchEditorScene(index);
+    }
+  }
+}
+
+auto App::SwitchEditorScene(std::size_t index) -> void {
+  if (index >= campaign_.scenes.size()) {
+    return;
+  }
+  if (index != editor_scene_ && editor_scene_ < campaign_.scenes.size()) {
+    // Правки остаются в памяти кампании и уйдут на диск при F5 или старте.
+    campaign_.scenes[editor_scene_].snapshot = scene_;
+  }
+  editor_scene_ = index;
+  campaign_.active = index;
+  editor_scenes_selected_ = index;
+  scene_ = campaign_.scenes[index].snapshot;
+  scene_.encounter = Encounter{};
+  selected_id_ = 0;
+  dragging_ = false;
+  drag_target_.reset();
+  panning_ = false;
+  CenterCamera();
+  editor_status_ =
+      std::string(strings::kEditorSceneOpened) + campaign_.scenes[index].name;
+  CloseEditorScenes();
+}
+
+auto App::CreateEditorScene() -> void {
+  editor_scenes_status_.clear();
+  if (campaign_.scenes.size() >= kMaxCampaignScenes) {
+    editor_scenes_status_ = "Достигнут предел числа сцен";
+    return;
+  }
+  if (editor_scene_ < campaign_.scenes.size()) {
+    campaign_.scenes[editor_scene_].snapshot = scene_;
+  }
+  std::string name = NextSceneName(campaign_);
+  if (!IsSceneNameAvailable(campaign_, name)) {
+    editor_scenes_status_ = std::string(strings::kSceneNameTaken);
+    return;
+  }
+  Scene scene{.name = std::move(name), .snapshot = scene_};
+  scene.snapshot.encounter = Encounter{};
+  campaign_.scenes.push_back(std::move(scene));
+  campaign_.active = campaign_.scenes.size() - 1;
+  editor_scene_ = campaign_.active;
+  editor_scenes_selected_ = editor_scene_;
+  SaveCampaign();
+  editor_status_ = std::string(strings::kEditorSceneCreated) +
+                   campaign_.scenes[editor_scene_].name;
 }
 
 auto App::HandleEditorMouseDown(const SDL_MouseButtonEvent& button) -> void {
@@ -972,6 +1089,12 @@ auto App::HandleEvent(const SDL_Event& event) -> void {
   }
 
   if (in_editor_) {
+    if (editor_scenes_active_) {
+      if (event.type == SDL_EVENT_KEY_DOWN) {
+        HandleEditorScenesKeyDown(event.key);
+      }
+      return;
+    }
     switch (event.type) {
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         HandleEditorMouseDown(event.button);
@@ -2601,6 +2724,11 @@ auto App::Iterate() -> void {
       DrawEditorPanel(renderer_, text_.get(), scene_, editor_brush_,
                       editor_status_);
     }
+    if (editor_scenes_active_) {
+      DrawScenesPanel(renderer_, text_.get(), campaign_.scenes,
+                      campaign_.active, editor_scenes_selected_, "", "",
+                      editor_scenes_status_, strings::kEditorScenesHint);
+    }
     SDL_RenderPresent(renderer_);
     return;
   }
@@ -2747,7 +2875,7 @@ auto App::Iterate() -> void {
     }
     DrawScenesPanel(renderer_, text_.get(), campaign_.scenes, campaign_.active,
                     scenes_selected_, edit_label, scenes_edit_buffer_,
-                    scenes_status_);
+                    scenes_status_, strings::kScenesHint);
   }
   if (conditions_active_) {
     const Token* condition_token = nullptr;

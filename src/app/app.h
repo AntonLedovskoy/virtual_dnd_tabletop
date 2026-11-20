@@ -73,6 +73,12 @@ class App {
   auto HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleEditorMouseDown(const SDL_MouseButtonEvent& button) -> void;
   auto HandleEditorMouseUp(const SDL_MouseButtonEvent& button) -> void;
+  // Список сцен в редакторе: выбор цели для F5 и новая сцена из карты.
+  auto OpenEditorScenes() -> void;
+  auto CloseEditorScenes() -> void;
+  auto HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto SwitchEditorScene(std::size_t index) -> void;
+  auto CreateEditorScene() -> void;
   auto HandlePanMotion(const SDL_MouseMotionEvent& motion) -> void;
   auto HandleWheel(const SDL_MouseWheelEvent& wheel) -> void;
   auto SubmitMenu() -> void;
@@ -182,6 +188,11 @@ class App {
   std::vector<std::string> players_;
   bool in_game_ = false;
   bool in_editor_ = false;
+  // Сцена, которую редактор сейчас правит и куда пишет F5.
+  std::size_t editor_scene_ = 0;
+  bool editor_scenes_active_ = false;
+  std::size_t editor_scenes_selected_ = 0;
+  std::string editor_scenes_status_;
   bool client_connecting_ = false;
 
   EditorBrush editor_brush_ = EditorBrush::kWall;

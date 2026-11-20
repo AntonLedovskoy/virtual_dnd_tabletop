@@ -132,8 +132,13 @@ inline constexpr std::string_view kEditorSizeHint =
 inline constexpr std::string_view kEditorMouseHint =
     "ЛКМ — рисовать | ПКМ — удалить | СКМ — панорама | колесо — зум";
 inline constexpr std::string_view kEditorKeyHint =
-    "1–5 — кисть | Tab — скрыть панель | F5 — сохранить | F9 — загрузить | "
-    "Enter — играть | Esc — меню";
+    "1–5 — кисть | Tab — сцены | F2 — панель | F5 — сохранить | "
+    "F9 — загрузить | Enter — играть | Esc — меню";
+inline constexpr std::string_view kEditorScenesHint =
+    "↑ ↓ — выбрать | Enter — открыть | 1–9 — сцена | N — новая из этой "
+    "карты | F5 — сохранить | Esc — закрыть";
+inline constexpr std::string_view kEditorSceneOpened = "Открыта сцена: ";
+inline constexpr std::string_view kEditorSceneCreated = "Создана сцена: ";
 inline constexpr std::string_view kEditorSceneSaved = "Сцена сохранена";
 inline constexpr std::string_view kEditorSceneLoaded = "Сцена загружена";
 inline constexpr std::string_view kEditorSceneMissing =
