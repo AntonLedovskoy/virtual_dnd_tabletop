@@ -53,6 +53,9 @@ class NetClient {
   // Hello отправляется только в ответ на запрос хоста: так пароль не ходит
   // по сети, а отпечаток привязан к конкретной сессии.
   bool hello_sent_ = false;
+  // Транскрипт рукопожатия: по нему клиент проверяет ответ хоста.
+  std::vector<std::uint8_t> transcript_;
+  bool session_ready_ = false;
   std::chrono::steady_clock::time_point last_ping_;
 };
 

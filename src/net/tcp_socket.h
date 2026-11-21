@@ -8,6 +8,16 @@
 
 namespace dnd {
 
+class SessionCipher;
+
+// Принятый кадр: содержимое протокола и признак того, был он зашифрован.
+// Открытые кадры после рукопожатия недопустимы — так ловится попытка
+// подсунуть незашифрованную команду.
+struct ReceivedFrame {
+  std::vector<std::uint8_t> payload;
+  bool sealed = false;
+};
+
 // TCP-фрейминг с префиксом длины поверх Winsock. Каждый фрейм — одно
 // сообщение протокола; сокетный слой работает только с байтами.
 auto InitializeSockets() -> bool;
@@ -35,8 +45,14 @@ class TcpConnection {
   auto QueueFrame(const std::vector<std::uint8_t>& frame) -> void;
   // Читает доступные данные и добавляет целые фреймы. Возвращает false
   // после отключения собеседника или ошибки ввода-вывода.
-  auto Poll(std::vector<std::vector<std::uint8_t>>& frames) -> bool;
+  auto Poll(std::vector<ReceivedFrame>& frames) -> bool;
   [[nodiscard]] auto Connected() const -> bool { return connected_; }
+
+  // С этого момента исходящие кадры шифруются, а открытые входящие
+  // отвергаются: рукопожатие закончено.
+  auto SetSessionCipher(std::unique_ptr<SessionCipher> cipher) -> void;
+  // Аварийно закрывает соединение, не дожидаясь таймаута.
+  auto Close() -> void;
 
  private:
   friend class TcpListener;
@@ -44,13 +60,14 @@ class TcpConnection {
 
   auto Flush() -> bool;
   auto TryCompleteConnect() -> bool;
-  auto ParseFrames(std::vector<std::vector<std::uint8_t>>& frames) -> void;
+  auto ParseFrames(std::vector<ReceivedFrame>& frames) -> void;
 
   std::uintptr_t handle_;
   bool connected_ = true;
   bool connecting_ = false;
   std::vector<std::uint8_t> incoming_;
   std::vector<std::uint8_t> outgoing_;
+  std::unique_ptr<SessionCipher> cipher_;
 };
 
 class TcpListener {

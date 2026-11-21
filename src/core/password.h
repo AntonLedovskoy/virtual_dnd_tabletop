@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
 
 namespace dnd {
 
@@ -18,11 +17,6 @@ using PasswordProof = std::array<std::uint8_t, kProofSize>;
 // Случайный запрос от системного генератора: он не должен повторяться, иначе
 // подсмотренный ответ можно переиграть.
 auto RandomChallenge() -> ChallengeNonce;
-
-// Пароль по сети не ходит: клиент доказывает знание пароля отпечатком
-// HMAC-SHA256(пароль, nonce).
-auto MakePasswordProof(std::string_view password, const ChallengeNonce& nonce)
-    -> PasswordProof;
 
 // Сравнение отпечатков без раннего выхода: время ответа не зависит от того,
 // на каком байте отпечатки разошлись.

@@ -11,10 +11,11 @@
 #include "core/password.h"
 #include "core/snapshot.h"
 #include "core/visibility.h"
+#include "core/x25519.h"
 
 namespace dnd {
 
-inline constexpr std::uint32_t kProtocolVersion = 28;
+inline constexpr std::uint32_t kProtocolVersion = 29;
 
 enum class MessageType : std::uint8_t {
   kHello = 1,
@@ -25,18 +26,27 @@ enum class MessageType : std::uint8_t {
   kPing = 6,
   kRoster = 7,
   kChallenge = 8,
+  kSessionReady = 9,
 };
 
-// Запрос хоста: случайный nonce, чтобы отпечаток пароля нельзя было
-// подсмотреть и переиграть.
+// Запрос хоста: случайный nonce привязывает отпечаток пароля к сессии, а
+// открытый ключ — начало обмена ключами шифрования.
 struct Challenge {
   ChallengeNonce nonce{};
+  X25519Key public_key{};
 };
 
 // Пароль по сети не ходит: клиент доказывает знание пароля отпечатком
-// HMAC-SHA256(пароль, nonce).
+// HMAC-SHA256 по транскрипту рукопожатия (запрос, оба ключа, имя).
 struct Hello {
   std::string player_name;
+  X25519Key public_key{};
+  PasswordProof proof{};
+};
+
+// Ответ хоста на верный отпечаток: он доказывает уже клиенту, что ключи
+// не подменены. Уходит в зашифрованном кадре.
+struct SessionReady {
   PasswordProof proof{};
 };
 
@@ -65,6 +75,10 @@ auto DecodeHello(const std::uint8_t* data, std::size_t size)
 auto EncodeChallenge(const Challenge& challenge) -> std::vector<std::uint8_t>;
 auto DecodeChallenge(const std::uint8_t* data, std::size_t size)
     -> std::optional<Challenge>;
+
+auto EncodeSessionReady(const SessionReady& ready) -> std::vector<std::uint8_t>;
+auto DecodeSessionReady(const std::uint8_t* data, std::size_t size)
+    -> std::optional<SessionReady>;
 
 auto EncodeWelcome(const Welcome& welcome) -> std::vector<std::uint8_t>;
 auto DecodeWelcome(const std::uint8_t* data, std::size_t size)

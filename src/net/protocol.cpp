@@ -19,6 +19,7 @@ auto EncodeChallenge(const Challenge& challenge) -> std::vector<std::uint8_t> {
   ByteWriter writer;
   writer.U8(static_cast<std::uint8_t>(MessageType::kChallenge));
   writer.Bytes(challenge.nonce.data(), challenge.nonce.size());
+  writer.Bytes(challenge.public_key.data(), challenge.public_key.size());
   return writer.Data();
 }
 
@@ -30,6 +31,7 @@ auto DecodeChallenge(const std::uint8_t* data, std::size_t size)
   if (!reader.U8(type) ||
       type != static_cast<std::uint8_t>(MessageType::kChallenge) ||
       !reader.Bytes(challenge.nonce.data(), challenge.nonce.size()) ||
+      !reader.Bytes(challenge.public_key.data(), challenge.public_key.size()) ||
       !reader.Done()) {
     return std::nullopt;
   }
@@ -41,6 +43,7 @@ auto EncodeHello(const Hello& hello) -> std::vector<std::uint8_t> {
   writer.U8(static_cast<std::uint8_t>(MessageType::kHello));
   writer.U32(kProtocolVersion);
   writer.String(hello.player_name);
+  writer.Bytes(hello.public_key.data(), hello.public_key.size());
   writer.Bytes(hello.proof.data(), hello.proof.size());
   return writer.Data();
 }
@@ -70,10 +73,32 @@ auto DecodeHello(const std::uint8_t* data, std::size_t size)
   }
   if (!reader.U32(version) || version != kProtocolVersion ||
       !reader.String(hello.player_name, kMaxPlayerName) ||
+      !reader.Bytes(hello.public_key.data(), hello.public_key.size()) ||
       !reader.Bytes(hello.proof.data(), hello.proof.size()) || !reader.Done()) {
     return std::nullopt;
   }
   return hello;
+}
+
+auto EncodeSessionReady(const SessionReady& ready)
+    -> std::vector<std::uint8_t> {
+  ByteWriter writer;
+  writer.U8(static_cast<std::uint8_t>(MessageType::kSessionReady));
+  writer.Bytes(ready.proof.data(), ready.proof.size());
+  return writer.Data();
+}
+
+auto DecodeSessionReady(const std::uint8_t* data, std::size_t size)
+    -> std::optional<SessionReady> {
+  ByteReader reader(data, size);
+  std::uint8_t type = 0;
+  SessionReady ready;
+  if (!reader.U8(type) ||
+      type != static_cast<std::uint8_t>(MessageType::kSessionReady) ||
+      !reader.Bytes(ready.proof.data(), ready.proof.size()) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return ready;
 }
 
 auto EncodeWelcome(const Welcome& welcome) -> std::vector<std::uint8_t> {

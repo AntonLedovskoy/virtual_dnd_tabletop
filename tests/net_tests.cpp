@@ -13,6 +13,7 @@
 #include "core/game_server.h"
 #include "core/game_state.h"
 #include "core/grid_map.h"
+#include "core/session_crypto.h"
 #include "core/visibility.h"
 #include "net/net_client.h"
 #include "net/net_server.h"
@@ -33,6 +34,38 @@ auto CellAt(int x, int y) -> dnd::Cell { return dnd::Cell{.x = x, .y = y}; }
 
 auto Now() -> std::chrono::steady_clock::time_point {
   return std::chrono::steady_clock::now();
+}
+
+// Сырые клиенты в тестах сами проходят рукопожатие: приложение делает это
+// через NetClient, а здесь нужны кадры и ключи как есть.
+auto PollServer(dnd::NetServer& server) -> void {
+  std::vector<dnd::PeerJoined> joined;
+  std::vector<dnd::PeerCommand> commands;
+  std::vector<dnd::PeerId> dropped;
+  server.Poll(joined, commands, dropped);
+}
+
+auto WaitFrame(dnd::NetServer& server, dnd::TcpConnection& connection,
+               dnd::MessageType type, dnd::ReceivedFrame& result) -> bool {
+  std::vector<dnd::ReceivedFrame> frames;
+  const auto deadline = Now() + std::chrono::seconds(3);
+  while (Now() < deadline) {
+    PollServer(server);
+    if (!connection.Poll(frames)) {
+      return false;
+    }
+    for (dnd::ReceivedFrame& frame : frames) {
+      if (!frame.payload.empty() &&
+          static_cast<dnd::MessageType>(frame.payload[0]) == type) {
+        result = std::move(frame);
+        frames.clear();
+        return true;
+      }
+    }
+    frames.clear();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return false;
 }
 
 auto MakeSnapshot() -> dnd::GameSnapshot {
@@ -434,19 +467,20 @@ auto TestVersionMismatchReject() -> void {
   std::vector<dnd::PeerJoined> joined;
   std::vector<dnd::PeerCommand> commands;
   std::vector<dnd::PeerId> dropped;
-  std::vector<std::vector<std::uint8_t>> frames;
+  std::vector<dnd::ReceivedFrame> frames;
   std::optional<std::string> reason;
   const auto deadline = Now() + std::chrono::seconds(3);
   while (!reason.has_value() && Now() < deadline) {
     server.Poll(joined, commands, dropped);
     if (connection->Poll(frames)) {
-      for (const std::vector<std::uint8_t>& frame : frames) {
-        if (frame.empty() || static_cast<dnd::MessageType>(frame[0]) !=
-                                 dnd::MessageType::kReject) {
+      for (const dnd::ReceivedFrame& frame : frames) {
+        if (frame.payload.empty() || frame.sealed ||
+            static_cast<dnd::MessageType>(frame.payload[0]) !=
+                dnd::MessageType::kReject) {
           continue;
         }
         if (const std::optional<std::string> decoded =
-                dnd::DecodeReject(frame.data(), frame.size())) {
+                dnd::DecodeReject(frame.payload.data(), frame.payload.size())) {
           reason = decoded;
         }
       }
@@ -484,64 +518,42 @@ auto TestChallengeHandshake() -> void {
     return;
   }
 
-  std::vector<dnd::PeerJoined> joined;
-  std::vector<dnd::PeerCommand> commands;
-  std::vector<dnd::PeerId> dropped;
-  std::vector<std::vector<std::uint8_t>> frames;
-  std::optional<dnd::Challenge> challenge;
-  const auto challenge_deadline = Now() + std::chrono::seconds(3);
-  while (!challenge.has_value() && Now() < challenge_deadline) {
-    server.Poll(joined, commands, dropped);
-    if (connection->Poll(frames)) {
-      for (const std::vector<std::uint8_t>& frame : frames) {
-        if (frame.empty() || static_cast<dnd::MessageType>(frame[0]) !=
-                                 dnd::MessageType::kChallenge) {
-          continue;
-        }
-        if (const std::optional<dnd::Challenge> decoded =
-                dnd::DecodeChallenge(frame.data(), frame.size())) {
-          challenge = decoded;
-        }
-      }
-      frames.clear();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  Expect(challenge.has_value(), "server sends a challenge before hello");
+  // Запрос хоста несёт и случайный nonce, и ключ для шифрования сессии.
+  dnd::ReceivedFrame challenge_frame;
+  Expect(WaitFrame(server, *connection, dnd::MessageType::kChallenge,
+                   challenge_frame),
+         "server sends a challenge before hello");
+  const std::optional<dnd::Challenge> challenge = dnd::DecodeChallenge(
+      challenge_frame.payload.data(), challenge_frame.payload.size());
+  Expect(challenge.has_value(), "challenge decodes");
   if (!challenge.has_value()) {
     return;
   }
+  Expect(challenge->nonce != dnd::ChallengeNonce{},
+         "challenge nonce is not empty");
+  Expect(challenge->public_key != dnd::X25519Key{},
+         "challenge carries the host key");
 
-  // Пароль не должен проходить проверку, если отпечаток посчитан от чужого
-  // запроса: иначе подсмотренный ответ можно было бы переиграть.
-  dnd::Challenge foreign;
-  foreign.nonce[0] = 1;
+  // Отпечаток от другого пароля не проходит: иначе подсмотренный ответ
+  // можно было бы переиграть.
+  const dnd::X25519KeyPair keys = dnd::GenerateX25519KeyPair();
+  const std::vector<std::uint8_t> transcript = dnd::HandshakeTranscript(
+      challenge->nonce, challenge->public_key, keys.public_key, "tester");
   connection->QueueFrame(dnd::EncodeHello(
       dnd::Hello{.player_name = "tester",
-                 .proof = dnd::MakePasswordProof("secret", foreign.nonce)}));
+                 .public_key = keys.public_key,
+                 .proof = dnd::MakeClientProof("wrong", transcript)}));
 
-  std::optional<std::string> reason;
-  const auto reject_deadline = Now() + std::chrono::seconds(3);
-  while (!reason.has_value() && Now() < reject_deadline) {
-    server.Poll(joined, commands, dropped);
-    if (connection->Poll(frames)) {
-      for (const std::vector<std::uint8_t>& frame : frames) {
-        if (frame.empty() || static_cast<dnd::MessageType>(frame[0]) !=
-                                 dnd::MessageType::kReject) {
-          continue;
-        }
-        if (const std::optional<std::string> decoded =
-                dnd::DecodeReject(frame.data(), frame.size())) {
-          reason = decoded;
-        }
-      }
-      frames.clear();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  Expect(joined.empty(), "stale proof does not join");
+  dnd::ReceivedFrame reject_frame;
+  Expect(
+      WaitFrame(server, *connection, dnd::MessageType::kReject, reject_frame),
+      "wrong password is rejected");
+  const std::optional<std::string> reason = dnd::DecodeReject(
+      reject_frame.payload.data(), reject_frame.payload.size());
   Expect(reason.has_value() && *reason == "неверный пароль",
-         "stale proof is rejected as a wrong password");
+         "wrong password reject names the reason");
+  Expect(!reject_frame.sealed,
+         "password reject stays open: keys were never confirmed");
 
   // Перебор пароля на одном соединении не должен занимать хост: после лимита
   // сообщений сервер закрывает соединение.
@@ -549,14 +561,92 @@ auto TestChallengeHandshake() -> void {
     connection->QueueFrame(dnd::EncodeHello(dnd::Hello{}));
   }
   bool closed = false;
+  std::vector<dnd::ReceivedFrame> frames;
   const auto close_deadline = Now() + std::chrono::seconds(5);
   while (!closed && Now() < close_deadline) {
-    server.Poll(joined, commands, dropped);
+    PollServer(server);
     closed = !connection->Poll(frames);
     frames.clear();
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   Expect(closed, "handshake flood closes the connection");
+}
+
+auto TestEncryptedSession() -> void {
+  dnd::NetServer server;
+  Expect(server.Start(0, "secret"), "encrypted server listens");
+  const std::uint16_t port = server.Port();
+  if (port == 0) {
+    return;
+  }
+
+  const std::unique_ptr<dnd::TcpConnection> connection =
+      dnd::TcpConnection::Connect("127.0.0.1", port);
+  Expect(connection != nullptr, "encrypted client connects");
+  if (connection == nullptr) {
+    return;
+  }
+
+  dnd::ReceivedFrame challenge_frame;
+  Expect(WaitFrame(server, *connection, dnd::MessageType::kChallenge,
+                   challenge_frame),
+         "encrypted client gets the challenge");
+  const std::optional<dnd::Challenge> challenge = dnd::DecodeChallenge(
+      challenge_frame.payload.data(), challenge_frame.payload.size());
+  if (!challenge.has_value()) {
+    return;
+  }
+
+  const dnd::X25519KeyPair keys = dnd::GenerateX25519KeyPair();
+  dnd::X25519Key shared{};
+  Expect(
+      dnd::X25519SharedSecret(keys.private_key, challenge->public_key, shared),
+      "client derives the shared secret");
+  const std::vector<std::uint8_t> transcript = dnd::HandshakeTranscript(
+      challenge->nonce, challenge->public_key, keys.public_key, "tester");
+  connection->QueueFrame(dnd::EncodeHello(
+      dnd::Hello{.player_name = "tester",
+                 .public_key = keys.public_key,
+                 .proof = dnd::MakeClientProof("secret", transcript)}));
+  connection->SetSessionCipher(
+      std::make_unique<dnd::SessionCipher>(dnd::SessionCipher::ForClient(
+          dnd::DeriveSessionSecrets(shared, challenge->nonce))));
+
+  dnd::ReceivedFrame ready_frame;
+  Expect(WaitFrame(server, *connection, dnd::MessageType::kSessionReady,
+                   ready_frame),
+         "host confirms the session");
+  Expect(ready_frame.sealed, "session confirmation is sealed");
+  const std::optional<dnd::SessionReady> ready = dnd::DecodeSessionReady(
+      ready_frame.payload.data(), ready_frame.payload.size());
+  Expect(ready.has_value() &&
+             dnd::ProofMatches(dnd::MakeServerProof("secret", transcript),
+                               ready->proof),
+         "host proves it knows the password");
+  if (ready.has_value()) {
+    Expect(!dnd::ProofMatches(dnd::MakeServerProof("other", transcript),
+                              ready->proof),
+           "host proof depends on the password");
+  }
+
+  // Дальше хост обязан слать только шифрованные кадры.
+  const std::vector<dnd::PeerInfo> peers = server.Peers();
+  Expect(peers.size() == 1, "encrypted peer joins the table");
+  if (peers.empty()) {
+    return;
+  }
+  server.SendWelcome(peers.front().id, dnd::Welcome{.snapshot = MakeSnapshot(),
+                                                    .fog = MakeFog(6, 4)});
+
+  dnd::ReceivedFrame welcome_frame;
+  Expect(
+      WaitFrame(server, *connection, dnd::MessageType::kWelcome, welcome_frame),
+      "client reads the welcome through the sealed channel");
+  Expect(welcome_frame.sealed, "welcome is sealed");
+  const std::optional<dnd::Welcome> welcome = dnd::DecodeWelcome(
+      welcome_frame.payload.data(), welcome_frame.payload.size());
+  Expect(welcome.has_value() && !welcome->snapshot.tokens.empty(),
+         "sealed welcome carries the world");
 }
 
 auto TestPeerLimit() -> void {
@@ -685,7 +775,7 @@ auto TestOutgoingQueueLimit() -> void {
   if (connection == nullptr) {
     return;
   }
-  std::vector<std::vector<std::uint8_t>> frames;
+  std::vector<dnd::ReceivedFrame> frames;
   const auto connect_deadline = Now() + std::chrono::seconds(3);
   while (!connection->Connected() && Now() < connect_deadline) {
     connection->Poll(frames);
@@ -854,6 +944,7 @@ auto main() -> int {
     TestPlayerNameValidation();
     TestVersionMismatchReject();
     TestChallengeHandshake();
+    TestEncryptedSession();
     TestPeerLimit();
     TestCommandRateLimit();
     TestOutgoingQueueLimit();

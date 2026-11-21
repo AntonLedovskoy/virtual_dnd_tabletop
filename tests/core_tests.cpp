@@ -21,6 +21,7 @@
 #include "core/camera.h"
 #include "core/campaign.h"
 #include "core/campaign_io.h"
+#include "core/chacha20.h"
 #include "core/chat_command.h"
 #include "core/chat_input.h"
 #include "core/client_view.h"
@@ -39,10 +40,12 @@
 #include "core/player_name.h"
 #include "core/scene_io.h"
 #include "core/serialization.h"
+#include "core/session_crypto.h"
 #include "core/session_log.h"
 #include "core/sha256.h"
 #include "core/utf8.h"
 #include "core/visibility.h"
+#include "core/x25519.h"
 
 namespace {
 
@@ -3357,22 +3360,233 @@ auto TestSha256() -> void {
              std::span<const std::uint8_t>(message_bytes, message.size()))) ==
              "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
          "hmac-sha256 matches the reference value");
+}
 
-  // Отпечаток пароля зависит от запроса: тот же пароль на другой nonce даёт
-  // другое значение, иначе подсмотренный ответ можно переиграть.
-  const dnd::ChallengeNonce first{};
-  dnd::ChallengeNonce second{};
-  second[0] = 1;
-  const auto first_proof = dnd::MakePasswordProof("secret", first);
-  Expect(
-      dnd::ProofMatches(first_proof, dnd::MakePasswordProof("secret", first)),
-      "proof is deterministic for the same challenge");
-  Expect(
-      !dnd::ProofMatches(first_proof, dnd::MakePasswordProof("secret", second)),
-      "proof changes with the challenge");
-  Expect(
-      !dnd::ProofMatches(first_proof, dnd::MakePasswordProof("other", first)),
-      "proof changes with the password");
+auto FromHex(std::string_view text) -> std::vector<std::uint8_t> {
+  const auto digit = [](char symbol) -> std::uint8_t {
+    if (symbol >= '0' && symbol <= '9') {
+      return static_cast<std::uint8_t>(symbol - '0');
+    }
+    if (symbol >= 'a' && symbol <= 'f') {
+      return static_cast<std::uint8_t>(symbol - 'a' + 10);
+    }
+    return 0;
+  };
+  std::vector<std::uint8_t> bytes;
+  bytes.reserve(text.size() / 2);
+  for (std::size_t i = 0; i + 1 < text.size(); i += 2) {
+    bytes.push_back(
+        static_cast<std::uint8_t>((digit(text[i]) << 4) | digit(text[i + 1])));
+  }
+  return bytes;
+}
+
+auto HexBytes(std::span<const std::uint8_t> bytes) -> std::string {
+  constexpr std::string_view digits = "0123456789abcdef";
+  std::string text;
+  text.reserve(bytes.size() * 2);
+  for (const std::uint8_t byte : bytes) {
+    text.push_back(digits[byte >> 4]);
+    text.push_back(digits[byte & 0x0FU]);
+  }
+  return text;
+}
+
+auto ToKey(std::string_view hex) -> dnd::X25519Key {
+  dnd::X25519Key key{};
+  const std::vector<std::uint8_t> bytes = FromHex(hex);
+  std::copy_n(bytes.begin(), std::min(bytes.size(), key.size()), key.begin());
+  return key;
+}
+
+auto TestX25519() -> void {
+  // Векторы RFC 7748, раздел 6.1: по ним видно ошибку в арифметике поля.
+  const dnd::X25519Key alice_private =
+      ToKey("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+  const dnd::X25519Key bob_private =
+      ToKey("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
+
+  const dnd::X25519Key alice_public = dnd::X25519PublicKey(alice_private);
+  const dnd::X25519Key bob_public = dnd::X25519PublicKey(bob_private);
+  Expect(HexBytes(alice_public) ==
+             "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+         "x25519 alice public key matches rfc 7748");
+  Expect(HexBytes(bob_public) ==
+             "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+         "x25519 bob public key matches rfc 7748");
+
+  dnd::X25519Key shared_alice{};
+  dnd::X25519Key shared_bob{};
+  Expect(dnd::X25519SharedSecret(alice_private, bob_public, shared_alice),
+         "x25519 shared secret is valid");
+  Expect(dnd::X25519SharedSecret(bob_private, alice_public, shared_bob),
+         "x25519 reverse shared secret is valid");
+  Expect(shared_alice == shared_bob, "both sides derive the same secret");
+  Expect(HexBytes(shared_alice) ==
+             "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+         "x25519 shared secret matches rfc 7748");
+
+  // Раздел 5.2: скаляр 9 по базовой точке.
+  const dnd::X25519Key scalar =
+      ToKey("0900000000000000000000000000000000000000000000000000000000000000");
+  Expect(HexBytes(dnd::X25519PublicKey(scalar)) ==
+             "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079",
+         "x25519 single iteration matches rfc 7748");
+
+  // Точка малого порядка даёт нулевой секрет: такой обмен ничего не значит.
+  dnd::X25519Key weak{};
+  Expect(!dnd::X25519SharedSecret(alice_private, dnd::X25519Key{}, weak),
+         "x25519 rejects the point of small order");
+
+  const dnd::X25519KeyPair pair = dnd::GenerateX25519KeyPair();
+  Expect(pair.public_key == dnd::X25519PublicKey(pair.private_key),
+         "generated key pair is consistent");
+  Expect(pair.private_key != dnd::X25519Key{},
+         "generated private key is not empty");
+}
+
+auto TestChaCha20() -> void {
+  const std::vector<std::uint8_t> key_bytes = FromHex(
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+  dnd::ChaCha20Key key{};
+  std::ranges::copy(key_bytes, key.begin());
+
+  // Вектор RFC 8439, раздел 2.4.1: блок ключевого потока.
+  dnd::ChaCha20Nonce block_nonce{};
+  const std::vector<std::uint8_t> nonce_bytes =
+      FromHex("000000090000004a00000000");
+  std::ranges::copy(nonce_bytes, block_nonce.begin());
+  const std::vector<std::uint8_t> block =
+      dnd::ChaCha20Xor(key, block_nonce, 1, std::vector<std::uint8_t>(64, 0));
+  Expect(HexBytes(block) ==
+             "10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4e"
+             "d2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e",
+         "chacha20 block matches rfc 8439");
+
+  // Вектор RFC 8439, раздел 2.3.2: шифрование текста и обратное чтение.
+  const std::string plaintext =
+      "Ladies and Gentlemen of the class of '99: If I could offer you only "
+      "one tip for the future, sunscreen would be it.";
+  const std::vector<std::uint8_t> plain(plaintext.begin(), plaintext.end());
+  dnd::ChaCha20Nonce text_nonce{};
+  const std::vector<std::uint8_t> text_nonce_bytes =
+      FromHex("000000000000004a00000000");
+  std::ranges::copy(text_nonce_bytes, text_nonce.begin());
+  const std::vector<std::uint8_t> ciphertext =
+      dnd::ChaCha20Xor(key, text_nonce, 1, plain);
+  Expect(HexBytes(ciphertext) ==
+             "6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b"
+             "f91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d8"
+             "07ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab7793736"
+             "5af90bbf74a35be6b40b8eedf2785e42874d",
+         "chacha20 encryption matches rfc 8439");
+  Expect(dnd::ChaCha20Xor(key, text_nonce, 1, ciphertext) == plain,
+         "chacha20 decrypts its own ciphertext");
+
+  // Счётчик блоков: нулевой блок отличается от первого.
+  const std::vector<std::uint8_t> first_bytes =
+      dnd::ChaCha20Xor(key, text_nonce, 0, std::vector<std::uint8_t>(16, 0));
+  Expect(HexBytes(first_bytes) == "af051e40bba0354981329a806a140eaf",
+         "chacha20 starts at the requested block");
+}
+
+auto TestHkdf() -> void {
+  // Вектор RFC 5869, тест 1.
+  const std::vector<std::uint8_t> ikm(22, 0x0b);
+  const std::vector<std::uint8_t> salt = FromHex("000102030405060708090a0b0c");
+  const std::vector<std::uint8_t> info = FromHex("f0f1f2f3f4f5f6f7f8f9");
+  const std::vector<std::uint8_t> okm = dnd::HkdfSha256(ikm, salt, info, 42);
+  Expect(HexBytes(okm) ==
+             "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
+             "34007208d5b887185865",
+         "hkdf-sha256 matches rfc 5869");
+  Expect(dnd::HkdfSha256(ikm, salt, info, 32) ==
+             std::vector<std::uint8_t>(okm.begin(), okm.begin() + 32),
+         "hkdf output starts the same for shorter requests");
+}
+
+auto TestHandshakeProofs() -> void {
+  const dnd::ChallengeNonce nonce{};
+  const dnd::X25519Key host_key =
+      ToKey("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
+  const dnd::X25519Key client_key =
+      ToKey("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f");
+  const std::vector<std::uint8_t> transcript =
+      dnd::HandshakeTranscript(nonce, host_key, client_key, "player");
+
+  const dnd::PasswordProof proof = dnd::MakeClientProof("secret", transcript);
+  Expect(dnd::ProofMatches(proof, dnd::MakeClientProof("secret", transcript)),
+         "proof is deterministic for the same transcript");
+  Expect(!dnd::ProofMatches(proof, dnd::MakeClientProof("other", transcript)),
+         "proof changes with the password");
+
+  // Подмена любого элемента транскрипта меняет отпечаток: иначе можно было
+  // бы подменить ключи или имя и остаться с тем же доказательством.
+  const std::vector<std::uint8_t> other_nonce = dnd::HandshakeTranscript(
+      dnd::ChallengeNonce{1}, host_key, client_key, "player");
+  const std::vector<std::uint8_t> other_host =
+      dnd::HandshakeTranscript(nonce, client_key, client_key, "player");
+  const std::vector<std::uint8_t> other_name =
+      dnd::HandshakeTranscript(nonce, host_key, client_key, "player2");
+  Expect(!dnd::ProofMatches(proof, dnd::MakeClientProof("secret", other_nonce)),
+         "proof changes with the challenge");
+  Expect(!dnd::ProofMatches(proof, dnd::MakeClientProof("secret", other_host)),
+         "proof changes with the host key");
+  Expect(!dnd::ProofMatches(proof, dnd::MakeClientProof("secret", other_name)),
+         "proof changes with the player name");
+
+  Expect(!dnd::ProofMatches(proof, dnd::MakeServerProof("secret", transcript)),
+         "server proof differs from the client proof");
+}
+
+auto TestSessionCipher() -> void {
+  const dnd::X25519Key shared =
+      ToKey("4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742");
+  const dnd::ChallengeNonce nonce = dnd::RandomChallenge();
+  const dnd::SessionSecrets secrets = dnd::DeriveSessionSecrets(shared, nonce);
+  dnd::SessionCipher host = dnd::SessionCipher::ForHost(secrets);
+  dnd::SessionCipher client = dnd::SessionCipher::ForClient(secrets);
+
+  const std::string text = "ход: аллея, 3 клетки";
+  const std::vector<std::uint8_t> payload(text.begin(), text.end());
+  const std::vector<std::uint8_t> sealed = client.Seal(payload);
+  Expect(sealed.size() == payload.size() + dnd::kSealedFrameOverhead,
+         "sealed frame carries the marker, number, mac and ciphertext");
+  Expect(sealed[0] == dnd::kSealedFrameMarker, "sealed frame is marked");
+  Expect(std::ranges::search(sealed, payload).empty(),
+         "payload is not visible in the sealed frame");
+
+  std::vector<std::uint8_t> opened;
+  Expect(host.Open(sealed, opened) && opened == payload,
+         "host opens the sealed frame");
+
+  // Повтор того же кадра отвергается: номер кадра уже израсходован.
+  std::vector<std::uint8_t> replayed;
+  Expect(!host.Open(sealed, replayed), "replayed frame is rejected");
+
+  // Битая полезная часть и битый MAC тоже не проходят. Кадры портят
+  // отдельную пару, чтобы не сбить порядок номеров у основной.
+  dnd::SessionCipher host_other = dnd::SessionCipher::ForHost(secrets);
+  dnd::SessionCipher client_other = dnd::SessionCipher::ForClient(secrets);
+  std::vector<std::uint8_t> tampered = client_other.Seal(payload);
+  tampered[1 + 8 + 1] ^= 0x01;
+  Expect(!host_other.Open(tampered, replayed),
+         "tampered ciphertext is rejected");
+
+  std::vector<std::uint8_t> broken_mac = client_other.Seal(payload);
+  broken_mac.back() ^= 0x01;
+  Expect(!host_other.Open(broken_mac, replayed), "tampered mac is rejected");
+
+  // Чужое направление: клиент не читает собственные кадры.
+  dnd::SessionCipher client_again = dnd::SessionCipher::ForClient(secrets);
+  std::vector<std::uint8_t> own;
+  Expect(!client_again.Open(client_again.Seal(payload), own),
+         "frames of the wrong direction are rejected");
+
+  // Порядок кадров соблюдается: следующий честный кадр после отказов читается.
+  const std::vector<std::uint8_t> next = client.Seal(payload);
+  Expect(host.Open(next, opened) && opened == payload,
+         "sequence continues after rejected frames");
 }
 
 auto Near(float first, float second) -> bool {
@@ -3725,6 +3939,11 @@ auto main() -> int {
     TestDamagedPayloads();
     TestSessionLog();
     TestSha256();
+    TestX25519();
+    TestChaCha20();
+    TestHkdf();
+    TestHandshakeProofs();
+    TestSessionCipher();
     TestCamera();
     TestAutosave();
     TestLogScroll();

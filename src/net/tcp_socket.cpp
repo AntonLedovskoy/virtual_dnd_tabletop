@@ -4,6 +4,8 @@
 #include <array>
 #include <utility>
 
+#include "core/session_crypto.h"
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
@@ -170,16 +172,29 @@ auto TcpConnection::QueueFrame(const std::vector<std::uint8_t>& frame) -> void {
   if (!connected_ && !connecting_) {
     return;  // соединение уже закрыто: копить нечего
   }
-  if (outgoing_.size() + kFrameHeaderSize + frame.size() > kMaxOutgoingBytes) {
+  std::vector<std::uint8_t> wire =
+      cipher_ != nullptr ? cipher_->Seal(frame) : frame;
+  if (outgoing_.size() + kFrameHeaderSize + wire.size() > kMaxOutgoingBytes) {
     // Собеседник не читает: соединение закрывается, чтобы очередь не росла
     // до исчерпания памяти хоста.
     connected_ = false;
     outgoing_.clear();
     return;
   }
-  AppendFrameSize(outgoing_, static_cast<std::uint32_t>(frame.size()));
-  outgoing_.insert(outgoing_.end(), frame.begin(), frame.end());
+  AppendFrameSize(outgoing_, static_cast<std::uint32_t>(wire.size()));
+  outgoing_.insert(outgoing_.end(), wire.begin(), wire.end());
   Flush();
+}
+
+auto TcpConnection::SetSessionCipher(std::unique_ptr<SessionCipher> cipher)
+    -> void {
+  cipher_ = std::move(cipher);
+}
+
+auto TcpConnection::Close() -> void {
+  connected_ = false;
+  incoming_.clear();
+  outgoing_.clear();
 }
 
 auto TcpConnection::Flush() -> bool {
@@ -232,8 +247,7 @@ auto TcpConnection::TryCompleteConnect() -> bool {
   return true;
 }
 
-auto TcpConnection::Poll(std::vector<std::vector<std::uint8_t>>& frames)
-    -> bool {
+auto TcpConnection::Poll(std::vector<ReceivedFrame>& frames) -> bool {
   if (!connected_) {
     if (!TryCompleteConnect()) {
       return false;
@@ -267,14 +281,12 @@ auto TcpConnection::Poll(std::vector<std::vector<std::uint8_t>>& frames)
   return connected_ && Flush();
 }
 
-auto TcpConnection::ParseFrames(std::vector<std::vector<std::uint8_t>>& frames)
-    -> void {
+auto TcpConnection::ParseFrames(std::vector<ReceivedFrame>& frames) -> void {
   std::size_t offset = 0;
   while (incoming_.size() - offset >= kFrameHeaderSize) {
     const std::uint32_t size = ReadFrameSize(incoming_, offset);
     if (size > kMaxFrame) {
-      connected_ = false;
-      incoming_.clear();
+      Close();
       return;
     }
     if (incoming_.size() - offset - kFrameHeaderSize < size) {
@@ -282,7 +294,23 @@ auto TcpConnection::ParseFrames(std::vector<std::vector<std::uint8_t>>& frames)
     }
     const auto begin = incoming_.begin() +
                        static_cast<std::ptrdiff_t>(offset + kFrameHeaderSize);
-    frames.emplace_back(begin, begin + static_cast<std::ptrdiff_t>(size));
+    ReceivedFrame frame;
+    if (size > 0 && *begin == kSealedFrameMarker) {
+      // Шифрованный кадр до рукопожатия или с битым MAC — не разбираемся,
+      // а рвём соединение: разбирать нечего и доверять нельзя.
+      if (cipher_ == nullptr ||
+          !cipher_->Open(std::span<const std::uint8_t>(
+                             incoming_.data() + offset + kFrameHeaderSize,
+                             static_cast<std::size_t>(size)),
+                         frame.payload)) {
+        Close();
+        return;
+      }
+      frame.sealed = true;
+    } else {
+      frame.payload.assign(begin, begin + static_cast<std::ptrdiff_t>(size));
+    }
+    frames.push_back(std::move(frame));
     offset += kFrameHeaderSize + size;
   }
   incoming_.erase(incoming_.begin(),

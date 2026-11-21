@@ -90,6 +90,7 @@ add_library(dnd_core STATIC
   src/core/camera.cpp
   src/core/campaign.cpp
   src/core/campaign_io.cpp
+  src/core/chacha20.cpp
   src/core/chat_command.cpp
   src/core/chat_input.cpp
   src/core/client_view.cpp
@@ -108,15 +109,23 @@ add_library(dnd_core STATIC
   src/core/navigation.cpp
   src/core/password.cpp
   src/core/player_name.cpp
+  src/core/random.cpp
   src/core/scene_io.cpp
   src/core/serialization.cpp
+  src/core/session_crypto.cpp
   src/core/session_log.cpp
   src/core/sha256.cpp
   src/core/utf8.cpp
   src/core/visibility.cpp
+  src/core/x25519.cpp
 )
 target_include_directories(dnd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(dnd_core PRIVATE ${DND_WARNINGS})
+if(WIN32)
+  # rand_s из UCRT объявлен только при этом флаге: им заполняются ключи и
+  # запросы рукопожатия системным генератором.
+  target_compile_definitions(dnd_core PRIVATE _CRT_RAND_S)
+endif()
 
 add_library(dnd_net STATIC
   src/net/net_client.cpp

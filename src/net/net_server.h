@@ -74,7 +74,11 @@ class NetServer {
     // Запрос, отправленный при подключении. Пока он не получен, Hello не
     // принимается: отпечаток пароля должен быть привязан к этой сессии.
     Challenge challenge;
+    // Эфемерная пара хоста: живёт только это соединение.
+    X25519KeyPair ephemeral;
     bool challenge_sent = false;
+    // Рукопожатие закончено, кадры шифруются.
+    bool session_ready = false;
     std::chrono::steady_clock::time_point last_seen =
         std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point rate_window_start =
@@ -92,7 +96,7 @@ class NetServer {
   };
 
   auto FindPeer(PeerId id) -> Peer*;
-  auto HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
+  auto HandleFrame(Peer& peer, const ReceivedFrame& frame,
                    std::vector<PeerJoined>& joined,
                    std::vector<PeerCommand>& commands) -> void;
   [[nodiscard]] auto Roster() const -> std::vector<RosterEntry>;

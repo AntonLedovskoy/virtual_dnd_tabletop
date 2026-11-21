@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "core/player_name.h"
+#include "core/session_crypto.h"
 
 namespace dnd {
 namespace {
@@ -57,8 +58,11 @@ auto NetServer::Poll(std::vector<PeerJoined>& joined,
       peer.connection->QueueFrame(EncodeReject("на хосте нет свободных мест"));
     } else {
       // Пароль по сети не ходит: сначала отдаём случайный запрос, на который
-      // клиент отвечает отпечатком.
-      peer.challenge = Challenge{.nonce = RandomChallenge()};
+      // клиент отвечает отпечатком; вместе с ним — ключ хоста для шифрования
+      // всего дальнейшего трафика.
+      peer.ephemeral = GenerateX25519KeyPair();
+      peer.challenge = Challenge{.nonce = RandomChallenge(),
+                                 .public_key = peer.ephemeral.public_key};
       peer.challenge_sent = true;
       peer.connection->QueueFrame(EncodeChallenge(peer.challenge));
     }
@@ -67,7 +71,7 @@ auto NetServer::Poll(std::vector<PeerJoined>& joined,
 
   const auto now = std::chrono::steady_clock::now();
   for (Peer& peer : peers_) {
-    std::vector<std::vector<std::uint8_t>> frames;
+    std::vector<ReceivedFrame> frames;
     if (!peer.connection->Poll(frames)) {
       continue;
     }
@@ -77,7 +81,7 @@ auto NetServer::Poll(std::vector<PeerJoined>& joined,
     if (peer.farewell) {
       continue;  // отказ уже отправлен, читать нечего
     }
-    for (const std::vector<std::uint8_t>& frame : frames) {
+    for (const ReceivedFrame& frame : frames) {
       HandleFrame(peer, frame, joined, commands);
     }
   }
@@ -102,13 +106,18 @@ auto NetServer::Poll(std::vector<PeerJoined>& joined,
   }
 }
 
-auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
+auto NetServer::HandleFrame(Peer& peer, const ReceivedFrame& frame,
                             std::vector<PeerJoined>& joined,
                             std::vector<PeerCommand>& commands) -> void {
-  if (frame.empty()) {
+  if (peer.session_ready && !frame.sealed) {
+    // После рукопожатия всё шифруется: открытый кадр — попытка подмены.
+    peer.connection->Close();
     return;
   }
-  const auto type = static_cast<MessageType>(frame[0]);
+  if (frame.payload.empty()) {
+    return;
+  }
+  const auto type = static_cast<MessageType>(frame.payload[0]);
 
   if (type == MessageType::kPing) {
     return;
@@ -128,7 +137,7 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
     // Сначала проверяем версию: о несовпадении надо сказать прямо, иначе
     // игрок со старой сборкой увидит только «некорректное приветствие».
     const std::optional<std::uint32_t> version =
-        DecodeHelloVersion(frame.data(), frame.size());
+        DecodeHelloVersion(frame.payload.data(), frame.payload.size());
     if (!version.has_value()) {
       Reject(peer.id, "некорректное приветствие");
       return;
@@ -139,7 +148,8 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
                           std::to_string(*version) + "; обновите игру");
       return;
     }
-    const std::optional<Hello> hello = DecodeHello(frame.data(), frame.size());
+    const std::optional<Hello> hello =
+        DecodeHello(frame.payload.data(), frame.payload.size());
     if (!hello.has_value() || !peer.challenge_sent) {
       Reject(peer.id, "некорректное приветствие");
       return;
@@ -152,11 +162,30 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
       Reject(peer.id, "имя DM зарезервировано");
       return;
     }
-    if (!ProofMatches(MakePasswordProof(password_, peer.challenge.nonce),
-                      hello->proof)) {
+    // Общий секрет и транскрипт: отпечаток подписывает оба ключа и имя,
+    // поэтому подменить ключи посреди рукопожатия нельзя.
+    X25519Key shared{};
+    if (!X25519SharedSecret(peer.ephemeral.private_key, hello->public_key,
+                            shared)) {
+      Reject(peer.id, "некорректный ключ шифрования");
+      return;
+    }
+    const std::vector<std::uint8_t> transcript =
+        HandshakeTranscript(peer.challenge.nonce, peer.ephemeral.public_key,
+                            hello->public_key, hello->player_name);
+    if (!ProofMatches(MakeClientProof(password_, transcript), hello->proof)) {
       Reject(peer.id, "неверный пароль");
       return;
     }
+    // Пароль доказан: дальше кадры идут только шифрованными ключами,
+    // которые вывели оба участника.
+    peer.connection->SetSessionCipher(
+        std::make_unique<SessionCipher>(SessionCipher::ForHost(
+            DeriveSessionSecrets(shared, peer.challenge.nonce))));
+    peer.session_ready = true;
+    peer.challenge_sent = false;
+    peer.connection->QueueFrame(EncodeSessionReady(
+        SessionReady{.proof = MakeServerProof(password_, transcript)}));
     // Запрет и склейка имён тоже без учёта регистра: иначе "Player" обходит
     // кик игрока "player" и садится рядом с ним под тем же вымышленным именем.
     const std::string key = PlayerNameKey(hello->player_name);
@@ -190,7 +219,7 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
       return;  // слишком часто: молча отбрасываем
     }
     const std::optional<Command> command =
-        DecodeCommandMessage(frame.data(), frame.size());
+        DecodeCommandMessage(frame.payload.data(), frame.payload.size());
     if (!command.has_value()) {
       Reject(peer.id, "некорректная команда");
       return;
