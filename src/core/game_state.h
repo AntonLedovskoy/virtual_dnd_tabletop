@@ -64,6 +64,8 @@ class GameState {
       -> std::optional<Token>;
   [[nodiscard]] auto SetTokenMaxHp(TokenId id, int max_hp)
       -> std::optional<Token>;
+  // Начисляет опыт, не выше kMaxXp; уровень вычисляется по опыту.
+  [[nodiscard]] auto AddXp(TokenId id, int amount) -> std::optional<Token>;
   [[nodiscard]] auto SetTokenColor(TokenId id, std::uint32_t color)
       -> std::optional<Token>;
   // Пустой portrait снимает картинку и возвращает цвет с инициалами.
@@ -80,8 +82,9 @@ class GameState {
   [[nodiscard]] auto RemoveTokenCondition(TokenId id, std::string_view name)
       -> std::optional<Token>;
 
-  // Добавляет к израсходованному запасу движения токена steps клеток.
-  [[nodiscard]] auto SpendMovement(TokenId id, int steps)
+  // Добавляет к израсходованному запасу движения токена steps клеток и
+  // запоминает чётность диагоналей после хода.
+  [[nodiscard]] auto SpendMovement(TokenId id, int steps, int diagonal_parity)
       -> std::optional<Token>;
 
   // Боевой порядок.
@@ -103,6 +106,15 @@ class GameState {
   }
   auto SetBackground(MapBackground background) -> bool;
 
+  // Клетки, которые DM открыл столу вручную. Circle includes center.
+  [[nodiscard]] auto Revealed() const -> const std::vector<Cell>& {
+    return revealed_;
+  }
+  [[nodiscard]] auto IsRevealed(Cell cell) const -> bool;
+  // Возвращает true, если список открытых клеток изменился.
+  auto RevealArea(Cell center, int radius) -> bool;
+  auto ClearRevealed() -> bool;
+
  private:
   auto FindToken(TokenId id) -> Token*;
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;
@@ -114,6 +126,7 @@ class GameState {
   Encounter encounter_;
   AoeTemplate aoe_;
   MapBackground background_;
+  std::vector<Cell> revealed_;
 };
 
 }  // namespace dnd

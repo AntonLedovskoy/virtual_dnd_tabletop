@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/byte_io.h"
+#include "core/game_server.h"
 #include "core/game_state.h"
 #include "core/grid_map.h"
 #include "core/visibility.h"
@@ -45,6 +46,41 @@ auto MakeSnapshot() -> dnd::GameSnapshot {
 auto MakeFog(int width, int height) -> dnd::FogSnapshot {
   const dnd::FogOfWar fog(width, height);
   return fog.Snapshot();
+}
+
+// Два персонажа с владельцами: каждый игрок может двигать только своего.
+auto MakePartySnapshot() -> dnd::GameSnapshot {
+  const dnd::GridMap map(8, 6);
+  dnd::GameState state(map);
+  (void)state.AddToken("alice", CellAt(1, 1), "alice");
+  (void)state.AddToken("bob", CellAt(6, 4), "bob");
+  return state.Snapshot();
+}
+
+auto SawMove(const std::vector<dnd::Event>& events, dnd::TokenId id,
+             dnd::Cell from, dnd::Cell to) -> bool {
+  for (const dnd::Event& event : events) {
+    if (const auto* moved = std::get_if<dnd::TokenMoved>(&event)) {
+      if (moved->id == id && moved->from == from && moved->to == to) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+auto SawSnapshotAt(const std::vector<dnd::Event>& events, dnd::TokenId id,
+                   dnd::Cell cell) -> bool {
+  for (const dnd::Event& event : events) {
+    if (const auto* updated = std::get_if<dnd::ViewUpdated>(&event)) {
+      for (const dnd::Token& token : updated->snapshot.tokens) {
+        if (token.id == id && token.cell == cell) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 auto TestTcpHandshakeAndEvents() -> void {
@@ -252,7 +288,7 @@ auto TestPasswordAndRoster() -> void {
   Expect(saw_dm, "roster contains the DM");
   Expect(saw_alice, "roster contains the joined player");
 
-  Expect(server.KickByName("alice"), "host can kick a player");
+  Expect(server.KickByName("ALICE"), "host can kick a player in any case");
   bool disconnected = false;
   const auto kick_deadline = Now() + std::chrono::seconds(3);
   while (!disconnected && Now() < kick_deadline) {
@@ -264,7 +300,7 @@ auto TestPasswordAndRoster() -> void {
   Expect(disconnected, "kicked client is disconnected");
 
   dnd::NetClient kicked_again;
-  Expect(kicked_again.Connect("127.0.0.1", port, "alice", "secret"),
+  Expect(kicked_again.Connect("127.0.0.1", port, "Alice", "secret"),
          "kicked client can attempt to reconnect");
   dnd::NetClientUpdate kicked_update;
   const auto kicked_deadline = Now() + std::chrono::seconds(3);
@@ -273,7 +309,8 @@ auto TestPasswordAndRoster() -> void {
     kicked_again.Poll(kicked_update);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  Expect(kicked_update.reject.has_value(), "kicked name cannot reconnect");
+  Expect(kicked_update.reject.has_value(),
+         "a kicked name cannot reconnect in another case");
 }
 
 auto TestPlayerNameValidation() -> void {
@@ -312,6 +349,39 @@ auto TestPlayerNameValidation() -> void {
   }
   Expect(duplicate_joined.empty(), "duplicate names do not join");
   Expect(duplicate_update.reject.has_value(), "duplicate name is rejected");
+
+  // Регистр не помогает занять чужое имя.
+  dnd::NetClient duplicate_case;
+  Expect(duplicate_case.Connect("127.0.0.1", port, "ALICE"),
+         "case-variant client connects");
+  std::vector<dnd::PeerJoined> case_joined;
+  dnd::NetClientUpdate case_update;
+  const auto case_deadline = Now() + std::chrono::seconds(3);
+  while (case_joined.empty() && !case_update.reject.has_value() &&
+         Now() < case_deadline) {
+    server.Poll(case_joined, commands, dropped);
+    duplicate_case.Poll(case_update);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(case_joined.empty(), "a case-variant duplicate does not join");
+  Expect(case_update.reject.has_value(),
+         "a case-variant duplicate is rejected");
+
+  dnd::NetClient reserved;
+  Expect(reserved.Connect("127.0.0.1", port, "Dm"),
+         "reserved-name client connects");
+  std::vector<dnd::PeerJoined> reserved_joined;
+  dnd::NetClientUpdate reserved_update;
+  const auto reserved_deadline = Now() + std::chrono::seconds(3);
+  while (reserved_joined.empty() && !reserved_update.reject.has_value() &&
+         Now() < reserved_deadline) {
+    server.Poll(reserved_joined, commands, dropped);
+    reserved.Poll(reserved_update);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(reserved_joined.empty(), "the DM name does not join");
+  Expect(reserved_update.reject.has_value(),
+         "the DM name is reserved in any case");
 
   dnd::NetClient nameless;
   Expect(nameless.Connect("127.0.0.1", port, ""), "nameless client connects");
@@ -631,6 +701,140 @@ auto TestOutgoingQueueLimit() -> void {
          "connection is closed after the outgoing queue limit");
 }
 
+auto TestTwoClientsMoveTurns() -> void {
+  dnd::NetServer server;
+  Expect(server.Start(0), "two-client table listens");
+  const std::uint16_t port = server.Port();
+  if (port == 0) {
+    return;
+  }
+
+  dnd::NetClient alice;
+  dnd::NetClient bob;
+  Expect(alice.Connect("127.0.0.1", port, "alice"), "alice connects");
+  Expect(bob.Connect("127.0.0.1", port, "bob"), "bob connects");
+
+  dnd::GameServer game(MakePartySnapshot(), 6, 11);
+
+  std::vector<dnd::PeerJoined> joined;
+  std::vector<dnd::PeerCommand> incoming;
+  std::vector<dnd::PeerId> dropped;
+  dnd::NetClientUpdate alice_update;
+  dnd::NetClientUpdate bob_update;
+
+  const auto join_deadline = Now() + std::chrono::seconds(3);
+  while (joined.size() < 2 && Now() < join_deadline) {
+    server.Poll(joined, incoming, dropped);
+    alice.Poll(alice_update);
+    bob.Poll(bob_update);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(joined.size() == 2, "both players join the table");
+  if (joined.size() < 2) {
+    return;
+  }
+  for (const dnd::PeerJoined& peer : joined) {
+    server.SendWelcome(peer.peer,
+                       dnd::Welcome{
+                           .snapshot = game.ClientSnapshot(peer.name),
+                           .fog = game.FogState(peer.name),
+                           .is_dm = false,
+                       });
+  }
+
+  const auto welcome_deadline = Now() + std::chrono::seconds(3);
+  while (
+      (!alice_update.welcome.has_value() || !bob_update.welcome.has_value()) &&
+      Now() < welcome_deadline) {
+    alice.Poll(alice_update);
+    bob.Poll(bob_update);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(alice_update.welcome.has_value() && bob_update.welcome.has_value(),
+         "both players receive the welcome");
+
+  // Ход игрока: команда идёт по сети, хост проверяет владельца, событие видят
+  // оба клиента, а вид второго клиента знает новую клетку.
+  const auto play_move = [&](dnd::NetClient& mover, dnd::NetClient& watcher,
+                             dnd::NetClientUpdate& mover_update,
+                             dnd::NetClientUpdate& watcher_update,
+                             const std::string& actor, dnd::TokenId id,
+                             dnd::Cell from, dnd::Cell to) -> bool {
+    mover_update.events.clear();
+    watcher_update.events.clear();
+    mover.SendCommand(dnd::MoveToken{.id = id, .target = to});
+
+    std::vector<dnd::PeerCommand> received;
+    const auto command_deadline = Now() + std::chrono::seconds(3);
+    while (received.empty() && Now() < command_deadline) {
+      server.Poll(joined, received, dropped);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (received.size() != 1) {
+      return false;
+    }
+    const dnd::CommandOutcome outcome =
+        game.HandleCommand(received.front().command, actor, false);
+    if (!outcome.accepted) {
+      return false;
+    }
+    for (const dnd::Event& event : outcome.events) {
+      for (const dnd::PeerJoined& peer : joined) {
+        if (game.EventVisibleTo(event, peer.name)) {
+          server.SendEvent(peer.peer, event);
+        }
+      }
+    }
+    // Приложение после изменения мира шлёт каждому игроку его собственный срез.
+    for (const dnd::PeerJoined& peer : joined) {
+      server.SendEvent(
+          peer.peer,
+          dnd::ViewUpdated{.snapshot = game.ClientSnapshot(peer.name),
+                           .fog = game.FogState(peer.name)});
+    }
+
+    const auto event_deadline = Now() + std::chrono::seconds(3);
+    while ((!SawMove(mover_update.events, id, from, to) ||
+            !SawMove(watcher_update.events, id, from, to)) &&
+           Now() < event_deadline) {
+      mover.Poll(mover_update);
+      watcher.Poll(watcher_update);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return SawMove(mover_update.events, id, from, to) &&
+           SawMove(watcher_update.events, id, from, to) &&
+           SawSnapshotAt(watcher_update.events, id, to);
+  };
+
+  Expect(play_move(alice, bob, alice_update, bob_update, "alice", 1,
+                   CellAt(1, 1), CellAt(2, 1)),
+         "alice moves her character and bob sees it");
+  Expect(play_move(bob, alice, bob_update, alice_update, "bob", 2, CellAt(6, 4),
+                   CellAt(5, 4)),
+         "bob moves his character and alice sees it");
+
+  // Чужого персонажа двигать нельзя: хост отказывает, мир остаётся прежним.
+  bob.SendCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 2)});
+  const auto reject_deadline = Now() + std::chrono::seconds(3);
+  while (incoming.empty() && Now() < reject_deadline) {
+    server.Poll(joined, incoming, dropped);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Expect(incoming.size() == 1, "host receives bob's foreign move");
+  if (incoming.size() == 1) {
+    const dnd::CommandOutcome outcome =
+        game.HandleCommand(incoming.front().command, "bob", false);
+    Expect(!outcome.accepted, "a player cannot move another character");
+  }
+
+  const std::optional<dnd::Token> alice_token = game.State().TokenCopy(1);
+  const std::optional<dnd::Token> bob_token = game.State().TokenCopy(2);
+  Expect(alice_token.has_value() && alice_token->cell == CellAt(2, 1),
+         "alice keeps the cell she moved to");
+  Expect(bob_token.has_value() && bob_token->cell == CellAt(5, 4),
+         "bob keeps the cell he moved to");
+}
+
 auto TestPing() -> void {
   const std::vector<std::uint8_t> ping = dnd::EncodePing();
   Expect(dnd::DecodePing(ping.data(), ping.size()), "ping roundtrip");
@@ -654,6 +858,7 @@ auto main() -> int {
     TestCommandRateLimit();
     TestOutgoingQueueLimit();
     TestTcpHandshakeAndEvents();
+    TestTwoClientsMoveTurns();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());
     return 1;

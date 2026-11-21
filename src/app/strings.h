@@ -15,6 +15,7 @@ inline constexpr std::string_view kOwner = "Владелец";
 inline constexpr std::string_view kFree = "свободен";
 inline constexpr std::string_view kHp = "HP";
 inline constexpr std::string_view kInitiativeShort = "Иниц.";
+inline constexpr std::string_view kLevelShort = "Ур.";
 inline constexpr std::string_view kKind = "Тип";
 inline constexpr std::string_view kPlayer = "персонаж";
 inline constexpr std::string_view kNpc = "NPC";
@@ -26,7 +27,7 @@ inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, N — монстр, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
     "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /map | "
-    "/portrait | /kick";
+    "/portrait | /reveal | /xp | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
@@ -43,6 +44,7 @@ inline constexpr std::string_view kAoeHint =
 inline constexpr std::string_view kAoeDmOnly =
     "Шаблон области ставит только DM";
 inline constexpr std::string_view kRejected = "Отклонено: ";
+inline constexpr std::string_view kCellNotExplored = "Клетка не разведана";
 inline constexpr std::string_view kSelectToken = "Сначала выберите токен";
 inline constexpr std::string_view kSelectTokenForCommand =
     "Сначала выберите токен для команды";
@@ -72,7 +74,7 @@ inline constexpr std::array<std::string_view, 15> kHelpCommon = {
     "A / Shift+A — атака / с преимуществом",
     "S — спасбросок, I — инициатива",
     "K — состояния, L — лист",
-    "M — дальность хода, V — цвет",
+    "M — дальность хода (5–10–5), V — цвет",
     "Команды: /damage N, /heal N",
     "/deathsave — при 0 HP",
 };
@@ -81,7 +83,7 @@ inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "R — освободить своего персонажа",
     "/portrait файл.png — портрет своего персонажа",
 };
-inline constexpr std::array<std::string_view, 14> kHelpDm = {
+inline constexpr std::array<std::string_view, 16> kHelpDm = {
     "P / N — персонаж / монстр под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -96,6 +98,8 @@ inline constexpr std::array<std::string_view, 14> kHelpDm = {
     "Ctrl+Z — отменить последнее действие DM",
     "/map карта.png — подложка, /map off — убрать",
     "/portrait файл.png — портрет выбранного токена",
+    "/reveal — открыть область под курсором, /reveal off — скрыть",
+    "/xp 300 — опыт выбранному, /xp 300 all — всей партии",
 };
 
 inline constexpr std::string_view kMenuTitle = "DND";
@@ -160,12 +164,15 @@ inline constexpr std::string_view kSheetAttack = "Бонус атаки";
 inline constexpr std::string_view kSheetSave = "Бонус спасброска";
 inline constexpr std::string_view kSheetInitiative = "Бонус инициативы";
 inline constexpr std::string_view kSheetTempHp = "Временные HP";
+inline constexpr std::string_view kSheetLevel = "Уровень";
+inline constexpr std::string_view kSheetXp = "Опыт";
 inline constexpr std::string_view kConditions = "Состояния";
 inline constexpr std::string_view kConditionsHint =
     "1–8 — переключить (10 ходов) | 0 — очистить | Esc — закрыть";
 inline constexpr std::string_view kMovementLeft = "Осталось хода";
 inline constexpr std::string_view kMovementOf = "из";
-inline constexpr std::string_view kMovementFree = "Вне боя движение свободное";
+inline constexpr std::string_view kMovementFree =
+    "Вне боя запас движения не тратится";
 inline constexpr std::string_view kSheetDamage = "Урон";
 inline constexpr std::string_view kSheetNotes = "Заметки";
 inline constexpr std::string_view kSheetHint =
@@ -205,5 +212,24 @@ inline constexpr std::string_view kMapUsage =
 inline constexpr std::string_view kMapMissingImage = "Нет файла подложки: ";
 inline constexpr std::string_view kPortraitUsage =
     "Использование: /portrait файл.png или /portrait off";
+
+// Подсказки для чат-команд, которые не удалось разобрать (ChatCommandError).
+inline constexpr std::string_view kRollUsage =
+    "Использование: /roll d20+5, 2d6+3, adv d20+5";
+inline constexpr std::string_view kKickUsage = "Использование: /kick имя";
+inline constexpr std::string_view kKickDmOnly = "Игроков исключает только DM";
+inline constexpr std::string_view kRenameUsage = "Использование: /rename имя";
+inline constexpr std::string_view kMaxHpUsage = "Использование: /maxhp 20";
+inline constexpr std::string_view kDamageUsage =
+    "Использование: /damage 7 или /heal 5";
+inline constexpr std::string_view kAoeUsage =
+    "Использование: /aoe 2d6 15 (урон и сложность спасброска)";
+inline constexpr std::string_view kRevealUsage =
+    "Использование: /reveal (область под курсором) или /reveal off";
+inline constexpr std::string_view kRevealDmOnly =
+    "Области столу открывает только DM";
+inline constexpr std::string_view kXpUsage =
+    "Использование: /xp 300 или /xp 300 all";
+inline constexpr std::string_view kXpDmOnly = "Опыт начисляет только DM";
 
 }  // namespace dnd::strings

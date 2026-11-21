@@ -32,8 +32,17 @@ class FogOfWar {
   auto Recompute(const GridMap& map, const std::vector<Cell>& observers,
                  int radius) -> void;
 
+  // Клетки, которые DM открыл вручную: они видны и исследованы независимо
+  // от наблюдателей. Вызывается после Recompute, который чистит visible.
+  auto Reveal(const std::vector<Cell>& cells) -> void;
+
   [[nodiscard]] auto Snapshot() const -> FogSnapshot;
   auto Restore(const FogSnapshot& snapshot) -> void;
+
+  // Исследованное множество без видимого: так туман хранится в сцене.
+  [[nodiscard]] auto Explored() const -> const std::vector<std::uint8_t>& {
+    return explored_;
+  }
 
  private:
   [[nodiscard]] auto Index(Cell cell) const -> std::size_t;

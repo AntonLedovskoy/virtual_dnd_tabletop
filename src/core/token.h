@@ -52,9 +52,14 @@ struct Token {
   int initiative_bonus = 0;
   std::string damage;
   std::vector<Condition> conditions;
+  // Накопленный опыт; уровень считается по нему (core/levels.h).
+  int xp = 0;
   // Израсходованный за ход запас движения в клетках. Сбрасывается в начале
   // хода токена и вне боя не накапливается.
   int movement_used = 0;
+  // Чётность диагоналей по правилу 5–10–5: 0 — следующая стоит 5 футов,
+  // 1 — 10 футов. Сбрасывается вместе с movement_used.
+  int diagonal_parity = 0;
   // Спасброски от смерти (0..3); имеют смысл только при hp == 0.
   int death_save_successes = 0;
   int death_save_failures = 0;

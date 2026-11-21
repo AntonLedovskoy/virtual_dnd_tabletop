@@ -32,4 +32,16 @@ auto TruncateUtf8(std::string& text, std::size_t max_bytes) -> void {
   text.resize(end);
 }
 
+auto AppendUtf8(std::string& text, std::string_view suffix,
+                std::size_t max_bytes) -> void {
+  text.append(suffix);
+  TruncateUtf8(text, max_bytes);
+}
+
+auto EraseLastCodePoint(std::string& text) -> void {
+  if (!text.empty()) {
+    text.resize(PreviousCodePointStart(text));
+  }
+}
+
 }  // namespace dnd

@@ -153,6 +153,14 @@ struct DeathSave {
   TokenId id = 0;
 };
 
+// Только DM: начислить опыт одному персонажу (id) или всей партии (party).
+inline constexpr int kMaxXpAward = 100000;
+struct AwardXp {
+  TokenId id = 0;
+  int amount = 0;
+  bool party = false;
+};
+
 // Владелец или DM: заменить список состояний токена.
 struct UpdateTokenCombat {
   TokenId id = 0;
@@ -180,13 +188,22 @@ struct SetMapBackground {
   MapBackground background;
 };
 
-using Command =
-    std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
-                 RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
-                 ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
-                 SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
-                 StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken,
-                 HealToken, RestParty, AoeDamage, DeathSave, PingAt,
-                 SetMapBackground, SetTokenPortrait>;
+// Только DM: открыть столу круг клеток вокруг cell навсегда или снять все
+// такие открытия. Радиус в клетках.
+inline constexpr int kRevealRadiusCells = 4;
+inline constexpr int kMaxRevealRadiusCells = 64;
+struct RevealArea {
+  Cell cell{};
+  int radius = 0;
+};
+struct ClearRevealed {};
+
+using Command = std::variant<
+    MoveToken, Say, RollDice, RollExpression, AddToken, RemoveToken, SetTokenHp,
+    SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner, RenameToken,
+    SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
+    StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken, HealToken,
+    RestParty, AoeDamage, DeathSave, PingAt, SetMapBackground, SetTokenPortrait,
+    RevealArea, ClearRevealed, AwardXp>;
 
 }  // namespace dnd

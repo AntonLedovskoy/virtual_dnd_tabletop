@@ -10,7 +10,7 @@ namespace dnd {
 
 // Файл кампании — версионированный little-endian дамп всех сцен. Формат
 // сцены совпадает с отдельным файлом сохранения.
-inline constexpr auto kCampaignVersion = 6U;
+inline constexpr auto kCampaignVersion = 10U;
 
 // Сколько сцен допускает файл кампании.
 inline constexpr std::size_t kMaxCampaignScenes = 64;

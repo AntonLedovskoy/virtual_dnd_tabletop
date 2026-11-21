@@ -84,20 +84,30 @@ FetchContent_MakeAvailable(SDL3 SDL3_image SDL3_ttf)
 
 add_library(dnd_core STATIC
   src/core/aoe.cpp
+  src/core/autosave.cpp
   src/core/bestiary.cpp
   src/core/byte_io.cpp
+  src/core/camera.cpp
   src/core/campaign.cpp
   src/core/campaign_io.cpp
+  src/core/chat_command.cpp
+  src/core/chat_input.cpp
   src/core/client_view.cpp
   src/core/conditions.cpp
+  src/core/delete_confirm.cpp
   src/core/dice.cpp
   src/core/game_server.cpp
   src/core/game_state.cpp
   src/core/grid_map.cpp
   src/core/image_name.cpp
+  src/core/levels.cpp
   src/core/local_transport.cpp
+  src/core/log_scroll.cpp
   src/core/map_background.cpp
+  src/core/menu_model.cpp
+  src/core/navigation.cpp
   src/core/password.cpp
+  src/core/player_name.cpp
   src/core/scene_io.cpp
   src/core/serialization.cpp
   src/core/session_log.cpp

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "core/conditions.h"
+#include "core/levels.h"
 
 namespace dnd {
 namespace {
@@ -39,7 +40,8 @@ GameState::GameState(GameSnapshot snapshot)
       next_token_id_(snapshot.next_token_id),
       encounter_(std::move(snapshot.encounter)),
       aoe_(snapshot.aoe),
-      background_(std::move(snapshot.background)) {}
+      background_(std::move(snapshot.background)),
+      revealed_(std::move(snapshot.revealed)) {}
 
 auto GameState::Snapshot() const -> GameSnapshot {
   return GameSnapshot{
@@ -49,6 +51,7 @@ auto GameState::Snapshot() const -> GameSnapshot {
       .encounter = encounter_,
       .aoe = aoe_,
       .background = background_,
+      .revealed = revealed_,
   };
 }
 
@@ -279,6 +282,18 @@ auto GameState::SetTokenMaxHp(TokenId id, int max_hp) -> std::optional<Token> {
   return *token;
 }
 
+auto GameState::AddXp(TokenId id, int amount) -> std::optional<Token> {
+  if (amount <= 0) {
+    return std::nullopt;
+  }
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->xp = std::min(kMaxXp, token->xp + amount);
+  return *token;
+}
+
 auto GameState::SetTokenColor(TokenId id, std::uint32_t color)
     -> std::optional<Token> {
   Token* token = FindToken(id);
@@ -342,12 +357,14 @@ auto GameState::RemoveTokenCondition(TokenId id, std::string_view name)
   return *token;
 }
 
-auto GameState::SpendMovement(TokenId id, int steps) -> std::optional<Token> {
+auto GameState::SpendMovement(TokenId id, int steps, int diagonal_parity)
+    -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
   }
   token->movement_used += std::max(0, steps);
+  token->diagonal_parity = diagonal_parity & 1;
   return *token;
 }
 
@@ -367,6 +384,7 @@ auto GameState::StartEncounter() -> bool {
   encounter_.round = 1;
   for (Token& token : tokens_) {
     token.movement_used = 0;
+    token.diagonal_parity = 0;
   }
   RebuildOrder(0);
   return true;
@@ -376,6 +394,7 @@ auto GameState::EndEncounter() -> void {
   encounter_ = Encounter{};
   for (Token& token : tokens_) {
     token.movement_used = 0;
+    token.diagonal_parity = 0;
   }
 }
 
@@ -396,6 +415,41 @@ auto GameState::SetBackground(MapBackground background) -> bool {
   return true;
 }
 
+auto GameState::IsRevealed(Cell cell) const -> bool {
+  return std::ranges::find(revealed_, cell) != revealed_.end();
+}
+auto GameState::RevealArea(Cell center, int radius) -> bool {
+  if (radius <= 0 || !map_.Contains(center)) {
+    return false;
+  }
+  bool changed = false;
+  const int radius_squared = radius * radius;
+  for (int y = center.y - radius; y <= center.y + radius; ++y) {
+    for (int x = center.x - radius; x <= center.x + radius; ++x) {
+      const int delta_x = x - center.x;
+      const int delta_y = y - center.y;
+      if ((delta_x * delta_x) + (delta_y * delta_y) > radius_squared) {
+        continue;
+      }
+      const Cell cell{.x = x, .y = y};
+      if (!map_.Contains(cell) || IsRevealed(cell)) {
+        continue;
+      }
+      revealed_.push_back(cell);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+auto GameState::ClearRevealed() -> bool {
+  if (revealed_.empty()) {
+    return false;
+  }
+  revealed_.clear();
+  return true;
+}
+
 auto GameState::NextTurn() -> bool {
   if (!encounter_.active || encounter_.order.empty()) {
     return false;
@@ -410,6 +464,7 @@ auto GameState::NextTurn() -> bool {
   // с rounds == 0 держатся до ручного снятия.
   if (Token* token = FindToken(ActiveTokenId())) {
     token->movement_used = 0;
+    token->diagonal_parity = 0;
     for (auto it = token->conditions.begin(); it != token->conditions.end();) {
       if (it->rounds <= 0) {
         ++it;

@@ -24,6 +24,8 @@
 #include "core/clock.h"
 #include "core/conditions.h"
 #include "core/dice.h"
+#include "core/navigation.h"
+#include "core/player_name.h"
 #include "core/scene_io.h"
 #include "core/units.h"
 #include "core/utf8.h"
@@ -45,12 +47,7 @@ constexpr float kFontSize = 16.0F;
 // Шаги масштаба интерфейса: 100%, 125%, 150%, 200%.
 constexpr std::array<float, 4> kUiScales{1.0F, 1.25F, 1.5F, 2.0F};
 constexpr std::chrono::seconds kReconnectDelay{2};
-// Пауза после изменения мира: серия ходов не должна писать файл каждый кадр.
-constexpr std::chrono::seconds kAutosaveDelay{8};
-// Повторное Del в этот срок подтверждает удаление токена или сцены.
-constexpr std::chrono::seconds kDeleteConfirmDelay{3};
 constexpr std::size_t kUndoDepth = 10;
-constexpr std::size_t kMaxChatInput = 200;
 
 constexpr TokenId kHeroId = 1;
 constexpr TokenId kGoblinId = 2;
@@ -168,6 +165,35 @@ auto ParseSignedNumber(std::string_view text, int& value) -> bool {
   return true;
 }
 
+// Подсказка для команды, которую не удалось разобрать.
+auto ChatUsageText(ChatCommandError error) -> std::string_view {
+  switch (error) {
+    case ChatCommandError::kBadRoll:
+      return strings::kRollUsage;
+    case ChatCommandError::kBadKick:
+      return strings::kKickUsage;
+    case ChatCommandError::kBadRename:
+      return strings::kRenameUsage;
+    case ChatCommandError::kBadMaxHp:
+      return strings::kMaxHpUsage;
+    case ChatCommandError::kBadDamage:
+      return strings::kDamageUsage;
+    case ChatCommandError::kBadAoe:
+      return strings::kAoeUsage;
+    case ChatCommandError::kBadPortrait:
+      return strings::kPortraitUsage;
+    case ChatCommandError::kBadMap:
+      return strings::kMapUsage;
+    case ChatCommandError::kBadReveal:
+      return strings::kRevealUsage;
+    case ChatCommandError::kBadXp:
+      return strings::kXpUsage;
+    case ChatCommandError::kNone:
+      break;
+  }
+  return {};
+}
+
 // Добавляет цифры (и минус, если он разрешён) из text в buffer, пропуская
 // всё остальное и не выпуская значение за пределы minimum..maximum.
 auto AppendBoundedNumber(std::string& buffer, const char* text, int minimum,
@@ -227,34 +253,9 @@ auto TrimText(std::string_view text) -> std::string_view {
   return text;
 }
 
-auto ParsePortText(std::string_view text, std::uint16_t& port) -> bool {
-  int value = 0;
-  if (!ParseNumber(text, value) || value > 65535) {
-    return false;
-  }
-  port = static_cast<std::uint16_t>(value);
-  return true;
-}
-
 auto PointInside(const SDL_FRect& rect, float x, float y) -> bool {
   return x >= rect.x && y >= rect.y && x < rect.x + rect.w &&
          y < rect.y + rect.h;
-}
-
-auto MenuTextFieldLimit(MenuField field) -> std::size_t {
-  switch (field) {
-    case MenuField::kAddress:
-      return 128;
-    case MenuField::kPort:
-      return 5;
-    case MenuField::kName:
-      return 64;
-    case MenuField::kPassword:
-      return 128;
-    case MenuField::kNone:
-      break;
-  }
-  return 0;
 }
 
 }  // namespace
@@ -364,7 +365,7 @@ auto App::Shutdown() -> void {
 
 auto App::StartHost() -> bool {
   std::uint16_t port = 0;
-  if (!ParsePortText(menu_.port, port)) {
+  if (!ParsePort(menu_.port, port)) {
     menu_.status = "Некорректный порт";
     if (in_editor_) {
       editor_status_ = menu_.status;
@@ -392,8 +393,8 @@ auto App::StartHost() -> bool {
   scene_ = start;
   server_.Reset(std::move(start));
   ClearUndo();
-  pending_delete_token_ = 0;
-  pending_delete_scene_ = kNoScene;
+  delete_token_.Clear();
+  delete_scene_.Clear();
   in_game_ = true;
   in_editor_ = false;
   client_connecting_ = false;
@@ -403,11 +404,9 @@ auto App::StartHost() -> bool {
   selected_id_ = 0;
   dragging_ = false;
   drag_target_.reset();
-  chat_active_ = false;
-  chat_input_.clear();
+  chat_.Close();
   help_active_ = false;
-  log_scroll_ = 0;
-  log_count_ = 0;
+  log_scroll_.ToNewest();
   log_top_ = 0.0F;
   players_.clear();
   players_.emplace_back("DM (хост)");
@@ -424,7 +423,7 @@ auto App::StartHost() -> bool {
 
 auto App::StartClient() -> bool {
   std::uint16_t port = 0;
-  if (!ParsePortText(menu_.port, port)) {
+  if (!ParsePort(menu_.port, port)) {
     menu_.status = "Некорректный порт";
     return false;
   }
@@ -433,15 +432,10 @@ auto App::StartClient() -> bool {
     return false;
   }
 
-  std::string host = menu_.address;
-  const auto colon = host.rfind(':');
-  if (colon != std::string::npos && colon + 1 < host.size()) {
-    std::uint16_t embedded_port = 0;
-    if (ParsePortText(std::string_view(host).substr(colon + 1),
-                      embedded_port)) {
-      port = embedded_port;
-      host.resize(colon);
-    }
+  const HostAddress address = SplitHostPort(menu_.address);
+  const std::string host = address.host;
+  if (address.has_port) {
+    port = address.port;
   }
   if (host.empty()) {
     menu_.status = "Введите адрес хоста";
@@ -465,8 +459,7 @@ auto App::StartClient() -> bool {
   client_connected_ = false;
   in_game_ = false;
   help_active_ = false;
-  log_scroll_ = 0;
-  log_count_ = 0;
+  log_scroll_.ToNewest();
   log_top_ = 0.0F;
   players_.clear();
   const auto now = std::chrono::steady_clock::now();
@@ -500,11 +493,9 @@ auto App::StartEditor() -> void {
   dragging_ = false;
   drag_target_.reset();
   panning_ = false;
-  chat_active_ = false;
-  chat_input_.clear();
+  chat_.Close();
   help_active_ = false;
-  log_scroll_ = 0;
-  log_count_ = 0;
+  log_scroll_.ToNewest();
   log_top_ = 0.0F;
   CenterCamera();
 }
@@ -527,7 +518,10 @@ auto App::SaveScene() -> void {
     editor_status_ = "Сцена не выбрана";
     return;
   }
-  if (!WriteSnapshot(scene_, ScenePath())) {
+  // Отдельный файл сцены — шаблон карты: туман прошлой партии в него не пишем.
+  GameSnapshot stored = scene_;
+  stored.fog.clear();
+  if (!WriteSnapshot(stored, ScenePath())) {
     editor_status_ = "Не удалось сохранить сцену";
     return;
   }
@@ -588,12 +582,9 @@ auto App::CenterCamera() -> void {
     return;
   }
   const GridMap& map = in_editor_ ? scene_.map : view_.Map();
-  camera_x_ = (static_cast<float>(window_width) -
-               (static_cast<float>(map.Width()) * cell_size_)) /
-              2.0F;
-  camera_y_ = (static_cast<float>(window_height) -
-               (static_cast<float>(map.Height()) * cell_size_)) /
-              2.0F;
+  camera_ = CenteredCamera(static_cast<float>(window_width),
+                           static_cast<float>(window_height), map.Width(),
+                           map.Height(), camera_.cell_size);
 }
 
 auto App::AddEditorToken(Cell cell, TokenKind kind) -> void {
@@ -748,14 +739,12 @@ auto App::HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       CloseEditorScenes();
       return;
     case SDLK_UP:
-      if (editor_scenes_selected_ > 0) {
-        --editor_scenes_selected_;
-      }
+      editor_scenes_selected_ =
+          StepIndex(editor_scenes_selected_, -1, campaign_.scenes.size());
       return;
     case SDLK_DOWN:
-      if (editor_scenes_selected_ + 1 < campaign_.scenes.size()) {
-        ++editor_scenes_selected_;
-      }
+      editor_scenes_selected_ =
+          StepIndex(editor_scenes_selected_, 1, campaign_.scenes.size());
       return;
     case SDLK_RETURN:
     case SDLK_KP_ENTER:
@@ -771,10 +760,11 @@ auto App::HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
   }
   if (key.key >= SDLK_1 && key.key <= SDLK_9) {
-    const auto index = static_cast<std::size_t>(key.key - SDLK_1);
-    if (index < campaign_.scenes.size()) {
-      editor_scenes_selected_ = index;
-      SwitchEditorScene(index);
+    const std::optional<std::size_t> index = IndexForDigit(
+        static_cast<int>(key.key - SDLK_1) + 1, campaign_.scenes.size());
+    if (index.has_value()) {
+      editor_scenes_selected_ = *index;
+      SwitchEditorScene(*index);
     }
   }
 }
@@ -863,8 +853,8 @@ auto App::HandlePanMotion(const SDL_MouseMotionEvent& motion) -> void {
   if (!panning_) {
     return;
   }
-  camera_x_ += static_cast<float>(motion.x) - pan_last_x_;
-  camera_y_ += static_cast<float>(motion.y) - pan_last_y_;
+  PanCamera(camera_, static_cast<float>(motion.x) - pan_last_x_,
+            static_cast<float>(motion.y) - pan_last_y_);
   pan_last_x_ = static_cast<float>(motion.x);
   pan_last_y_ = static_cast<float>(motion.y);
 }
@@ -878,64 +868,13 @@ auto App::HandleWheel(const SDL_MouseWheelEvent& wheel) -> void {
     ScrollLog(static_cast<int>(wheel.y * 3.0F));
     return;
   }
-  const float old_size = cell_size_;
-  const float world_x = (wheel.mouse_x - camera_x_) / old_size;
-  const float world_y = (wheel.mouse_y - camera_y_) / old_size;
-  cell_size_ = std::clamp(cell_size_ + (wheel.y * 4.0F), 24.0F, 96.0F);
-  camera_x_ = wheel.mouse_x - (world_x * cell_size_);
-  camera_y_ = wheel.mouse_y - (world_y * cell_size_);
+  ZoomCamera(camera_, wheel.mouse_x, wheel.mouse_y, wheel.y);
 }
 
-auto App::MenuTextBuffer() -> std::string* {
-  if (menu_.tab == MenuTab::kEditor) {
-    return nullptr;
-  }
-  switch (menu_.active_field) {
-    case MenuField::kAddress:
-      return menu_.tab == MenuTab::kJoin ? &menu_.address : nullptr;
-    case MenuField::kPort:
-      return &menu_.port;
-    case MenuField::kName:
-      return menu_.tab == MenuTab::kJoin ? &menu_.name : nullptr;
-    case MenuField::kPassword:
-      return &menu_.password;
-    case MenuField::kNone:
-      break;
-  }
-  return nullptr;
-}
+auto App::MenuTextBuffer() -> std::string* { return ActiveMenuText(menu_); }
 
 auto App::FocusNextMenuField(int direction) -> void {
-  if (menu_.tab == MenuTab::kEditor) {
-    menu_.active_field = MenuField::kNone;
-    return;
-  }
-  std::array<MenuField, 4> fields{};
-  int count = 0;
-  if (menu_.tab == MenuTab::kHost) {
-    fields[count++] = MenuField::kPort;
-    fields[count++] = MenuField::kPassword;
-  } else {
-    fields[count++] = MenuField::kAddress;
-    fields[count++] = MenuField::kPort;
-    fields[count++] = MenuField::kName;
-    fields[count++] = MenuField::kPassword;
-  }
-
-  int current = -1;
-  for (int i = 0; i < count; ++i) {
-    if (fields[static_cast<std::size_t>(i)] == menu_.active_field) {
-      current = i;
-      break;
-    }
-  }
-  int next = 0;
-  if (current < 0) {
-    next = direction >= 0 ? 0 : count - 1;
-  } else {
-    next = (current + direction + count) % count;
-  }
-  menu_.active_field = fields[static_cast<std::size_t>(next)];
+  menu_.active_field = NextMenuField(menu_.tab, menu_.active_field, direction);
 }
 
 auto App::HandleMenuTextInput(const char* text) -> void {
@@ -943,8 +882,7 @@ auto App::HandleMenuTextInput(const char* text) -> void {
   if (buffer == nullptr || text == nullptr) {
     return;
   }
-  *buffer += text;
-  TruncateUtf8(*buffer, MenuTextFieldLimit(menu_.active_field));
+  AppendUtf8(*buffer, text, MenuFieldLimit(menu_.active_field));
 }
 
 auto App::HandleMenuKeyDown(const SDL_KeyboardEvent& key) -> void {
@@ -959,8 +897,7 @@ auto App::HandleMenuKeyDown(const SDL_KeyboardEvent& key) -> void {
     return;
   }
   if (key.key == SDLK_LEFT || key.key == SDLK_RIGHT) {
-    const int step = key.key == SDLK_RIGHT ? 1 : 2;
-    menu_.tab = static_cast<MenuTab>((static_cast<int>(menu_.tab) + step) % 3);
+    menu_.tab = NextMenuTab(menu_.tab, key.key == SDLK_RIGHT ? 1 : -1);
     menu_.active_field = MenuField::kNone;
     menu_.status.clear();
     return;
@@ -978,9 +915,8 @@ auto App::HandleMenuKeyDown(const SDL_KeyboardEvent& key) -> void {
     return;
   }
   if (key.key == SDLK_BACKSPACE) {
-    std::string* buffer = MenuTextBuffer();
-    if (buffer != nullptr && !buffer->empty()) {
-      buffer->resize(PreviousCodePointStart(*buffer));
+    if (std::string* buffer = MenuTextBuffer(); buffer != nullptr) {
+      EraseLastCodePoint(*buffer);
     }
   }
 }
@@ -1066,7 +1002,7 @@ auto App::SelectPlayerToken(int row) -> void {
     return;
   }
   for (const Token& token : view_.Tokens()) {
-    if (token.owner == owner) {
+    if (SamePlayerName(token.owner, owner)) {
       selected_id_ = token.id;
       dragging_ = false;
       drag_target_.reset();
@@ -1112,11 +1048,11 @@ auto App::ApplyUiScale() -> void {
   int new_width = 0;
   int new_height = 0;
   if (had_size && RenderSize(renderer_, new_width, new_height)) {
-    camera_x_ +=
-        (static_cast<float>(new_width) - static_cast<float>(old_width)) / 2.0F;
-    camera_y_ +=
+    PanCamera(
+        camera_,
+        (static_cast<float>(new_width) - static_cast<float>(old_width)) / 2.0F,
         (static_cast<float>(new_height) - static_cast<float>(old_height)) /
-        2.0F;
+            2.0F);
   }
 }
 
@@ -1191,8 +1127,7 @@ auto App::HandleEvent(SDL_Event event) -> void {
       event.key.key == SDLK_F1 && !event.key.repeat) {
     help_active_ = !help_active_;
     if (help_active_) {
-      chat_active_ = false;
-      chat_input_.clear();
+      chat_.Close();
     }
     return;
   }
@@ -1300,15 +1235,14 @@ auto App::HandleEvent(SDL_Event event) -> void {
     case SDL_EVENT_TEXT_INPUT:
       if (!in_game_) {
         HandleMenuTextInput(event.text.text);
-      } else if (chat_active_) {
-        chat_input_ += event.text.text;
-        TruncateUtf8(chat_input_, kMaxChatInput);
+      } else if (chat_.Active()) {
+        chat_.Append(event.text.text);
       }
       break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
       if (!in_game_) {
         HandleMenuMouseDown(event.button);
-      } else if (!chat_active_) {
+      } else if (!chat_.Active()) {
         if (event.button.button == SDL_BUTTON_MIDDLE) {
           panning_ = true;
           pan_last_x_ = event.button.x;
@@ -1323,7 +1257,7 @@ auto App::HandleEvent(SDL_Event event) -> void {
       }
       break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
-      if (in_game_ && !chat_active_) {
+      if (in_game_ && !chat_.Active()) {
         if (event.button.button == SDL_BUTTON_MIDDLE) {
           panning_ = false;
         } else if (event.button.button == SDL_BUTTON_LEFT) {
@@ -1332,7 +1266,7 @@ auto App::HandleEvent(SDL_Event event) -> void {
       }
       break;
     case SDL_EVENT_MOUSE_MOTION:
-      if (in_game_ && !chat_active_) {
+      if (in_game_ && !chat_.Active()) {
         mouse_x_ = event.motion.x;
         mouse_y_ = event.motion.y;
         if (panning_) {
@@ -1343,7 +1277,7 @@ auto App::HandleEvent(SDL_Event event) -> void {
       }
       break;
     case SDL_EVENT_MOUSE_WHEEL:
-      if (in_game_ && !chat_active_) {
+      if (in_game_ && !chat_.Active()) {
         HandleWheel(event.wheel);
       }
       break;
@@ -1361,26 +1295,23 @@ auto App::HandleEvent(SDL_Event event) -> void {
 
 auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
   // Enter в режиме шаблона сразу готовит команду урона по области.
-  if ((key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) && !chat_active_ &&
+  if ((key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) && !chat_.Active() &&
       aoe_mode_ && options_.mode == AppMode::kHost) {
-    chat_active_ = true;
-    chat_input_ = "/aoe ";
+    chat_.OpenWith("/aoe ");
     return;
   }
   if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
-    if (chat_active_) {
+    if (chat_.Active()) {
       SubmitChat();
-      chat_active_ = false;
+      chat_.Close();
     } else {
-      chat_active_ = true;
-      chat_input_.clear();
+      chat_.Open();
     }
     return;
   }
   if (key.key == SDLK_ESCAPE) {
-    if (chat_active_) {
-      chat_active_ = false;
-      chat_input_.clear();
+    if (chat_.Active()) {
+      chat_.Close();
     } else {
       dragging_ = false;
       drag_target_.reset();
@@ -1391,9 +1322,9 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     }
     return;
   }
-  if (chat_active_) {
-    if (key.key == SDLK_BACKSPACE && !chat_input_.empty()) {
-      chat_input_.resize(PreviousCodePointStart(chat_input_));
+  if (chat_.Active()) {
+    if (key.key == SDLK_BACKSPACE) {
+      chat_.Backspace();
     }
     return;
   }
@@ -1413,7 +1344,7 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
       ScrollLog(-kLogVisibleLines);
       break;
     case SDLK_END:
-      log_scroll_ = 0;
+      log_scroll_.ToNewest();
       break;
     case SDLK_F5:
       SaveGame();
@@ -1577,8 +1508,12 @@ auto App::HandleMouseDown(const SDL_MouseButtonEvent& button) -> void {
   measure_end_.reset();
   selected_id_ = TokenAt(cell);
   const Token* token = FindSelectedToken();
-  const bool locked = token != nullptr && token->kind == TokenKind::kPlayer &&
-                      token->owner != options_.player_name &&
+  // Повторяем GameServer::CanControl: свободных NPC двигает любой игрок,
+  // чужих персонажей и монстров с владельцем тащить нельзя.
+  const bool free_npc = token != nullptr && token->owner.empty() &&
+                        token->kind != TokenKind::kPlayer;
+  const bool locked = token != nullptr && !free_npc &&
+                      !SamePlayerName(token->owner, options_.player_name) &&
                       options_.mode == AppMode::kClient;
   dragging_ = selected_id_ != 0 && !locked;
   drag_target_.reset();
@@ -1599,7 +1534,14 @@ auto App::HandleMouseUp(const SDL_MouseButtonEvent& button) -> void {
   const Token* token = FindSelectedToken();
   // Обычный клик выбирает токен; ход отправляем, только если он сдвинулся.
   if (token != nullptr && view_.Map().Contains(cell) && token->cell != cell) {
-    SubmitMove(cell);
+    // В неразведанную клетку игрок не ходит: сервер всё равно откажет, а так
+    // он получает понятную подсказку без лишней команды.
+    if (options_.mode == AppMode::kClient && !client_is_dm_ &&
+        !view_.Fog().IsExplored(cell)) {
+      view_.AddLocalLine(std::string(strings::kCellNotExplored));
+    } else {
+      SubmitMove(cell);
+    }
   }
   dragging_ = false;
   drag_target_.reset();
@@ -1626,10 +1568,7 @@ auto App::HandleMouseMotion(const SDL_MouseMotionEvent& motion) -> void {
 }
 
 auto App::CellFromPixel(float x, float y) const -> Cell {
-  return Cell{
-      .x = static_cast<int>(std::floor((x - camera_x_) / cell_size_)),
-      .y = static_cast<int>(std::floor((y - camera_y_) / cell_size_)),
-  };
+  return CameraCellAt(camera_, x, y);
 }
 
 auto App::TokenAt(Cell cell) const -> TokenId {
@@ -1693,51 +1632,39 @@ auto App::DrawBackground(const GridMap& map, const MapBackground& background)
     -> void {
   SDL_Texture* texture = BackgroundTexture(background.image);
   DrawMapBackground(renderer_, texture, map, background.opacity,
-                    background.scale, cell_size_, camera_x_, camera_y_);
+                    background.scale, camera_.cell_size, camera_.x, camera_.y);
   if (texture != nullptr || background.image.empty() || text_ == nullptr) {
     return;
   }
   // Файл не найден: сетка остаётся рабочей, а подпись говорит, чего не хватает.
   text_->Draw(std::string(strings::kMapMissingImage) + background.image,
-              camera_x_ + 8.0F, camera_y_ + 8.0F,
+              camera_.x + 8.0F, camera_.y + 8.0F,
               SDL_Color{.r = 0xff, .g = 0x90, .b = 0x90, .a = SDL_ALPHA_OPAQUE},
               640.0F);
 }
 
-auto App::SubmitMapCommand(std::string_view args) -> void {
+auto App::SubmitMapCommand(const ChatCommand& command) -> void {
   if (options_.mode != AppMode::kHost) {
     view_.AddLocalLine(std::string(strings::kMapDmOnly));
     return;
   }
-  if (args.empty()) {
-    view_.AddLocalLine(std::string(strings::kMapUsage));
-    return;
-  }
 
   MapBackground next = server_.State().Background();
-  if (args == "off") {
-    next = MapBackground{};
-  } else if (args.starts_with("opacity ")) {
-    int value = 0;
-    if (!ParseSignedNumber(args.substr(8), value) ||
-        value < kMinBackgroundOpacity || value > kMaxBackgroundOpacity) {
-      view_.AddLocalLine(std::string(strings::kMapUsage));
+  switch (command.kind) {
+    case ChatCommandKind::kMapOff:
+      next = MapBackground{};
+      break;
+    case ChatCommandKind::kMapOpacity:
+      next.opacity = command.value;
+      break;
+    case ChatCommandKind::kMapScale:
+      next.scale = command.value;
+      break;
+    case ChatCommandKind::kMapImage:
+      next.image = command.text;
+      break;
+    default:
       return;
-    }
-    next.opacity = value;
-  } else if (args.starts_with("scale ")) {
-    int value = 0;
-    if (!ParseSignedNumber(args.substr(6), value) ||
-        value < kMinBackgroundScale || value > kMaxBackgroundScale) {
-      view_.AddLocalLine(std::string(strings::kMapUsage));
-      return;
-    }
-    next.scale = value;
-  } else if (IsSafeImageName(args)) {
-    next.image = std::string(args);
-  } else {
-    view_.AddLocalLine(std::string(strings::kMapUsage));
-    return;
   }
   SendCommand(SetMapBackground{.background = std::move(next)});
 }
@@ -1763,11 +1690,11 @@ auto App::FindSelectedToken() const -> const Token* {
 }
 
 auto App::PlayerHasCharacter() const -> bool {
-  return std::ranges::any_of(view_.Tokens(),
-                             [this](const Token& token) -> bool {
-                               return token.kind == TokenKind::kPlayer &&
-                                      token.owner == options_.player_name;
-                             });
+  return std::ranges::any_of(
+      view_.Tokens(), [this](const Token& token) -> bool {
+        return token.kind == TokenKind::kPlayer &&
+               SamePlayerName(token.owner, options_.player_name);
+      });
 }
 
 auto App::ClaimSelectedToken() -> void {
@@ -1784,11 +1711,13 @@ auto App::ClaimSelectedToken() -> void {
     view_.AddLocalLine("Забрать можно только персонажа");
     return;
   }
-  if (!token->owner.empty() && token->owner != options_.player_name) {
+  if (!token->owner.empty() &&
+      !SamePlayerName(token->owner, options_.player_name)) {
     view_.AddLocalLine("Этот персонаж уже занят другим игроком");
     return;
   }
-  if (token->owner != options_.player_name && PlayerHasCharacter()) {
+  if (!SamePlayerName(token->owner, options_.player_name) &&
+      PlayerHasCharacter()) {
     view_.AddLocalLine("У вас уже есть персонаж. Сначала освободите его (R)");
     return;
   }
@@ -1805,7 +1734,7 @@ auto App::ReleaseSelectedToken() -> void {
     view_.AddLocalLine("DM: используйте /owner имя");
     return;
   }
-  if (token->owner != options_.player_name) {
+  if (!SamePlayerName(token->owner, options_.player_name)) {
     view_.AddLocalLine("Это не ваш персонаж");
     return;
   }
@@ -1816,10 +1745,12 @@ auto App::CanEditToken(const Token& token) const -> bool {
   if (options_.mode == AppMode::kHost) {
     return true;
   }
-  if (token.kind == TokenKind::kPlayer && token.owner != options_.player_name) {
+  if (token.kind == TokenKind::kPlayer &&
+      !SamePlayerName(token.owner, options_.player_name)) {
     return false;
   }
-  return token.owner.empty() || token.owner == options_.player_name;
+  return token.owner.empty() ||
+         SamePlayerName(token.owner, options_.player_name);
 }
 
 auto App::OpenSheet() -> void {
@@ -1984,8 +1915,7 @@ auto App::HandleSheetTextInput(const char* text) -> void {
     }
     return;
   }
-  sheet_notes_ += text;
-  TruncateUtf8(sheet_notes_, 512);
+  AppendUtf8(sheet_notes_, text, 512);
 }
 
 auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
@@ -2032,8 +1962,8 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
       buffer = &sheet_notes_;
       break;
   }
-  if (buffer != nullptr && !buffer->empty()) {
-    buffer->resize(PreviousCodePointStart(*buffer));
+  if (buffer != nullptr) {
+    EraseLastCodePoint(*buffer);
   }
 }
 
@@ -2281,178 +2211,167 @@ auto App::CycleSelectedColor() -> void {
 }
 
 auto App::SubmitChat() -> void {
-  const std::string text = chat_input_;
-  chat_input_.clear();
+  const std::string text = chat_.Take();
   if (text.empty()) {
     return;
   }
-  if (text.starts_with("/roll ")) {
-    const std::string expression = text.substr(6);
-    DiceExpression parsed;
-    if (!ParseDiceExpression(expression, parsed)) {
-      view_.AddLocalLine("Использование: /roll d20+5, 2d6+3, adv d20+5");
-      return;
-    }
-    SendCommand(RollExpression{.expression = expression});
-    return;
-  }
-  if (text == "/claim") {
-    ClaimSelectedToken();
-    return;
-  }
-  if (text == "/ping") {
-    SubmitPing(CellFromPixel(mouse_x_, mouse_y_));
-    return;
-  }
-  if (text == "/map" || text.starts_with("/map ")) {
-    SubmitMapCommand(text.size() > 5 ? std::string_view(text).substr(5)
-                                     : std::string_view{});
-    return;
-  }
-  if (options_.mode == AppMode::kHost && text.starts_with("/kick ")) {
-    const std::string name = text.substr(6);
-    if (name.empty()) {
-      view_.AddLocalLine("Использование: /kick имя");
-    } else if (net_server_.KickByName(name)) {
-      view_.AddLocalLine("Игрок " + name + " исключён");
-    } else {
-      view_.AddLocalLine("Игрок " + name + " не найден");
-    }
-    return;
-  }
-  if (text == "/scene" || text.starts_with("/scene ")) {
-    if (options_.mode != AppMode::kHost) {
-      view_.AddLocalLine(std::string(strings::kScenesDmOnly));
-      return;
-    }
-    const std::string_view args =
-        text.size() > 7 ? std::string_view(text).substr(7) : std::string_view{};
-    if (args.empty()) {
-      OpenScenes();
-    } else if (args == "new") {
-      CreateScene();
-    } else if (args == "rename" || args.starts_with("rename ")) {
-      RenameSceneByCommand(args.substr(6));
-    } else {
-      SwitchSceneByName(args);
-    }
-    return;
-  }
-
-  if (text.starts_with("/aoe ")) {
-    if (options_.mode != AppMode::kHost) {
-      view_.AddLocalLine("Урон по области наносит только DM");
-      return;
-    }
-    const std::string rest = text.substr(5);
-    const auto space = rest.rfind(' ');
-    int save_dc = 0;
-    DiceExpression parsed;
-    if (space == std::string::npos ||
-        !ParseDiceExpression(rest.substr(0, space), parsed) ||
-        !ParseNumber(std::string_view(rest).substr(space + 1), save_dc) ||
-        save_dc < 1 || save_dc > 100) {
-      view_.AddLocalLine(
-          "Использование: /aoe 2d6 15 (урон и сложность спасброска)");
-      return;
-    }
-    SendCommand(
-        AoeDamage{.expression = rest.substr(0, space), .save_dc = save_dc});
+  // Синтаксис разбирает ядро; здесь остаются роль, выбранный токен и сцены.
+  const ChatCommand command = ParseChatCommand(text);
+  if (command.error != ChatCommandError::kNone) {
+    view_.AddLocalLine(std::string(ChatUsageText(command.error)));
     return;
   }
 
   const Token* token = FindSelectedToken();
-  if (text == "/owner" || text.starts_with("/owner ")) {
-    if (token == nullptr) {
-      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+  switch (command.kind) {
+    case ChatCommandKind::kSay:
+      SendCommand(Say{.text = command.text});
+      return;
+    case ChatCommandKind::kRoll:
+      SendCommand(RollExpression{.expression = command.text});
+      return;
+    case ChatCommandKind::kClaim:
+      ClaimSelectedToken();
+      return;
+    case ChatCommandKind::kPing:
+      SubmitPing(CellFromPixel(mouse_x_, mouse_y_));
+      return;
+    case ChatCommandKind::kMapOff:
+    case ChatCommandKind::kMapOpacity:
+    case ChatCommandKind::kMapScale:
+    case ChatCommandKind::kMapImage:
+      SubmitMapCommand(command);
+      return;
+    case ChatCommandKind::kKick:
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine(std::string(strings::kKickDmOnly));
+        return;
+      }
+      if (net_server_.KickByName(command.text)) {
+        view_.AddLocalLine("Игрок " + command.text + " исключён");
+      } else {
+        view_.AddLocalLine("Игрок " + command.text + " не найден");
+      }
+      return;
+    case ChatCommandKind::kSceneList:
+    case ChatCommandKind::kSceneNew:
+    case ChatCommandKind::kSceneRename:
+    case ChatCommandKind::kSceneSwitch:
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine(std::string(strings::kScenesDmOnly));
+        return;
+      }
+      if (command.kind == ChatCommandKind::kSceneList) {
+        OpenScenes();
+      } else if (command.kind == ChatCommandKind::kSceneNew) {
+        CreateScene();
+      } else if (command.kind == ChatCommandKind::kSceneRename) {
+        RenameSceneByCommand(command.text);
+      } else {
+        SwitchSceneByName(command.text);
+      }
+      return;
+    case ChatCommandKind::kAoe:
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine("Урон по области наносит только DM");
+        return;
+      }
+      SendCommand(
+          AoeDamage{.expression = command.text, .save_dc = command.save_dc});
+      return;
+    case ChatCommandKind::kOwner:
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      SendCommand(SetTokenOwner{.id = token->id, .owner = command.text});
+      return;
+    case ChatCommandKind::kRename:
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      SendCommand(RenameToken{.id = token->id, .name = command.text});
+      return;
+    case ChatCommandKind::kPortrait:
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      SendCommand(SetTokenPortrait{.id = token->id, .portrait = command.text});
+      return;
+    case ChatCommandKind::kMaxHp:
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      SendCommand(SetTokenMaxHp{.id = token->id, .max_hp = command.value});
+      return;
+    case ChatCommandKind::kDamage:
+    case ChatCommandKind::kHeal:
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      if (command.kind == ChatCommandKind::kHeal) {
+        SendCommand(HealToken{.id = token->id, .amount = command.value});
+      } else {
+        SendCommand(DamageToken{.id = token->id, .amount = command.value});
+      }
+      return;
+    case ChatCommandKind::kDeathSave:
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      if (token->hp > 0) {
+        view_.AddLocalLine("Спасбросок от смерти нужен при 0 HP");
+        return;
+      }
+      SendCommand(DeathSave{.id = token->id});
+      return;
+    case ChatCommandKind::kRest:
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine("Отдых объявляет только DM");
+        return;
+      }
+      SendCommand(RestParty{.long_rest = command.long_rest});
+      return;
+    case ChatCommandKind::kReveal:
+    case ChatCommandKind::kRevealOff: {
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine(std::string(strings::kRevealDmOnly));
+        return;
+      }
+      if (command.kind == ChatCommandKind::kRevealOff) {
+        SendCommand(ClearRevealed{});
+        return;
+      }
+      const Cell reveal_cell = CellFromPixel(mouse_x_, mouse_y_);
+      if (!view_.Map().Contains(reveal_cell)) {
+        view_.AddLocalLine("Открывать можно только клетки карты");
+        return;
+      }
+      SendCommand(
+          RevealArea{.cell = reveal_cell, .radius = kRevealRadiusCells});
       return;
     }
-    const std::string owner = text.size() > 7 ? text.substr(7) : std::string{};
-    SendCommand(SetTokenOwner{.id = token->id, .owner = owner});
-    return;
+    case ChatCommandKind::kXp:
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine(std::string(strings::kXpDmOnly));
+        return;
+      }
+      if (command.party) {
+        SendCommand(AwardXp{.amount = command.value, .party = true});
+        return;
+      }
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      SendCommand(AwardXp{.id = token->id, .amount = command.value});
+      return;
   }
-  if (text.starts_with("/rename ")) {
-    if (token == nullptr) {
-      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
-      return;
-    }
-    const std::string name = text.substr(8);
-    if (name.empty()) {
-      view_.AddLocalLine("Использование: /rename имя");
-      return;
-    }
-    SendCommand(RenameToken{.id = token->id, .name = name});
-    return;
-  }
-  if (text == "/portrait" || text.starts_with("/portrait ")) {
-    if (token == nullptr) {
-      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
-      return;
-    }
-    std::string portrait = text.size() > 10 ? text.substr(10) : std::string{};
-    if (portrait == "off") {
-      portrait.clear();
-    } else if (!IsSafeImageName(portrait)) {
-      view_.AddLocalLine(std::string(strings::kPortraitUsage));
-      return;
-    }
-    SendCommand(
-        SetTokenPortrait{.id = token->id, .portrait = std::move(portrait)});
-    return;
-  }
-  if (text.starts_with("/maxhp ")) {
-    if (token == nullptr) {
-      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
-      return;
-    }
-    int max_hp = 0;
-    if (!ParseNumber(std::string_view(text).substr(7), max_hp)) {
-      view_.AddLocalLine("Использование: /maxhp 20");
-      return;
-    }
-    SendCommand(SetTokenMaxHp{.id = token->id, .max_hp = max_hp});
-    return;
-  }
-  if (text.starts_with("/damage ") || text.starts_with("/heal ")) {
-    if (token == nullptr) {
-      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
-      return;
-    }
-    const bool heal = text.starts_with("/heal ");
-    int amount = 0;
-    const std::string_view value = std::string_view(text).substr(heal ? 6 : 8);
-    if (!ParseNumber(value, amount) || amount <= 0) {
-      view_.AddLocalLine("Использование: /damage 7 или /heal 5");
-      return;
-    }
-    if (heal) {
-      SendCommand(HealToken{.id = token->id, .amount = amount});
-    } else {
-      SendCommand(DamageToken{.id = token->id, .amount = amount});
-    }
-    return;
-  }
-  if (text == "/deathsave") {
-    if (token == nullptr) {
-      view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
-      return;
-    }
-    if (token->hp > 0) {
-      view_.AddLocalLine("Спасбросок от смерти нужен при 0 HP");
-      return;
-    }
-    SendCommand(DeathSave{.id = token->id});
-    return;
-  }
-  if (text == "/rest" || text == "/longrest") {
-    if (options_.mode != AppMode::kHost) {
-      view_.AddLocalLine("Отдых объявляет только DM");
-      return;
-    }
-    SendCommand(RestParty{.long_rest = text == "/longrest"});
-    return;
-  }
-  SendCommand(Say{.text = text});
 }
 
 auto App::AdjustSelectedHp(int delta) -> void {
@@ -2502,14 +2421,26 @@ auto App::ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void {
   if (world_changed) {
     MarkCampaignDirty();
   }
+  const std::vector<PeerInfo> peers = net_server_.Peers();
   for (const Event& event : outcome.events) {
     // Вид DM уже полный: ему нужны только перемещения токенов и строки лога.
-    // Игроки дополнительно получают обновления вида и туман.
+    // Игрокам уходит только то, что попадает в их собственный туман.
     if (!std::holds_alternative<ViewUpdated>(event)) {
       transport_.PostEvent(event);
     }
-    if (server_.EventVisibleToPlayers(event)) {
-      net_server_.BroadcastEvent(event);
+    for (const PeerInfo& peer : peers) {
+      if (server_.EventVisibleTo(event, peer.name)) {
+        net_server_.SendEvent(peer.id, event);
+      }
+    }
+  }
+  // После изменения мира каждому игроку нужен свой срез: туман у всех разный,
+  // поэтому один общий ViewUpdated больше не подходит.
+  if (world_changed) {
+    for (const PeerInfo& peer : peers) {
+      net_server_.SendEvent(
+          peer.id, ViewUpdated{.snapshot = server_.ClientSnapshot(peer.name),
+                               .fog = server_.FogState(peer.name)});
     }
   }
 }
@@ -2540,10 +2471,10 @@ auto App::PumpHost() -> void {
   for (const PeerJoined& peer : joined) {
     SDL_Log("peer %u '%s' joined", static_cast<unsigned>(peer.peer),
             peer.name.c_str());
-    net_server_.SendWelcome(peer.peer,
-                            Welcome{.snapshot = server_.ClientSnapshot(),
-                                    .fog = server_.FogState(),
-                                    .is_dm = false});
+    net_server_.SendWelcome(
+        peer.peer, Welcome{.snapshot = server_.ClientSnapshot(peer.name),
+                           .fog = server_.FogState(peer.name),
+                           .is_dm = false});
   }
   for (const PeerCommand& peer_command : commands) {
     ApplyOutcome(peer_command.peer,
@@ -2663,24 +2594,10 @@ auto App::PruneStaleViewState() -> void {
 }
 
 auto App::ScrollLog(int lines) -> void {
-  const int total = static_cast<int>(view_.Log().size());
-  const int max_scroll = std::max(0, total - kLogVisibleLines);
-  log_scroll_ = std::clamp(log_scroll_ + lines, 0, max_scroll);
-  log_count_ = view_.Log().size();
+  log_scroll_.Scroll(lines, view_.Log().size());
 }
 
-auto App::SyncLogScroll() -> void {
-  const std::size_t size = view_.Log().size();
-  // Пока пользователь читает старые строки, новые не должны сдвигать текст:
-  // увеличиваем отступ ровно на столько, на сколько вырос лог.
-  if (log_scroll_ > 0 && size > log_count_) {
-    log_scroll_ += static_cast<int>(size - log_count_);
-  }
-  log_count_ = size;
-  const int total = static_cast<int>(size);
-  const int max_scroll = std::max(0, total - kLogVisibleLines);
-  log_scroll_ = std::clamp(log_scroll_, 0, max_scroll);
-}
+auto App::SyncLogScroll() -> void { log_scroll_.OnAppend(view_.Log().size()); }
 
 auto App::OpenSessionLog() -> void {
   const std::string path = SessionLogPath().string();
@@ -2746,7 +2663,7 @@ auto App::SaveCampaign() -> void {
     SDL_Log("campaign save failed");
     return;
   }
-  campaign_dirty_ = false;
+  autosave_.Saved();
 }
 
 auto App::RefreshCampaignLibrary() -> void {
@@ -2799,37 +2716,27 @@ auto App::SelectCampaign(int delta) -> void {
   if (campaign_files_.empty() || delta == 0) {
     return;
   }
-  const auto count = static_cast<int>(campaign_files_.size());
-  int next = (static_cast<int>(campaign_index_) + delta) % count;
-  if (next < 0) {
-    next += count;
-  }
-  campaign_index_ = static_cast<std::size_t>(next);
+  campaign_index_ = WrapIndex(campaign_index_, delta, campaign_files_.size());
   (void)LoadSelectedCampaign();
 }
 
 auto App::MarkCampaignDirty() -> void {
-  // Отсчёт идёт от первого несохранённого изменения: иначе непрерывные ходы
-  // отодвигали бы автосейв до бесконечности.
-  if (!campaign_dirty_) {
-    campaign_dirty_ = true;
-    campaign_changed_at_ = std::chrono::steady_clock::now();
-  }
+  autosave_.MarkChanged(std::chrono::steady_clock::now());
 }
 
 auto App::CheckAutosave() -> void {
-  if (!campaign_dirty_ || options_.mode != AppMode::kHost || !in_game_) {
+  if (!autosave_.Dirty() || options_.mode != AppMode::kHost || !in_game_) {
     return;
   }
   const auto now = std::chrono::steady_clock::now();
-  if (now - campaign_changed_at_ < kAutosaveDelay) {
+  if (!autosave_.Due(now)) {
     return;
   }
   StoreActiveScene();
   SaveCampaign();
-  if (campaign_dirty_) {
+  if (autosave_.Dirty()) {
     // Запись не удалась: не долбим диск каждый кадр, повторим позже.
-    campaign_changed_at_ = now;
+    autosave_.SaveFailed(now);
   } else {
     SDL_Log("campaign autosaved");
   }
@@ -2843,10 +2750,11 @@ auto App::StoreActiveScene() -> void {
 }
 
 auto App::BroadcastWorld() -> void {
-  net_server_.BroadcastEvent(ViewUpdated{
-      .snapshot = server_.ClientSnapshot(),
-      .fog = server_.FogState(),
-  });
+  for (const PeerInfo& peer : net_server_.Peers()) {
+    net_server_.SendEvent(
+        peer.id, ViewUpdated{.snapshot = server_.ClientSnapshot(peer.name),
+                             .fog = server_.FogState(peer.name)});
+  }
 }
 
 auto App::Announce(std::string text) -> void {
@@ -2888,13 +2796,12 @@ auto App::ApplyWorld(GameSnapshot snapshot, bool reset_encounter) -> void {
   measure_end_.reset();
   show_movement_range_ = false;
   aoe_mode_ = false;
-  chat_active_ = false;
-  chat_input_.clear();
+  chat_.Close();
   sheet_active_ = false;
   conditions_active_ = false;
   bestiary_active_ = false;
-  pending_delete_token_ = 0;
-  pending_delete_scene_ = kNoScene;
+  delete_token_.Clear();
+  delete_scene_.Clear();
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   CenterCamera();
   BroadcastWorld();
@@ -2930,16 +2837,11 @@ auto App::RequestDeleteSelectedToken() -> void {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
-  const auto now = std::chrono::steady_clock::now();
-  if (pending_delete_token_ == selected_id_ &&
-      now <= pending_delete_token_at_) {
-    const TokenId id = selected_id_;
-    pending_delete_token_ = 0;
-    SendCommand(RemoveToken{.id = id});
+  if (delete_token_.Request(static_cast<std::size_t>(selected_id_),
+                            std::chrono::steady_clock::now())) {
+    SendCommand(RemoveToken{.id = selected_id_});
     return;
   }
-  pending_delete_token_ = selected_id_;
-  pending_delete_token_at_ = now + kDeleteConfirmDelay;
   view_.AddLocalLine(std::string(strings::kDeleteConfirm));
 }
 
@@ -2952,16 +2854,12 @@ auto App::RequestDeleteActiveScene() -> void {
     scenes_status_ = "Нельзя удалить последнюю сцену";
     return;
   }
-  const auto now = std::chrono::steady_clock::now();
-  if (pending_delete_scene_ == campaign_.active &&
-      now <= pending_delete_scene_at_) {
-    pending_delete_scene_ = kNoScene;
+  if (delete_scene_.Request(campaign_.active,
+                            std::chrono::steady_clock::now())) {
     scenes_status_.clear();
     DeleteActiveScene();
     return;
   }
-  pending_delete_scene_ = campaign_.active;
-  pending_delete_scene_at_ = now + kDeleteConfirmDelay;
   scenes_status_ = std::string(strings::kDeleteConfirm);
 }
 
@@ -3037,7 +2935,7 @@ auto App::DeleteActiveScene() -> void {
   const std::string name = campaign_.scenes[removed].name;
   campaign_.scenes.erase(campaign_.scenes.begin() +
                          static_cast<std::ptrdiff_t>(removed));
-  const std::size_t next = removed == 0 ? 0 : removed - 1;
+  const std::size_t next = IndexAfterDelete(removed, campaign_.scenes.size());
   campaign_.active = next;
   scenes_selected_ = next;
   ResetWorld(campaign_.scenes[next].snapshot);
@@ -3059,8 +2957,7 @@ auto App::OpenScenes() -> void {
   bestiary_active_ = false;
   sheet_active_ = false;
   conditions_active_ = false;
-  chat_active_ = false;
-  chat_input_.clear();
+  chat_.Close();
 }
 
 auto App::CloseScenes() -> void {
@@ -3093,8 +2990,8 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       CancelSceneEdit();
     } else if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
       CommitSceneEdit();
-    } else if (key.key == SDLK_BACKSPACE && !scenes_edit_buffer_.empty()) {
-      scenes_edit_buffer_.resize(PreviousCodePointStart(scenes_edit_buffer_));
+    } else if (key.key == SDLK_BACKSPACE) {
+      EraseLastCodePoint(scenes_edit_buffer_);
       scenes_status_.clear();
     }
     return;
@@ -3105,14 +3002,12 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       CloseScenes();
       return;
     case SDLK_UP:
-      if (scenes_selected_ > 0) {
-        --scenes_selected_;
-      }
+      scenes_selected_ =
+          StepIndex(scenes_selected_, -1, campaign_.scenes.size());
       return;
     case SDLK_DOWN:
-      if (scenes_selected_ + 1 < campaign_.scenes.size()) {
-        ++scenes_selected_;
-      }
+      scenes_selected_ =
+          StepIndex(scenes_selected_, 1, campaign_.scenes.size());
       return;
     case SDLK_RETURN:
     case SDLK_KP_ENTER: {
@@ -3137,11 +3032,12 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
   }
   if (key.key >= SDLK_1 && key.key <= SDLK_9) {
-    const auto index = static_cast<std::size_t>(key.key - SDLK_1);
-    if (index < campaign_.scenes.size()) {
-      scenes_selected_ = index;
+    const std::optional<std::size_t> index = IndexForDigit(
+        static_cast<int>(key.key - SDLK_1) + 1, campaign_.scenes.size());
+    if (index.has_value()) {
+      scenes_selected_ = *index;
       CloseScenes();
-      SwitchScene(index);
+      SwitchScene(*index);
     }
   }
 }
@@ -3154,10 +3050,9 @@ auto App::HandleScenesTextInput(const char* text) -> void {
     scenes_edit_ignore_text_ = false;
     return;
   }
-  scenes_edit_buffer_ += text;
-  TruncateUtf8(scenes_edit_buffer_, scenes_edit_ == SceneEditField::kName
-                                        ? kMaxSceneNameLength
-                                        : kMaxSceneNoteLength);
+  AppendUtf8(scenes_edit_buffer_, text,
+             scenes_edit_ == SceneEditField::kName ? kMaxSceneNameLength
+                                                   : kMaxSceneNoteLength);
   scenes_status_.clear();
 }
 
@@ -3252,16 +3147,16 @@ auto App::Iterate() -> void {
   if (in_editor_) {
     ClearBoard(renderer_);
     DrawBackground(scene_.map, scene_.background);
-    DrawGrid(renderer_, scene_.map, cell_size_, camera_x_, camera_y_);
-    DrawWalls(renderer_, scene_.map, cell_size_, camera_x_, camera_y_);
+    DrawGrid(renderer_, scene_.map, camera_.cell_size, camera_.x, camera_.y);
+    DrawWalls(renderer_, scene_.map, camera_.cell_size, camera_.x, camera_.y);
     std::vector<TokenArt> editor_art;
     editor_art.reserve(scene_.tokens.size());
     for (const Token& token : scene_.tokens) {
       editor_art.push_back(
           TokenArt{.portrait = PortraitTexture(token.portrait)});
     }
-    DrawTokens(renderer_, scene_.tokens, cell_size_, camera_x_, camera_y_,
-               text_.get(), 0, 0, &editor_art);
+    DrawTokens(renderer_, scene_.tokens, camera_.cell_size, camera_.x,
+               camera_.y, text_.get(), 0, 0, &editor_art);
     if (editor_panel_visible_) {
       DrawEditorPanel(renderer_, text_.get(), scene_, editor_brush_,
                       editor_status_);
@@ -3318,8 +3213,8 @@ auto App::Iterate() -> void {
   const bool is_dm = options_.mode == AppMode::kHost || client_is_dm_;
   ClearBoard(renderer_);
   DrawBackground(view_.Map(), view_.Background());
-  DrawGrid(renderer_, view_.Map(), cell_size_, camera_x_, camera_y_);
-  DrawWalls(renderer_, view_.Map(), cell_size_, camera_x_, camera_y_);
+  DrawGrid(renderer_, view_.Map(), camera_.cell_size, camera_.x, camera_.y);
+  DrawWalls(renderer_, view_.Map(), camera_.cell_size, camera_.x, camera_.y);
   const Encounter& encounter = view_.EncounterState();
   if (show_movement_range_) {
     const Token* range_token = FindSelectedToken();
@@ -3328,43 +3223,61 @@ auto App::Iterate() -> void {
       if (encounter.active && !is_dm) {
         radius = std::max(0, radius - range_token->movement_used);
       }
-      DrawMovementRange(renderer_,
-                        ReachableCells(view_.Map(), range_token->cell, radius),
-                        cell_size_, camera_x_, camera_y_);
+      // Монстры и NPC перекрывают путь, персонажи — нет; встать на занятую
+      // клетку всё равно нельзя, поэтому её не показываем.
+      std::vector<Cell> blockers;
+      std::vector<Cell> occupied;
+      for (const Token& token : view_.Tokens()) {
+        if (token.id == range_token->id) {
+          continue;
+        }
+        occupied.push_back(token.cell);
+        if (token.kind != TokenKind::kPlayer) {
+          blockers.push_back(token.cell);
+        }
+      }
+      std::vector<Cell> reachable =
+          ReachableCells(view_.Map(), range_token->cell, radius,
+                         range_token->diagonal_parity, blockers);
+      std::erase_if(reachable, [&occupied](Cell cell) -> bool {
+        return std::ranges::find(occupied, cell) != occupied.end();
+      });
+      DrawMovementRange(renderer_, reachable, camera_.cell_size, camera_.x,
+                        camera_.y);
     }
   }
   if (!client_is_dm_) {
-    DrawFog(renderer_, view_.Fog(), cell_size_, camera_x_, camera_y_);
+    DrawFog(renderer_, view_.Fog(), camera_.cell_size, camera_.x, camera_.y);
   }
   // Шаблон области рисуем поверх тумана: он показывает заклинание, а не рельеф.
   if (view_.Aoe().shape != AoeShape::kNone) {
-    DrawAoe(renderer_, AoeCells(view_.Map(), view_.Aoe()), cell_size_,
-            camera_x_, camera_y_);
+    DrawAoe(renderer_, AoeCells(view_.Map(), view_.Aoe()), camera_.cell_size,
+            camera_.x, camera_.y);
   }
   const TokenId active_id =
       encounter.active && encounter.turn_index < encounter.order.size()
           ? encounter.order[encounter.turn_index]
           : 0;
-  DrawTokens(renderer_, shown, cell_size_, camera_x_, camera_y_, text_.get(),
-             selected_id_, active_id, &art);
+  DrawTokens(renderer_, shown, camera_.cell_size, camera_.x, camera_.y,
+             text_.get(), selected_id_, active_id, &art);
   const std::uint32_t now = CurrentTimeSeconds();
   view_.PrunePings(now);
-  DrawPings(renderer_, view_.Pings(), now, cell_size_, camera_x_, camera_y_,
-            text_.get());
+  DrawPings(renderer_, view_.Pings(), now, camera_.cell_size, camera_.x,
+            camera_.y, text_.get());
   if (measure_start_.has_value() && measure_end_.has_value()) {
-    DrawRuler(renderer_, *measure_start_, *measure_end_, cell_size_, camera_x_,
-              camera_y_);
+    DrawRuler(renderer_, *measure_start_, *measure_end_, camera_.cell_size,
+              camera_.x, camera_.y);
     const int dx = std::abs(measure_end_->x - measure_start_->x);
     const int dy = std::abs(measure_end_->y - measure_start_->y);
     const int cells = std::max(dx, dy);
     const float label_x =
-        camera_x_ +
+        camera_.x +
         ((static_cast<float>(measure_start_->x + measure_end_->x) + 1.0F) *
-         cell_size_ / 2.0F);
+         camera_.cell_size / 2.0F);
     const float label_y =
-        camera_y_ +
+        camera_.y +
         ((static_cast<float>(measure_start_->y + measure_end_->y) + 1.0F) *
-         cell_size_ / 2.0F);
+         camera_.cell_size / 2.0F);
     text_->Draw(
         FormatMeters(cells), label_x + 8.0F, label_y - 8.0F,
         SDL_Color{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = SDL_ALPHA_OPAQUE},
@@ -3382,8 +3295,9 @@ auto App::Iterate() -> void {
   const bool can_claim = is_client && selected != nullptr &&
                          selected->kind == TokenKind::kPlayer &&
                          selected->owner.empty() && !PlayerHasCharacter();
-  const bool can_release = is_client && selected != nullptr &&
-                           selected->owner == options_.player_name;
+  const bool can_release =
+      is_client && selected != nullptr &&
+      SamePlayerName(selected->owner, options_.player_name);
   MovementInfo movement = MovementInfo::kFree;
   if (is_dm) {
     movement = MovementInfo::kHidden;
@@ -3397,12 +3311,13 @@ auto App::Iterate() -> void {
   players_top_ = players_y;
   DrawPlayersPanel(renderer_, text_.get(), players_, players_y);
   if (dragging_ && drag_target_.has_value()) {
-    DrawCellHighlight(renderer_, *drag_target_, cell_size_, camera_x_,
-                      camera_y_);
+    DrawCellHighlight(renderer_, *drag_target_, camera_.cell_size, camera_.x,
+                      camera_.y);
   }
   log_top_ =
-      DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_active_,
-                   chat_input_, options_.mode == AppMode::kHost, log_scroll_);
+      DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_.Active(),
+                   std::string(chat_.Text()), options_.mode == AppMode::kHost,
+                   log_scroll_.Offset());
   if (sheet_active_) {
     const Token* sheet_token = nullptr;
     for (const Token& token : view_.Tokens()) {

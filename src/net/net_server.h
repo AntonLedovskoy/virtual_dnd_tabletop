@@ -62,6 +62,7 @@ class NetServer {
             std::vector<PeerId>& dropped) -> void;
 
   auto SendWelcome(PeerId peer, const Welcome& welcome) -> void;
+  auto SendEvent(PeerId peer, const Event& event) -> void;
   auto BroadcastEvent(const Event& event) -> void;
   auto Reject(PeerId peer, const std::string& reason) -> void;
 
@@ -101,6 +102,8 @@ class NetServer {
   std::vector<Peer> peers_;
   PeerId next_peer_id_ = 1;
   std::string password_;
+  // Ключи имён (PlayerNameKey), а не имена как их набрали: кик не обходится
+  // сменой регистра.
   std::vector<std::string> banned_names_;
   bool roster_dirty_ = false;
 };

@@ -9,6 +9,8 @@
 #include "core/clock.h"
 #include "core/conditions.h"
 #include "core/dice.h"
+#include "core/levels.h"
+#include "core/player_name.h"
 #include "core/units.h"
 
 namespace dnd {
@@ -60,18 +62,21 @@ auto TokensWithSpentMovement(const GameState& state) -> std::vector<TokenId> {
 
 }  // namespace
 
-GameServer::GameServer(GameSnapshot snapshot, int sight_radius,
+GameServer::GameServer(const GameSnapshot& snapshot, int sight_radius,
                        std::uint32_t rng_seed)
-    : state_(std::move(snapshot)),
-      fog_(state_.Map().Width(), state_.Map().Height()),
+    : state_(snapshot),
+      party_fog_(state_.Map().Width(), state_.Map().Height()),
       sight_radius_(sight_radius),
       rng_(rng_seed) {
+  RestoreFog(snapshot.fog);
   RecomputeFog();
 }
 
 auto GameServer::Reset(GameSnapshot snapshot) -> void {
+  const std::vector<FogRecord> records = std::move(snapshot.fog);
+  snapshot.fog.clear();
   state_ = GameState(std::move(snapshot));
-  fog_ = FogOfWar(state_.Map().Width(), state_.Map().Height());
+  RestoreFog(records);
   RecomputeFog();
 }
 
@@ -134,6 +139,12 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandlePing(cmd, actor);
         } else if constexpr (std::is_same_v<T, SetMapBackground>) {
           return HandleSetMapBackground(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, RevealArea>) {
+          return HandleReveal(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, ClearRevealed>) {
+          return HandleClearRevealed(can_control_all);
+        } else if constexpr (std::is_same_v<T, AwardXp>) {
+          return HandleAwardXp(cmd, can_control_all);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -154,7 +165,7 @@ auto GameServer::CanControl(const Token& token, const std::string& actor,
   if (token.owner.empty()) {
     return true;
   }
-  return token.owner == actor;
+  return SamePlayerName(token.owner, actor);
 }
 
 auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
@@ -166,18 +177,44 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   if (!CanControl(*token, actor, can_control_all)) {
     return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
   }
+  // Игрок не может вслепую ткнуть в неразведанную клетку. DM двигает токены
+  // свободно, а разведанная клетка остаётся допустимой, даже если сейчас
+  // скрыта туманом.
+  if (!can_control_all && !IsExploredTo(actor, command.target)) {
+    return CommandOutcome{.reject_reason = "клетка не разведана"};
+  }
 
-  // В бою игрок тратит запас движения за ход; DM двигает токены свободно.
+  // Проверяем путь и для игрока вне боя: сквозь стены и монстров нельзя.
+  // Свои персонажи друг друга не блокируют, но встать на занятую клетку
+  // нельзя. DM по-прежнему двигает токены свободно.
+  std::vector<Cell> blockers;
+  bool target_occupied = false;
+  for (const Token& other : state_.Tokens()) {
+    if (other.id == command.id) {
+      continue;
+    }
+    if (other.cell == command.target) {
+      target_occupied = true;
+    }
+    if (other.kind != TokenKind::kPlayer) {
+      blockers.push_back(other.cell);
+    }
+  }
+  if (!can_control_all && target_occupied) {
+    return CommandOutcome{.reject_reason = "клетка занята"};
+  }
+
   const bool budgeted = state_.EncounterState().active && !can_control_all;
-  int steps = 0;
-  if (budgeted) {
-    const std::optional<int> path =
-        PathCostCells(state_.Map(), token->cell, command.target);
+  std::optional<PathCost> path;
+  if (!can_control_all) {
+    path = PathCostCells(state_.Map(), token->cell, command.target,
+                         token->diagonal_parity, blockers);
     if (!path.has_value()) {
       return CommandOutcome{.reject_reason = "нет пути к клетке"};
     }
-    steps = *path;
-    if (token->movement_used + steps > SpeedToCells(token->speed)) {
+  }
+  if (budgeted) {
+    if (token->movement_used + path->cost > SpeedToCells(token->speed)) {
       return CommandOutcome{.reject_reason = "не хватает движения на ход"};
     }
   }
@@ -192,14 +229,11 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   outcome.accepted = true;
   outcome.events.emplace_back(*event);
   if (budgeted) {
-    if (std::optional<Token> moved = state_.SpendMovement(command.id, steps)) {
+    if (std::optional<Token> moved = state_.SpendMovement(
+            command.id, path->cost, path->diagonal_parity)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*moved)});
     }
   }
-  outcome.events.emplace_back(ViewUpdated{
-      .snapshot = ClientSnapshot(),
-      .fog = fog_.Snapshot(),
-  });
   return outcome;
 }
 
@@ -352,10 +386,6 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   if (command.kind == TokenKind::kPlayer) {
     // Новый персонаж может изменить обзор партии.
     RecomputeFog();
-    outcome.events.emplace_back(ViewUpdated{
-        .snapshot = ClientSnapshot(),
-        .fog = fog_.Snapshot(),
-    });
   }
   return outcome;
 }
@@ -383,10 +413,6 @@ auto GameServer::HandleRemoveToken(const RemoveToken& command,
   }
   if (was_player) {
     RecomputeFog();
-    outcome.events.emplace_back(ViewUpdated{
-        .snapshot = ClientSnapshot(),
-        .fog = fog_.Snapshot(),
-    });
   }
   return outcome;
 }
@@ -691,12 +717,12 @@ auto GameServer::HandleClaimToken(const ClaimToken& command,
   if (actor.empty()) {
     return CommandOutcome{.reject_reason = "владельца назначает DM"};
   }
-  if (!token->owner.empty() && token->owner != actor) {
+  if (!token->owner.empty() && !SamePlayerName(token->owner, actor)) {
     return CommandOutcome{.reject_reason = "токен контролирует другой игрок"};
   }
   for (const Token& other : state_.Tokens()) {
     if (other.id != command.id && other.kind == TokenKind::kPlayer &&
-        other.owner == actor) {
+        SamePlayerName(other.owner, actor)) {
       return CommandOutcome{.reject_reason = "у игрока уже есть персонаж"};
     }
   }
@@ -704,6 +730,7 @@ auto GameServer::HandleClaimToken(const ClaimToken& command,
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось забрать персонажа"};
   }
+  RecomputeFog();
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
@@ -720,13 +747,14 @@ auto GameServer::HandleReleaseToken(const ReleaseToken& command,
   if (token == nullptr) {
     return CommandOutcome{.reject_reason = "токен не найден"};
   }
-  if (token->owner != actor) {
+  if (!SamePlayerName(token->owner, actor)) {
     return CommandOutcome{.reject_reason = "это не ваш персонаж"};
   }
   const std::optional<Token> updated = state_.SetTokenOwner(command.id, "");
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось освободить персонажа"};
   }
+  RecomputeFog();
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
@@ -746,6 +774,7 @@ auto GameServer::HandleSetTokenOwner(const SetTokenOwner& command,
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "токен не найден"};
   }
+  RecomputeFog();
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
@@ -1052,12 +1081,157 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
   return outcome;
 }
 
-auto GameServer::ClientSnapshot() const -> GameSnapshot {
-  GameSnapshot snapshot = state_.Snapshot();
-  std::erase_if(snapshot.tokens, [this](const Token& token) -> bool {
-    return !fog_.IsVisible(token.cell);
+auto GameServer::HandleReveal(const RevealArea& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "области открывает только DM"};
+  }
+  if (command.radius <= 0 || command.radius > kMaxRevealRadiusCells) {
+    return CommandOutcome{.reject_reason = "некорректный радиус открытия"};
+  }
+  if (!state_.Map().Contains(command.cell)) {
+    return CommandOutcome{.reject_reason = "клетка за пределами карты"};
+  }
+  if (!state_.RevealArea(command.cell, command.radius)) {
+    return CommandOutcome{.accepted = true};
+  }
+  RecomputeFog();
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(RevealedUpdated{.cells = state_.Revealed()});
+  return outcome;
+}
+
+auto GameServer::HandleClearRevealed(bool can_control_all) -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "области открывает только DM"};
+  }
+  if (!state_.ClearRevealed()) {
+    return CommandOutcome{.accepted = true};
+  }
+  RecomputeFog();
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(RevealedUpdated{});
+  return outcome;
+}
+
+auto GameServer::HandleAwardXp(const AwardXp& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "опыт начисляет только DM"};
+  }
+  if (command.amount <= 0 || command.amount > kMaxXpAward) {
+    return CommandOutcome{.reject_reason = "некорректное количество опыта"};
+  }
+
+  std::vector<TokenId> targets;
+  if (command.party) {
+    for (const Token& token : state_.Tokens()) {
+      if (token.kind == TokenKind::kPlayer) {
+        targets.push_back(token.id);
+      }
+    }
+    if (targets.empty()) {
+      return CommandOutcome{.reject_reason = "в партии нет персонажей"};
+    }
+  } else {
+    const Token* token = FindToken(command.id);
+    if (token == nullptr) {
+      return CommandOutcome{.reject_reason = "токен не найден"};
+    }
+    if (token->kind != TokenKind::kPlayer) {
+      return CommandOutcome{.reject_reason = "опыт получают только персонажи"};
+    }
+    targets.push_back(command.id);
+  }
+
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  std::ostringstream summary;
+  if (command.party) {
+    summary << "Партия получает " << command.amount << " опыта";
+  } else {
+    summary << FindToken(targets.front())->name << " получает "
+            << command.amount << " опыта";
+  }
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = "DM",
+                      .text = summary.str(),
+                      .timestamp = CurrentTimeSeconds()},
   });
+
+  for (const TokenId id : targets) {
+    const Token* token = FindToken(id);
+    const std::string name = token->name;
+    const int before = LevelForXp(token->xp);
+    const std::optional<Token> updated = state_.AddXp(id, command.amount);
+    if (!updated.has_value()) {
+      continue;
+    }
+    outcome.events.emplace_back(TokenUpdated{.token = *updated});
+    const int after = LevelForXp(updated->xp);
+    if (after > before) {
+      std::ostringstream line;
+      line << name << " получает " << after << " уровень";
+      outcome.events.emplace_back(LogLineAdded{
+          .line = LogLine{.author = "DM",
+                          .text = line.str(),
+                          .timestamp = CurrentTimeSeconds()},
+      });
+    }
+  }
+  return outcome;
+}
+
+auto GameServer::PlayerFog(std::string_view actor) const -> const FogOfWar* {
+  const auto it = fogs_.find(PlayerNameKey(actor));
+  return it == fogs_.end() ? nullptr : &it->second;
+}
+
+auto GameServer::IsVisibleTo(std::string_view actor, Cell cell) const -> bool {
+  if (const FogOfWar* fog = PlayerFog(actor); fog != nullptr) {
+    if (fog->IsVisible(cell)) {
+      return true;
+    }
+  } else if (party_fog_.IsVisible(cell)) {
+    // Игрок ещё не выбрал персонажа: ему показывают общий вид партии.
+    return true;
+  }
+  return state_.IsRevealed(cell);
+}
+
+auto GameServer::IsExploredTo(std::string_view actor, Cell cell) const -> bool {
+  const FogOfWar* own = PlayerFog(actor);
+  const FogOfWar& fog = own != nullptr ? *own : party_fog_;
+  return fog.IsExplored(cell) || state_.IsRevealed(cell);
+}
+
+auto GameServer::Snapshot() const -> GameSnapshot {
+  GameSnapshot snapshot = state_.Snapshot();
+  snapshot.fog = FogRecords();
   return snapshot;
+}
+
+auto GameServer::ClientSnapshot(std::string_view actor) const -> GameSnapshot {
+  GameSnapshot snapshot = state_.Snapshot();
+  std::erase_if(snapshot.tokens, [this, actor](const Token& token) -> bool {
+    return !IsVisibleTo(actor, token.cell);
+  });
+  // Открытые DM-ом клетки клиенту не нужны: их видимость уже в тумане, а
+  // список может быть длинным и повторялся бы в каждом обновлении вида.
+  snapshot.revealed.clear();
+  // Туман других игроков по сети не ходит: клиент получает только свой.
+  snapshot.fog.clear();
+  return snapshot;
+}
+
+auto GameServer::FogState(std::string_view actor) const -> FogSnapshot {
+  if (const FogOfWar* fog = PlayerFog(actor); fog != nullptr) {
+    return fog->Snapshot();
+  }
+  // До выбора персонажа игрок видит общий обзор партии; после — только свой.
+  return party_fog_.Snapshot();
 }
 
 auto GameServer::FullFogState() const -> FogSnapshot {
@@ -1073,15 +1247,16 @@ auto GameServer::FullFogState() const -> FogSnapshot {
   };
 }
 
-auto GameServer::EventVisibleToPlayers(const Event& event) const -> bool {
+auto GameServer::EventVisibleTo(const Event& event,
+                                std::string_view actor) const -> bool {
   return std::visit(
-      [this](const auto& ev) -> bool {
+      [this, actor](const auto& ev) -> bool {
         using T = std::decay_t<decltype(ev)>;
         if constexpr (std::is_same_v<T, TokenMoved>) {
-          return fog_.IsVisible(ev.to);
+          return IsVisibleTo(actor, ev.to);
         } else if constexpr (std::is_same_v<T, TokenAdded> ||
                              std::is_same_v<T, TokenUpdated>) {
-          return fog_.IsVisible(ev.token.cell);
+          return IsVisibleTo(actor, ev.token.cell);
         }
         return true;
       },
@@ -1097,14 +1272,76 @@ auto GameServer::FindToken(TokenId id) const -> const Token* {
   return nullptr;
 }
 
-auto GameServer::RecomputeFog() -> void {
-  std::vector<Cell> observer_cells;
-  for (const Token& token : state_.Tokens()) {
-    if (token.kind == TokenKind::kPlayer) {
-      observer_cells.push_back(token.cell);
+auto GameServer::RestoreFog(const std::vector<FogRecord>& records) -> void {
+  const int width = state_.Map().Width();
+  const int height = state_.Map().Height();
+  const auto cells =
+      static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+  fogs_.clear();
+  party_fog_ = FogOfWar(width, height);
+  for (const FogRecord& record : records) {
+    // Снимок другой карты: исследованное некуда переносить, начинаем заново.
+    if (record.explored.size() != cells) {
+      continue;
+    }
+    FogOfWar fog(width, height);
+    fog.Restore(FogSnapshot{
+        .width = width,
+        .height = height,
+        .explored = record.explored,
+    });
+    if (record.owner.empty()) {
+      party_fog_ = std::move(fog);
+    } else {
+      fogs_.insert_or_assign(PlayerNameKey(record.owner), std::move(fog));
     }
   }
-  fog_.Recompute(state_.Map(), observer_cells, sight_radius_);
+}
+
+auto GameServer::FogRecords() const -> std::vector<FogRecord> {
+  std::vector<FogRecord> records;
+  records.reserve(fogs_.size() + 1);
+  records.push_back(FogRecord{.owner = {}, .explored = party_fog_.Explored()});
+  for (const auto& [owner, fog] : fogs_) {
+    records.push_back(FogRecord{.owner = owner, .explored = fog.Explored()});
+  }
+  return records;
+}
+
+auto GameServer::RecomputeFog() -> void {
+  // Обзор дают только персонажи; у каждого игрока свои наблюдатели.
+  std::map<std::string, std::vector<Cell>, std::less<>> observers;
+  std::vector<Cell> party_observers;
+  for (const Token& token : state_.Tokens()) {
+    if (token.kind != TokenKind::kPlayer) {
+      continue;
+    }
+    party_observers.push_back(token.cell);
+    if (!token.owner.empty()) {
+      observers[PlayerNameKey(token.owner)].push_back(token.cell);
+    }
+  }
+
+  const std::vector<Cell>& revealed = state_.Revealed();
+  party_fog_.Recompute(state_.Map(), party_observers, sight_radius_);
+  party_fog_.Reveal(revealed);
+  // Игрок без персонажа больше не видит клетку, но помнит исследованное.
+  for (auto& [owner, fog] : fogs_) {
+    const auto it = observers.find(owner);
+    fog.Recompute(state_.Map(),
+                  it == observers.end() ? std::vector<Cell>{} : it->second,
+                  sight_radius_);
+    fog.Reveal(revealed);
+  }
+  for (const auto& [owner, cells] : observers) {
+    if (fogs_.contains(owner)) {
+      continue;
+    }
+    FogOfWar fog(state_.Map().Width(), state_.Map().Height());
+    fog.Recompute(state_.Map(), cells, sight_radius_);
+    fog.Reveal(revealed);
+    fogs_.emplace(owner, std::move(fog));
+  }
 }
 
 }  // namespace dnd

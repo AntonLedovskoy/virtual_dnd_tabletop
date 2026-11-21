@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "core/player_name.h"
+
 namespace dnd {
 namespace {
 
@@ -146,7 +148,7 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
       Reject(peer.id, "пустое имя игрока");
       return;
     }
-    if (hello->player_name == "DM") {
+    if (SamePlayerName(hello->player_name, "DM")) {
       Reject(peer.id, "имя DM зарезервировано");
       return;
     }
@@ -155,8 +157,10 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
       Reject(peer.id, "неверный пароль");
       return;
     }
-    if (std::ranges::find(banned_names_, hello->player_name) !=
-        banned_names_.end()) {
+    // Запрет и склейка имён тоже без учёта регистра: иначе "Player" обходит
+    // кик игрока "player" и садится рядом с ним под тем же вымышленным именем.
+    const std::string key = PlayerNameKey(hello->player_name);
+    if (std::ranges::find(banned_names_, key) != banned_names_.end()) {
       Reject(peer.id, "вы исключены из игры");
       return;
     }
@@ -164,7 +168,7 @@ auto NetServer::HandleFrame(Peer& peer, const std::vector<std::uint8_t>& frame,
         std::ranges::any_of(peers_, [&hello, &peer](const Peer& other) -> bool {
           return other.id != peer.id && other.welcomed &&
                  other.connection->Connected() &&
-                 other.name == hello->player_name;
+                 SamePlayerName(other.name, hello->player_name);
         });
     if (duplicate) {
       Reject(peer.id, "имя игрока уже занято");
@@ -215,6 +219,13 @@ auto NetServer::SendWelcome(PeerId peer_id, const Welcome& welcome) -> void {
   }
 }
 
+auto NetServer::SendEvent(PeerId peer_id, const Event& event) -> void {
+  Peer* peer = FindPeer(peer_id);
+  if (peer != nullptr && peer->welcomed) {
+    peer->connection->QueueFrame(EncodeEventMessage(event));
+  }
+}
+
 auto NetServer::BroadcastEvent(const Event& event) -> void {
   const std::vector<std::uint8_t> frame = EncodeEventMessage(event);
   for (Peer& peer : peers_) {
@@ -244,12 +255,12 @@ auto NetServer::Peers() const -> std::vector<PeerInfo> {
 auto NetServer::KickByName(const std::string& name) -> bool {
   const auto it =
       std::ranges::find_if(peers_, [&name](const Peer& peer) -> bool {
-        return peer.welcomed && peer.name == name;
+        return peer.welcomed && SamePlayerName(peer.name, name);
       });
   if (it == peers_.end()) {
     return false;
   }
-  banned_names_.push_back(it->name);
+  banned_names_.push_back(PlayerNameKey(it->name));
   peers_.erase(it);
   roster_dirty_ = true;
   return true;

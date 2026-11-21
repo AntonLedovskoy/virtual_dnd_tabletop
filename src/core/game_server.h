@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <random>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/command.h"
@@ -26,7 +28,7 @@ struct CommandOutcome {
 class GameServer {
  public:
   // Обзор партии дают только токены персонажей (kPlayer), не NPC и не монстры.
-  GameServer(GameSnapshot snapshot, int sight_radius,
+  GameServer(const GameSnapshot& snapshot, int sight_radius,
              std::uint32_t rng_seed = std::random_device{}());
 
   // Заменяет мир (загрузка/сохранение) и пересчитывает видимость.
@@ -40,21 +42,28 @@ class GameServer {
                                    bool can_control_all) -> CommandOutcome;
 
   [[nodiscard]] auto State() const -> const GameState& { return state_; }
-  [[nodiscard]] auto Snapshot() const -> GameSnapshot {
-    return state_.Snapshot();
-  }
-  // Вид игрока: только токены в пределах видимости партии.
-  [[nodiscard]] auto ClientSnapshot() const -> GameSnapshot;
-  // Вид DM: весь мир.
+  // Мир вместе с туманом игроков: так сцена попадает в файл и в историю отмены.
+  [[nodiscard]] auto Snapshot() const -> GameSnapshot;
+  // Вид игрока: только клетки и токены в его собственном поле зрения.
+  [[nodiscard]] auto ClientSnapshot(std::string_view actor) const
+      -> GameSnapshot;
+  // Вид DM: весь мир; туман ему не нужен, поэтому в снимке его нет.
   [[nodiscard]] auto DmSnapshot() const -> GameSnapshot {
     return state_.Snapshot();
   }
-  [[nodiscard]] auto FogState() const -> FogSnapshot { return fog_.Snapshot(); }
+  [[nodiscard]] auto FogState(std::string_view actor) const -> FogSnapshot;
   // DM видит все клетки, поэтому туману нечего скрывать.
   [[nodiscard]] auto FullFogState() const -> FogSnapshot;
 
-  // Можно ли отправлять это событие клиенту игрока.
-  [[nodiscard]] auto EventVisibleToPlayers(const Event& event) const -> bool;
+  // Можно ли отправлять это событие конкретному игроку.
+  [[nodiscard]] auto EventVisibleTo(const Event& event,
+                                    std::string_view actor) const -> bool;
+  // Видит ли игрок клетку: собственный туман или ручное открытие DM.
+  [[nodiscard]] auto IsVisibleTo(std::string_view actor, Cell cell) const
+      -> bool;
+  // Разведана ли клетка (видели раньше), даже если сейчас она в тумане.
+  [[nodiscard]] auto IsExploredTo(std::string_view actor, Cell cell) const
+      -> bool;
 
  private:
   [[nodiscard]] static auto CanControl(const Token& token,
@@ -140,13 +149,28 @@ class GameServer {
   [[nodiscard]] auto HandleSetMapBackground(const SetMapBackground& command,
                                             bool can_control_all)
       -> CommandOutcome;
+  // Открытие областей столу: ручной инструмент DM.
+  [[nodiscard]] auto HandleReveal(const RevealArea& command,
+                                  bool can_control_all) -> CommandOutcome;
+  [[nodiscard]] auto HandleClearRevealed(bool can_control_all)
+      -> CommandOutcome;
+  [[nodiscard]] auto HandleAwardXp(const AwardXp& command, bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleNextTurn(bool can_control_all) -> CommandOutcome;
 
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;
+  [[nodiscard]] auto PlayerFog(std::string_view actor) const -> const FogOfWar*;
+  // Туман сцены: переживает смену мира, карту другой формы не переносит.
+  auto RestoreFog(const std::vector<FogRecord>& records) -> void;
+  [[nodiscard]] auto FogRecords() const -> std::vector<FogRecord>;
   auto RecomputeFog() -> void;
 
   GameState state_;
-  FogOfWar fog_;
+  // Туман на каждого владельца персонажа; ключ — PlayerNameKey игрока,
+  // поэтому регистр в /owner и в имени подключившегося не важен.
+  std::map<std::string, FogOfWar, std::less<>> fogs_;
+  // Обзор партии: его получает игрок, пока не выбрал персонажа.
+  FogOfWar party_fog_;
   int sight_radius_;
   std::mt19937 rng_;
 };

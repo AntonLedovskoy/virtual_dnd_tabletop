@@ -14,6 +14,8 @@
 
 #include "app/strings.h"
 #include "core/conditions.h"
+#include "core/levels.h"
+#include "core/player_name.h"
 #include "core/units.h"
 #include "render/text_renderer.h"
 
@@ -308,7 +310,9 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
     hp_line += " (+" + std::to_string(token->temp_hp) + ")";
   }
   hp_line += "   " + std::string(strings::kInitiativeShort) + " " +
-             std::to_string(token->initiative);
+             std::to_string(token->initiative) + "   " +
+             std::string(strings::kLevelShort) + " " +
+             std::to_string(LevelForXp(token->xp));
   lines.push_back(std::move(hp_line));
   lines.emplace_back(std::string(strings::kSheetAc) + ": " +
                      std::to_string(token->ac) + "   " +
@@ -345,7 +349,7 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
   if (is_client && can_release) {
     hints.emplace_back(strings::kReleaseHint);
   }
-  if (is_client && token->owner == player_name) {
+  if (is_client && SamePlayerName(token->owner, player_name)) {
     hints.emplace_back(strings::kYourToken);
   }
   if (!is_client) {
@@ -596,7 +600,11 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   cursor_y += text->LineHeight() + 8.0F;
   text->Draw(std::string(KindLabel(token.kind)) + "  HP " +
                  std::to_string(token.hp) + "/" + std::to_string(token.max_hp) +
-                 "  Иниц. " + std::to_string(token.initiative),
+                 "  Иниц. " + std::to_string(token.initiative) + "  " +
+                 std::string(strings::kSheetLevel) + " " +
+                 std::to_string(LevelForXp(token.xp)) + "  " +
+                 std::string(strings::kSheetXp) + " " +
+                 std::to_string(token.xp),
              left, cursor_y, kHintText, content_width);
 
   const SDL_FRect ac_field{left, y + 114.0F, 220.0F, 40.0F};

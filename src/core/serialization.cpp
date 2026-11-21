@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "core/byte_io.h"
+#include "core/levels.h"
 #include "core/map_background.h"
 
 namespace dnd {
@@ -12,6 +13,10 @@ namespace {
 
 constexpr std::uint32_t kMaxDimension = 4096;
 constexpr std::uint32_t kMaxTokens = 100000;
+// Сколько клеток DM может открыть вручную в одном снапшоте/событии.
+constexpr std::uint32_t kMaxRevealedCells = 1000000;
+// Туман хранится на каждого игрока плюс общий обзор партии.
+constexpr std::uint32_t kMaxFogRecords = 32;
 constexpr std::uint32_t kMaxNameLength = 256;
 constexpr std::uint32_t kMaxChatText = 256;
 constexpr std::uint32_t kMaxLogText = 512;
@@ -49,6 +54,9 @@ constexpr std::uint8_t kCommandDeathSave = 25;
 constexpr std::uint8_t kCommandPing = 26;
 constexpr std::uint8_t kCommandSetMapBackground = 27;
 constexpr std::uint8_t kCommandSetTokenPortrait = 28;
+constexpr std::uint8_t kCommandRevealArea = 29;
+constexpr std::uint8_t kCommandClearRevealed = 30;
+constexpr std::uint8_t kCommandAwardXp = 31;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -60,6 +68,7 @@ constexpr std::uint8_t kEventEncounterUpdated = 7;
 constexpr std::uint8_t kEventAoeUpdated = 8;
 constexpr std::uint8_t kEventPingMarker = 9;
 constexpr std::uint8_t kEventMapBackgroundUpdated = 10;
+constexpr std::uint8_t kEventRevealedUpdated = 11;
 
 auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.U32(token.id);
@@ -86,9 +95,11 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
     writer.I32(condition.rounds);
   }
   writer.I32(token.movement_used);
+  writer.I32(token.diagonal_parity);
   writer.I32(token.death_save_successes);
   writer.I32(token.death_save_failures);
   writer.String(token.portrait);
+  writer.I32(token.xp);
 }
 
 auto ReadToken(ByteReader& reader, Token& token) -> bool {
@@ -113,9 +124,11 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::uint32_t condition_count = 0;
   std::vector<Condition> conditions;
   std::int32_t movement_used = 0;
+  std::int32_t diagonal_parity = 0;
   std::int32_t death_successes = 0;
   std::int32_t death_failures = 0;
   std::string portrait;
+  std::int32_t xp = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -137,9 +150,10 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
     }
     conditions.emplace_back(std::move(condition_name), rounds);
   }
-  if (!reader.I32(movement_used) || !reader.I32(death_successes) ||
-      !reader.I32(death_failures) ||
-      !reader.String(portrait, kMaxImageNameLength) || death_successes < 0 ||
+  if (!reader.I32(movement_used) || !reader.I32(diagonal_parity) ||
+      !reader.I32(death_successes) || !reader.I32(death_failures) ||
+      !reader.String(portrait, kMaxImageNameLength) || !reader.I32(xp) ||
+      diagonal_parity < 0 || diagonal_parity > 1 || death_successes < 0 ||
       death_successes > 3 || death_failures < 0 || death_failures > 3) {
     return false;
   }
@@ -148,6 +162,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
       save_bonus < -100 || save_bonus > 100 || initiative_bonus < -100 ||
       initiative_bonus > 100 || movement_used < 0 || movement_used > 1000 ||
+      xp < 0 || xp > kMaxXp ||
       kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0 ||
       (!portrait.empty() && !IsSafeImageName(portrait))) {
@@ -169,7 +184,9 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .initiative_bonus = initiative_bonus,
       .damage = std::move(damage),
       .conditions = std::move(conditions),
+      .xp = xp,
       .movement_used = movement_used,
+      .diagonal_parity = diagonal_parity,
       .death_save_successes = death_successes,
       .death_save_failures = death_failures,
       .kind = static_cast<TokenKind>(kind),
@@ -567,6 +584,34 @@ auto DecodeSetTokenPortraitCommand(ByteReader& reader)
   return Command{SetTokenPortrait{.id = id, .portrait = std::move(portrait)}};
 }
 
+auto DecodeRevealAreaCommand(ByteReader& reader) -> std::optional<Command> {
+  Cell cell;
+  std::uint32_t radius = 0;
+  if (!ReadPosition(reader, cell) || !reader.U32(radius) || !reader.Done() ||
+      radius == 0 || radius > kMaxRevealRadiusCells) {
+    return std::nullopt;
+  }
+  return Command{RevealArea{.cell = cell, .radius = static_cast<int>(radius)}};
+}
+
+auto DecodeClearRevealedCommand(ByteReader& reader) -> std::optional<Command> {
+  if (!reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{ClearRevealed{}};
+}
+
+auto DecodeAwardXpCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::int32_t amount = 0;
+  std::uint8_t party = 0;
+  if (!reader.U32(id) || !reader.I32(amount) || !reader.U8(party) ||
+      !reader.Done() || amount <= 0 || amount > kMaxXpAward || party > 1) {
+    return std::nullopt;
+  }
+  return Command{AwardXp{.id = id, .amount = amount, .party = party != 0}};
+}
+
 auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
     -> std::optional<Command> {
   std::uint32_t id = 0;
@@ -648,6 +693,28 @@ auto DecodeMapBackgroundUpdatedEvent(ByteReader& reader)
     return std::nullopt;
   }
   return Event{MapBackgroundUpdated{.background = std::move(background)}};
+}
+
+auto DecodeRevealedUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
+  std::uint32_t count = 0;
+  if (!reader.U32(count) || count > kMaxRevealedCells) {
+    return std::nullopt;
+  }
+  std::vector<Cell> cells;
+  cells.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    Cell cell;
+    if (!ReadPosition(reader, cell) || cell.x < 0 || cell.y < 0 ||
+        std::cmp_greater_equal(cell.x, kMaxDimension) ||
+        std::cmp_greater_equal(cell.y, kMaxDimension)) {
+      return std::nullopt;
+    }
+    cells.push_back(cell);
+  }
+  if (!reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{RevealedUpdated{.cells = std::move(cells)}};
 }
 
 auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
@@ -739,6 +806,36 @@ auto DecodeTokenUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   return Event{TokenUpdated{.token = std::move(token)}};
 }
 
+auto WriteFogRecords(ByteWriter& writer, const std::vector<FogRecord>& records)
+    -> void {
+  writer.U32(static_cast<std::uint32_t>(records.size()));
+  for (const FogRecord& record : records) {
+    writer.String(record.owner);
+    writer.U32(static_cast<std::uint32_t>(record.explored.size()));
+    writer.Bytes(record.explored.data(), record.explored.size());
+  }
+}
+
+// Каждая запись обязана описывать ровно клетки этой карты: иначе файл чужой.
+auto ReadFogRecords(ByteReader& reader, std::uint32_t map_cells,
+                    std::vector<FogRecord>& records) -> bool {
+  std::uint32_t count = 0;
+  if (!reader.U32(count) || count > kMaxFogRecords) {
+    return false;
+  }
+  records.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    FogRecord record;
+    std::uint32_t cells = 0;
+    if (!reader.String(record.owner, kMaxNameLength) || !reader.U32(cells) ||
+        cells != map_cells || !reader.Bytes(cells, record.explored)) {
+      return false;
+    }
+    records.push_back(std::move(record));
+  }
+  return true;
+}
+
 }  // namespace
 
 auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
@@ -758,6 +855,12 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
   WriteEncounter(writer, snapshot.encounter);
   WriteAoe(writer, snapshot.aoe);
   WriteMapBackground(writer, snapshot.background);
+  writer.U32(static_cast<std::uint32_t>(snapshot.revealed.size()));
+  for (const Cell cell : snapshot.revealed) {
+    writer.I32(cell.x);
+    writer.I32(cell.y);
+  }
+  WriteFogRecords(writer, snapshot.fog);
   return writer.Data();
 }
 
@@ -809,7 +912,31 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
   AoeTemplate aoe;
   MapBackground background;
   if (!ReadEncounter(reader, encounter) || !ReadAoe(reader, aoe) ||
-      !ReadMapBackground(reader, background) || !reader.Done()) {
+      !ReadMapBackground(reader, background)) {
+    return std::nullopt;
+  }
+
+  std::uint32_t revealed_count = 0;
+  const auto map_cells = static_cast<std::uint32_t>(map.Width()) *
+                         static_cast<std::uint32_t>(map.Height());
+  if (!reader.U32(revealed_count) || revealed_count > map_cells ||
+      revealed_count > kMaxRevealedCells) {
+    return std::nullopt;
+  }
+  std::vector<Cell> revealed;
+  revealed.reserve(revealed_count);
+  for (std::uint32_t i = 0; i < revealed_count; ++i) {
+    Cell cell;
+    if (!ReadPosition(reader, cell) || !map.Contains(cell)) {
+      return std::nullopt;
+    }
+    revealed.push_back(cell);
+  }
+  std::vector<FogRecord> fog;
+  if (!ReadFogRecords(reader, map_cells, fog)) {
+    return std::nullopt;
+  }
+  if (!reader.Done()) {
     return std::nullopt;
   }
 
@@ -820,6 +947,8 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
       .encounter = std::move(encounter),
       .aoe = aoe,
       .background = std::move(background),
+      .revealed = std::move(revealed),
+      .fog = std::move(fog),
   };
 }
 
@@ -984,6 +1113,18 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandSetTokenPortrait);
           writer.U32(cmd.id);
           writer.String(cmd.portrait);
+        } else if constexpr (std::is_same_v<T, RevealArea>) {
+          writer.U8(kCommandRevealArea);
+          writer.I32(cmd.cell.x);
+          writer.I32(cmd.cell.y);
+          writer.U32(static_cast<std::uint32_t>(cmd.radius));
+        } else if constexpr (std::is_same_v<T, ClearRevealed>) {
+          writer.U8(kCommandClearRevealed);
+        } else if constexpr (std::is_same_v<T, AwardXp>) {
+          writer.U8(kCommandAwardXp);
+          writer.U32(cmd.id);
+          writer.I32(cmd.amount);
+          writer.U8(cmd.party ? 1 : 0);
         }
       },
       command);
@@ -1054,6 +1195,12 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeSetMapBackgroundCommand(reader);
     case kCommandSetTokenPortrait:
       return DecodeSetTokenPortraitCommand(reader);
+    case kCommandRevealArea:
+      return DecodeRevealAreaCommand(reader);
+    case kCommandClearRevealed:
+      return DecodeClearRevealedCommand(reader);
+    case kCommandAwardXp:
+      return DecodeAwardXpCommand(reader);
     default:
       return std::nullopt;
   }
@@ -1108,6 +1255,13 @@ auto EncodeEvent(const Event& event) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, MapBackgroundUpdated>) {
           writer.U8(kEventMapBackgroundUpdated);
           WriteMapBackground(writer, ev.background);
+        } else if constexpr (std::is_same_v<T, RevealedUpdated>) {
+          writer.U8(kEventRevealedUpdated);
+          writer.U32(static_cast<std::uint32_t>(ev.cells.size()));
+          for (const Cell cell : ev.cells) {
+            writer.I32(cell.x);
+            writer.I32(cell.y);
+          }
         }
       },
       event);
@@ -1142,6 +1296,8 @@ auto DecodeEvent(const std::uint8_t* data, std::size_t size)
       return DecodePingMarkerEvent(reader);
     case kEventMapBackgroundUpdated:
       return DecodeMapBackgroundUpdatedEvent(reader);
+    case kEventRevealedUpdated:
+      return DecodeRevealedUpdatedEvent(reader);
     default:
       return std::nullopt;
   }

@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
@@ -13,17 +16,27 @@
 #include <vector>
 
 #include "core/aoe.h"
+#include "core/autosave.h"
 #include "core/bestiary.h"
+#include "core/camera.h"
 #include "core/campaign.h"
 #include "core/campaign_io.h"
+#include "core/chat_command.h"
+#include "core/chat_input.h"
 #include "core/client_view.h"
 #include "core/conditions.h"
+#include "core/delete_confirm.h"
 #include "core/dice.h"
 #include "core/game_server.h"
 #include "core/game_state.h"
 #include "core/grid_map.h"
+#include "core/levels.h"
 #include "core/local_transport.h"
+#include "core/log_scroll.h"
+#include "core/menu_model.h"
+#include "core/navigation.h"
 #include "core/password.h"
+#include "core/player_name.h"
 #include "core/scene_io.h"
 #include "core/serialization.h"
 #include "core/session_log.h"
@@ -62,6 +75,12 @@ auto FogVisibleAt(const dnd::FogSnapshot& fog, int x, int y) -> bool {
                      static_cast<std::size_t>(x)] != 0;
 }
 
+auto FogExploredAt(const dnd::FogSnapshot& fog, int x, int y) -> bool {
+  return fog.explored[static_cast<std::size_t>(y) *
+                          static_cast<std::size_t>(fog.width) +
+                      static_cast<std::size_t>(x)] != 0;
+}
+
 auto TestGridMap() -> void {
   dnd::GridMap map(4, 3);
   Expect(map.Contains(CellAt(0, 0)), "map contains origin");
@@ -79,8 +98,10 @@ auto TestGridMap() -> void {
   Expect(HasCell(reachable, CellAt(0, 0)), "movement range includes origin");
   Expect(HasCell(reachable, CellAt(2, 0)),
          "movement range includes open cells");
+  Expect(HasCell(reachable, CellAt(1, 1)),
+         "first diagonal costs one cell under 5-10-5");
   Expect(!HasCell(reachable, CellAt(2, 2)), "movement range excludes walls");
-  Expect(!HasCell(reachable, CellAt(3, 3)), "movement range respects radius");
+  Expect(!HasCell(reachable, CellAt(3, 3)), "movement range respects budget");
 
   dnd::GridMap corner_map(3, 3);
   corner_map.SetBlocked(CellAt(1, 0), true);
@@ -89,14 +110,44 @@ auto TestGridMap() -> void {
   Expect(!HasCell(corner_range, CellAt(1, 1)),
          "movement range does not cut through a sealed corner");
 
-  Expect(dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(2, 0)) == 2,
+  const auto straight =
+      dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(2, 0));
+  Expect(straight.has_value() && straight->cost == 2,
          "path cost counts straight steps");
-  Expect(dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(0, 0)) == 0,
+  const auto stay =
+      dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(0, 0));
+  Expect(stay.has_value() && stay->cost == 0 && stay->diagonal_parity == 0,
          "path cost to the same cell is zero");
   Expect(!dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(2, 2)),
          "path cost skips walls");
   Expect(!dnd::PathCostCells(corner_map, CellAt(0, 0), CellAt(1, 1)),
          "path cost does not cut through a sealed corner");
+
+  const dnd::GridMap open(6, 6);
+  const auto two_diagonals =
+      dnd::PathCostCells(open, CellAt(0, 0), CellAt(2, 2));
+  Expect(two_diagonals.has_value() && two_diagonals->cost == 3 &&
+             two_diagonals->diagonal_parity == 0,
+         "two diagonals cost 5 then 10 feet under 5-10-5");
+  const auto three_diagonals =
+      dnd::PathCostCells(open, CellAt(0, 0), CellAt(3, 3));
+  Expect(three_diagonals.has_value() && three_diagonals->cost == 4 &&
+             three_diagonals->diagonal_parity == 1,
+         "the third diagonal costs 5 feet again");
+  const auto odd_start =
+      dnd::PathCostCells(open, CellAt(0, 0), CellAt(1, 1), 1);
+  Expect(odd_start.has_value() && odd_start->cost == 2 &&
+             odd_start->diagonal_parity == 0,
+         "a spent diagonal makes the next one cost 10 feet");
+
+  const std::array<dnd::Cell, 1> blocked{CellAt(1, 0)};
+  const auto detour =
+      dnd::PathCostCells(open, CellAt(0, 0), CellAt(2, 0), 0, blocked);
+  Expect(detour.has_value() && detour->cost > 2,
+         "occupied cells force a detour");
+  const auto occupied_target =
+      dnd::PathCostCells(open, CellAt(0, 0), CellAt(1, 0), 0, blocked);
+  Expect(!occupied_target.has_value(), "an occupied target is unreachable");
 }
 
 auto TestMoveRules() -> void {
@@ -177,7 +228,7 @@ auto TestFogExploredMemory() -> void {
 }
 
 auto TestServerVisibility() -> void {
-  dnd::GridMap map(10, 1);
+  dnd::GridMap map(10, 2);
   map.SetBlocked(CellAt(5, 0), true);
   const dnd::GameSnapshot snapshot{
       .map = map,
@@ -195,23 +246,23 @@ auto TestServerVisibility() -> void {
 
   dnd::GameServer server(snapshot, 10);
 
-  const dnd::GameSnapshot client = server.ClientSnapshot();
+  const dnd::GameSnapshot client = server.ClientSnapshot("alice");
   Expect(client.tokens.size() == 1, "hidden token is not in client snapshot");
   Expect(client.tokens.front().id == 1, "visible token is in client snapshot");
   Expect(server.DmSnapshot().tokens.size() == 2, "DM snapshot sees everything");
 
   dnd::ClientView view;
-  view.Reset(server.ClientSnapshot(), server.FogState());
+  view.Reset(server.ClientSnapshot("alice"), server.FogState("alice"));
   Expect(view.Fog().IsVisible(CellAt(0, 0)), "view receives server fog");
   Expect(!view.Fog().IsVisible(CellAt(8, 0)), "goblin cell is hidden");
 
   const dnd::CommandOutcome hidden = server.HandleCommand(
-      dnd::MoveToken{.id = 2, .target = CellAt(9, 0)}, "alice", false);
-  Expect(hidden.accepted, "free token move is accepted");
+      dnd::MoveToken{.id = 2, .target = CellAt(9, 0)}, "", true);
+  Expect(hidden.accepted, "the DM may move a hidden token");
   bool hidden_move_visible = false;
   for (const dnd::Event& event : hidden.events) {
     if (std::holds_alternative<dnd::TokenMoved>(event)) {
-      hidden_move_visible = server.EventVisibleToPlayers(event);
+      hidden_move_visible = server.EventVisibleTo(event, "alice");
     }
     view.Apply(event);
   }
@@ -224,7 +275,7 @@ auto TestServerVisibility() -> void {
   bool own_move_visible = false;
   for (const dnd::Event& event : own.events) {
     if (std::holds_alternative<dnd::TokenMoved>(event)) {
-      own_move_visible = server.EventVisibleToPlayers(event);
+      own_move_visible = server.EventVisibleTo(event, "alice");
     }
     view.Apply(event);
   }
@@ -232,18 +283,14 @@ auto TestServerVisibility() -> void {
   Expect(view.Tokens().front().cell == CellAt(1, 0), "client view moves token");
 
   // Токен, скрытый при входе клиента, должен появиться, когда он попадёт
-  // в поле зрения партии.
+  // в поле зрения игрока. После команды приложение присылает полный срез.
   const dnd::CommandOutcome reveal = server.HandleCommand(
       dnd::MoveToken{.id = 2, .target = CellAt(4, 0)}, "alice", false);
   Expect(reveal.accepted, "goblin move into sight is accepted");
-  bool view_refreshed = false;
   for (const dnd::Event& event : reveal.events) {
-    if (std::holds_alternative<dnd::ViewUpdated>(event)) {
-      view_refreshed = true;
-    }
     view.Apply(event);
   }
-  Expect(view_refreshed, "moves carry a full view refresh");
+  view.Reset(server.ClientSnapshot("alice"), server.FogState("alice"));
   Expect(view.Tokens().size() == 2,
          "revealed token appears in the client view");
 }
@@ -273,8 +320,8 @@ auto TestOwnership() -> void {
   };
   dnd::GameServer server(snapshot, 3);
 
-  Expect(server.ClientSnapshot().tokens.size() == 2,
-         "far goblin is hidden from players");
+  Expect(server.ClientSnapshot("alice").tokens.size() == 1,
+         "far goblin and ally are hidden from alice");
   Expect(server.DmSnapshot().tokens.size() == 3, "DM sees the goblin");
 
   const dnd::CommandOutcome owner_move = server.HandleCommand(
@@ -932,32 +979,325 @@ auto TestDynamicFogObservers() -> void {
       .map = map,
       .tokens = {dnd::Token{.id = 1,
                             .name = "hero",
+                            .owner = "alice",
                             .kind = dnd::TokenKind::kPlayer,
                             .cell = CellAt(0, 0)}},
       .next_token_id = 2,
   };
   dnd::GameServer server(snapshot, 2, 2);
-  Expect(!FogVisibleAt(server.FogState(), 10, 0),
-         "far cells start outside party vision");
+  Expect(!FogVisibleAt(server.FogState("alice"), 10, 0),
+         "far cells start outside the player's vision");
 
   const dnd::CommandOutcome added =
       server.HandleCommand(dnd::AddToken{.name = "ally",
                                          .cell = CellAt(10, 0),
+                                         .owner = "bob",
                                          .kind = dnd::TokenKind::kPlayer,
                                          .max_hp = 10},
                            "", true);
   Expect(added.accepted, "the DM can add a player character");
-  Expect(added.events.size() == 2, "adding a player refreshes the party view");
-  Expect(FogVisibleAt(server.FogState(), 10, 0),
-         "a new player character expands the party vision");
+  Expect(FogVisibleAt(server.FogState("bob"), 10, 0),
+         "a new character gives its player vision");
+  Expect(!FogVisibleAt(server.FogState("alice"), 10, 0),
+         "another player does not get vision from it");
 
   const dnd::CommandOutcome removed =
       server.HandleCommand(dnd::RemoveToken{.id = 2}, "", true);
   Expect(removed.accepted, "the DM can remove the character");
-  Expect(removed.events.size() == 2,
-         "removing a player refreshes the party view");
-  Expect(!FogVisibleAt(server.FogState(), 10, 0),
-         "removing a player character removes its vision");
+  Expect(!FogVisibleAt(server.FogState("bob"), 10, 0),
+         "removing a character removes its vision");
+  Expect(FogExploredAt(server.FogState("bob"), 10, 0),
+         "the cell stays explored after the character leaves");
+}
+
+// Туман живёт в сцене: отмена, загрузка и смена карты его не обнуляют.
+auto TestFogSurvivesReset() -> void {
+  const dnd::GridMap map(12, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 2, 4);
+  Expect(FogExploredAt(server.FogState("alice"), 1, 0),
+         "the starting area is explored");
+  Expect(!FogExploredAt(server.FogState("alice"), 10, 0),
+         "far cells start unexplored");
+
+  const dnd::GameSnapshot before = server.Snapshot();
+  Expect(before.fog.size() == 2,
+         "the scene keeps the player fog and the party fog");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(10, 0)},
+                            "", true)
+             .accepted,
+         "the character moves across the map");
+  Expect(FogExploredAt(server.FogState("alice"), 10, 0),
+         "the destination becomes explored");
+
+  // Отмена (Ctrl+Z): мир возвращается вместе с туманом того момента.
+  server.Reset(before);
+  Expect(FogExploredAt(server.FogState("alice"), 1, 0),
+         "undo keeps the cells explored before the action");
+  Expect(!FogExploredAt(server.FogState("alice"), 10, 0),
+         "undo forgets cells explored by the undone action");
+
+  // Новый сервер из снимка — это загрузка сохранения или смена сцены.
+  dnd::GameServer reopened(server.Snapshot(), 2, 4);
+  Expect(FogExploredAt(reopened.FogState("alice"), 1, 0),
+         "a saved scene restores the explored cells");
+  Expect(FogVisibleAt(reopened.FogState("alice"), 0, 0),
+         "current vision is recomputed after loading");
+  Expect(reopened.ClientSnapshot("alice").fog.empty(),
+         "the client snapshot carries no fog records");
+
+  // Карта другой формы: исследованное некуда переносить.
+  const dnd::GameSnapshot other{
+      .map = dnd::GridMap(6, 6),
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(5, 5)}},
+      .next_token_id = 2,
+  };
+  reopened.Reset(other);
+  Expect(!FogExploredAt(reopened.FogState("alice"), 1, 0),
+         "a map of another size starts with clean fog");
+  Expect(FogExploredAt(reopened.FogState("alice"), 5, 5),
+         "the new map still remembers its first sight");
+}
+
+auto TestSeparateVisibility() -> void {
+  const dnd::GridMap map(20, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "scout",
+                         .owner = "bob",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(10, 0)},
+              dnd::Token{.id = 3,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(15, 0)},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameServer server(snapshot, 3, 3);
+
+  const auto snapshot_has = [&server](std::string_view actor,
+                                      dnd::TokenId id) -> bool {
+    const dnd::GameSnapshot view = server.ClientSnapshot(actor);
+    return std::ranges::any_of(
+        view.tokens,
+        [id](const dnd::Token& token) -> bool { return token.id == id; });
+  };
+  Expect(snapshot_has("alice", 1) && !snapshot_has("alice", 2),
+         "alice sees only her own character");
+  Expect(snapshot_has("bob", 2) && !snapshot_has("bob", 1),
+         "bob sees only his own character");
+  Expect(snapshot_has("carol", 1) && snapshot_has("carol", 2) &&
+             !snapshot_has("carol", 3),
+         "a player without a character sees the party, not the monsters");
+
+  // Чужой ход не должен утекать: событие видно только владельцу.
+  const dnd::CommandOutcome moved = server.HandleCommand(
+      dnd::MoveToken{.id = 2, .target = CellAt(11, 0)}, "bob", false);
+  Expect(moved.accepted, "bob moves his character");
+  for (const dnd::Event& event : moved.events) {
+    if (std::holds_alternative<dnd::TokenMoved>(event)) {
+      Expect(server.EventVisibleTo(event, "bob"), "bob sees his own move");
+      Expect(!server.EventVisibleTo(event, "alice"),
+             "alice does not see bob's move");
+    }
+  }
+
+  // Ручное открытие области DM-ом видят все, даже игрок без персонажа.
+  Expect(!server.IsVisibleTo("alice", CellAt(15, 0)),
+         "the far corner is hidden before the reveal");
+  const dnd::CommandOutcome reveal = server.HandleCommand(
+      dnd::RevealArea{.cell = CellAt(15, 0), .radius = 4}, "", true);
+  Expect(
+      reveal.accepted && reveal.events.size() == 1 &&
+          std::holds_alternative<dnd::RevealedUpdated>(reveal.events.front()),
+      "the DM reveals an area for the table");
+  Expect(server.IsVisibleTo("alice", CellAt(15, 0)) &&
+             server.IsVisibleTo("carol", CellAt(15, 0)),
+         "revealed cells are visible to every player");
+  Expect(snapshot_has("alice", 3), "the goblin appears in the revealed area");
+  Expect(FogVisibleAt(server.FogState("carol"), 15, 0),
+         "a characterless player receives the reveal in the party fog");
+  Expect(
+      !server
+           .HandleCommand(dnd::RevealArea{.cell = CellAt(15, 0), .radius = 4},
+                          "alice", false)
+           .accepted,
+      "only the DM reveals areas");
+
+  // Смена владельца переносит обзор: старый владелец больше не видит токен.
+  Expect(server
+             .HandleCommand(dnd::SetTokenOwner{.id = 1, .owner = "carol"}, "",
+                            true)
+             .accepted,
+         "the DM reassigns a character");
+  Expect(server.IsVisibleTo("carol", CellAt(0, 0)),
+         "the new owner gains vision from the character");
+  Expect(!server.IsVisibleTo("alice", CellAt(0, 0)),
+         "the old owner loses that vision");
+
+  const dnd::CommandOutcome cleared =
+      server.HandleCommand(dnd::ClearRevealed{}, "", true);
+  Expect(cleared.accepted && !server.IsVisibleTo("alice", CellAt(15, 0)),
+         "clearing reveals hides the area again");
+  Expect(FogExploredAt(server.FogState("alice"), 15, 0),
+         "cells seen through a reveal stay explored");
+  Expect(!snapshot_has("alice", 3), "the goblin is hidden again");
+}
+
+auto TestLevels() -> void {
+  Expect(dnd::XpForLevel(1) == 0, "level 1 starts at zero xp");
+  Expect(dnd::XpForLevel(2) == 300, "level 2 needs 300 xp");
+  Expect(dnd::XpForLevel(20) == 355000, "level 20 needs 355000 xp");
+  Expect(dnd::LevelForXp(0) == 1 && dnd::LevelForXp(299) == 1,
+         "experience below the threshold keeps level 1");
+  Expect(dnd::LevelForXp(300) == 2 && dnd::LevelForXp(899) == 2,
+         "level 2 holds until the next threshold");
+  Expect(dnd::LevelForXp(900) == 3, "the threshold promotes to level 3");
+  Expect(dnd::LevelForXp(-10) == 1, "negative experience is treated as zero");
+  Expect(dnd::LevelForXp(dnd::kMaxXp) == dnd::kMaxLevel,
+         "experience is capped at the last level");
+}
+
+auto TestExperience() -> void {
+  const dnd::GridMap map(12, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "ally",
+                         .owner = "bob",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 0)},
+              dnd::Token{.id = 3,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(2, 0)},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameServer server(snapshot, 8, 3);
+
+  Expect(
+      !server
+           .HandleCommand(dnd::AwardXp{.id = 1, .amount = 300}, "alice", false)
+           .accepted,
+      "players cannot award experience");
+  Expect(!server.HandleCommand(dnd::AwardXp{.id = 3, .amount = 100}, "", true)
+              .accepted,
+         "monsters do not gain experience");
+  Expect(!server.HandleCommand(dnd::AwardXp{.id = 1, .amount = 0}, "", true)
+              .accepted,
+         "zero experience is rejected");
+  Expect(
+      !server
+           .HandleCommand(dnd::AwardXp{.id = 1, .amount = dnd::kMaxXpAward + 1},
+                          "", true)
+           .accepted,
+      "a single award above the limit is rejected");
+
+  const dnd::CommandOutcome single =
+      server.HandleCommand(dnd::AwardXp{.id = 1, .amount = 300}, "dm", true);
+  Expect(single.accepted, "the DM awards experience");
+  bool updated = false;
+  bool promotion = false;
+  for (const dnd::Event& event : single.events) {
+    if (const auto* token = std::get_if<dnd::TokenUpdated>(&event)) {
+      updated = token->token.id == 1 && token->token.xp == 300;
+    }
+    if (const auto* line = std::get_if<dnd::LogLineAdded>(&event)) {
+      promotion = promotion || line->line.text.find("получает 2 уровень") !=
+                                   std::string::npos;
+    }
+  }
+  Expect(updated, "the award broadcasts the updated character");
+  Expect(promotion, "a level-up is written to the log");
+  Expect(TokenOf(server.State(), 1).xp == 300 &&
+             dnd::LevelForXp(TokenOf(server.State(), 1).xp) == 2,
+         "experience and the derived level are stored");
+
+  const dnd::CommandOutcome party =
+      server.HandleCommand(dnd::AwardXp{.amount = 50, .party = true}, "", true);
+  Expect(party.accepted, "the DM awards experience to the whole party");
+  Expect(TokenOf(server.State(), 1).xp == 350 &&
+             TokenOf(server.State(), 2).xp == 50,
+         "every character receives the party award");
+  Expect(TokenOf(server.State(), 3).xp == 0, "monsters get nothing");
+
+  for (int i = 0; i < 11; ++i) {
+    Expect(
+        server.HandleCommand(dnd::AwardXp{.id = 1, .amount = 100000}, "", true)
+            .accepted,
+        "large single awards are accepted");
+  }
+  Expect(TokenOf(server.State(), 1).xp == dnd::kMaxXp,
+         "stored experience is capped");
+  Expect(dnd::LevelForXp(TokenOf(server.State(), 1).xp) == dnd::kMaxLevel,
+         "a capped character is level 20");
+}
+
+auto TestFogMovement() -> void {
+  const dnd::GridMap map(20, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 3, 9);
+
+  const auto move = [&server](dnd::Cell target,
+                              bool dm = false) -> dnd::CommandOutcome {
+    return server.HandleCommand(dnd::MoveToken{.id = 1, .target = target},
+                                dm ? "" : "alice", dm);
+  };
+
+  const dnd::CommandOutcome blind = move(CellAt(8, 0));
+  Expect(!blind.accepted && blind.reject_reason == "клетка не разведана",
+         "a player cannot move into an unexplored cell");
+  Expect(move(CellAt(3, 0)).accepted, "moving into explored cells is allowed");
+  Expect(move(CellAt(0, 0)).accepted, "the character can walk back");
+  Expect(move(CellAt(6, 0)).accepted,
+         "a previously explored but hidden cell is a valid target");
+  const dnd::CommandOutcome far = move(CellAt(15, 0));
+  Expect(!far.accepted && far.reject_reason == "клетка не разведана",
+         "the far unexplored cell stays blocked");
+  Expect(move(CellAt(15, 0), true).accepted, "the DM may move a token blindly");
+  const dnd::CommandOutcome gap = move(CellAt(10, 0));
+  Expect(!gap.accepted && gap.reject_reason == "клетка не разведана",
+         "cells never seen stay closed even after the character moved away");
 }
 
 auto TestUtf8() -> void {
@@ -976,6 +1316,94 @@ auto TestUtf8() -> void {
   dnd::TruncateUtf8(truncated, 6);
   Expect(truncated == "При", "truncation keeps complete characters");
   Expect(dnd::PreviousCodePointStart("") == 0, "empty text has no code point");
+
+  std::string appended = "Пр";
+  dnd::AppendUtf8(appended, "ивет", 5);
+  Expect(appended == "Пр", "appending respects the byte limit");
+  dnd::AppendUtf8(appended, "и", 6);
+  Expect(appended == "При",
+         "appending fits a code point that ends on the limit");
+
+  std::string erased = "Привет";
+  dnd::EraseLastCodePoint(erased);
+  Expect(erased == "Приве", "erase drops the last Cyrillic letter");
+  dnd::EraseLastCodePoint(erased);
+  Expect(erased == "Прив", "erase works on a shorter string");
+  std::string empty;
+  dnd::EraseLastCodePoint(empty);
+  Expect(empty.empty(), "erase leaves an empty string empty");
+}
+
+auto TestPlayerNames() -> void {
+  Expect(dnd::PlayerNameKey("Player") == "player",
+         "ASCII names fold to lowercase");
+  Expect(dnd::PlayerNameKey("ИГРОК") == dnd::PlayerNameKey("игрок"),
+         "Cyrillic names fold to lowercase");
+  Expect(dnd::PlayerNameKey("ЁЖ") == dnd::PlayerNameKey("ёж"),
+         "Cyrillic Ё folds to lowercase");
+  Expect(dnd::PlayerNameKey("ÀÉÎ") == dnd::PlayerNameKey("àéî"),
+         "Latin-1 names fold to lowercase");
+  Expect(dnd::PlayerNameKey("Łukasz") == dnd::PlayerNameKey("łukasz"),
+         "Latin Extended-A names fold to lowercase");
+  Expect(dnd::PlayerNameKey("ΣΟΦΟΣ") == dnd::PlayerNameKey("σοφος"),
+         "Greek names fold, including the final sigma");
+  Expect(dnd::SamePlayerName("Player", "PLAYER"), "names compare without case");
+  Expect(dnd::SamePlayerName("Игрок", "иГРОК"),
+         "Cyrillic names compare without case");
+  Expect(!dnd::SamePlayerName("player", "player2"),
+         "different names stay different");
+  Expect(!dnd::SamePlayerName("player", "player "),
+         "trailing spaces still matter");
+  Expect(!dnd::SamePlayerName("", "dm"), "an empty name differs from a name");
+  Expect(dnd::SamePlayerName("", ""), "empty names are equal");
+  Expect(dnd::PlayerNameKey("DM") == "dm", "the reserved name folds too");
+}
+
+auto TestCaseInsensitiveOwnership() -> void {
+  const dnd::GridMap map(10, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(3, 0)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 2, 7);
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(4, 0)},
+                            "ALICE", false)
+             .accepted,
+         "the owner controls the character in any case");
+  Expect(FogVisibleAt(server.FogState("Alice"), 4, 0),
+         "fog is keyed by the folded player name");
+  Expect(!server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(5, 0)},
+                             "bob", false)
+              .accepted,
+         "another player still cannot move the character");
+
+  Expect(server
+             .HandleCommand(dnd::AddToken{.name = "scout",
+                                          .cell = CellAt(6, 0),
+                                          .kind = dnd::TokenKind::kPlayer,
+                                          .max_hp = 10},
+                            "", true)
+             .accepted,
+         "the DM adds a second character");
+  Expect(
+      !server.HandleCommand(dnd::ClaimToken{.id = 2}, "Alice", false).accepted,
+      "a player keeps a single character across case");
+
+  Expect(server
+             .HandleCommand(dnd::SetTokenOwner{.id = 2, .owner = "Carol"}, "",
+                            true)
+             .accepted,
+         "the DM assigns an owner by name");
+  Expect(
+      server.HandleCommand(dnd::ClaimToken{.id = 2}, "carol", false).accepted,
+      "the assigned player claims the character in another case");
 }
 
 auto TestTokenManagement() -> void {
@@ -1002,7 +1430,7 @@ auto TestTokenManagement() -> void {
              std::holds_alternative<dnd::TokenAdded>(dm_add.events.front()),
          "spawn yields TokenAdded");
   Expect(server.State().Tokens().size() == 2, "spawned token is in the world");
-  Expect(server.EventVisibleToPlayers(dm_add.events.front()),
+  Expect(server.EventVisibleTo(dm_add.events.front(), "alice"),
          "nearby spawn is visible to players");
   dnd::TokenId spawned = 0;
   if (!dm_add.events.empty() &&
@@ -1022,7 +1450,7 @@ auto TestTokenManagement() -> void {
       dnd::AddToken{.name = "far", .cell = CellAt(15, 15)}, "", true);
   Expect(hidden_add.accepted, "DM can spawn far away");
   Expect(!hidden_add.events.empty() &&
-             !server.EventVisibleToPlayers(hidden_add.events.front()),
+             !server.EventVisibleTo(hidden_add.events.front(), "alice"),
          "far spawn is hidden from players");
 
   const dnd::CommandOutcome off_map = server.HandleCommand(
@@ -1055,7 +1483,7 @@ auto TestTokenManagement() -> void {
   }
 
   dnd::ClientView view;
-  view.Reset(server.ClientSnapshot(), server.FogState());
+  view.Reset(server.ClientSnapshot("alice"), server.FogState("alice"));
   for (const dnd::Event& event : dm_add.events) {
     view.Apply(event);
   }
@@ -1162,7 +1590,7 @@ auto TestEncounterCommands() -> void {
         std::get<dnd::EncounterUpdated>(start.events.front()).encounter;
     Expect(encounter.active && encounter.order.front() == 2,
            "goblin acts first by initiative");
-    Expect(server.EventVisibleToPlayers(start.events.front()),
+    Expect(server.EventVisibleTo(start.events.front(), "alice"),
            "encounter updates reach players");
   }
 
@@ -1207,6 +1635,7 @@ auto TestMovementBudget() -> void {
   Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
          "DM starts the encounter for movement");
 
+  const dnd::GameSnapshot before_move = server.Snapshot();
   const dnd::CommandOutcome full = server.HandleCommand(
       dnd::MoveToken{.id = 1, .target = CellAt(7, 1)}, "alice", false);
   Expect(full.accepted, "player spends the whole turn of movement");
@@ -1224,6 +1653,7 @@ auto TestMovementBudget() -> void {
   Expect(movement_broadcast, "spent movement travels with TokenUpdated");
 
   dnd::ClientView view;
+  view.Reset(before_move, server.FullFogState());
   for (const dnd::Event& event : full.events) {
     view.Apply(event);
   }
@@ -1320,6 +1750,94 @@ auto TestMovementBudget() -> void {
                              "alice", false)
               .accepted,
          "player cannot jump over a sealed wall");
+}
+
+auto TestMovementPathsAndDiagonals() -> void {
+  const dnd::GridMap corridor(6, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = corridor,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(3, 0)},
+              dnd::Token{.id = 3,
+                         .name = "ally",
+                         .owner = "bob",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 0)},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameServer server(snapshot, 6, 5);
+
+  Expect(!server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 0)},
+                             "alice", false)
+              .accepted,
+         "a move cannot end on an allied character");
+  const dnd::CommandOutcome through_monster = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(5, 0)}, "alice", false);
+  Expect(!through_monster.accepted, "a monster blocks the path outside combat");
+  const dnd::CommandOutcome onto_monster = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(3, 0)}, "alice", false);
+  Expect(
+      !onto_monster.accepted && onto_monster.reject_reason == "клетка занята",
+      "players cannot end a move on an occupied cell");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 0)},
+                            "alice", false)
+             .accepted,
+         "allied characters do not block the path");
+  Expect(TokenOf(server.State(), 1).movement_used == 0,
+         "outside combat movement is not charged");
+
+  // Правило 5–10–5: диагонали стоят 1, 2, 1, 2 клетки.
+  const dnd::GridMap open(6, 6);
+  const dnd::GameSnapshot diagonal_snapshot{
+      .map = open,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .speed = 9,
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer diagonals(diagonal_snapshot, 6, 7);
+  Expect(diagonals.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "encounter starts for the diagonal test");
+  const auto step = [&diagonals](dnd::Cell cell) -> bool {
+    return diagonals
+        .HandleCommand(dnd::MoveToken{.id = 1, .target = cell}, "alice", false)
+        .accepted;
+  };
+  Expect(step(CellAt(1, 1)), "the first diagonal costs 5 feet");
+  Expect(TokenOf(diagonals.State(), 1).movement_used == 1 &&
+             TokenOf(diagonals.State(), 1).diagonal_parity == 1,
+         "the first diagonal spends one cell and flips parity");
+  Expect(step(CellAt(2, 2)), "the second diagonal costs 10 feet");
+  Expect(TokenOf(diagonals.State(), 1).movement_used == 3 &&
+             TokenOf(diagonals.State(), 1).diagonal_parity == 0,
+         "the second diagonal spends two cells");
+  Expect(step(CellAt(3, 3)) && step(CellAt(4, 4)),
+         "the third and fourth diagonals fit the remaining budget");
+  Expect(TokenOf(diagonals.State(), 1).movement_used == 6,
+         "the full speed is spent after four diagonals");
+  Expect(!step(CellAt(4, 5)), "a spent budget blocks the next step");
+  Expect(diagonals.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the turn passes to the next token");
+  Expect(diagonals.HandleCommand(dnd::EndEncounter{}, "", true).accepted,
+         "the encounter ends");
+  Expect(TokenOf(diagonals.State(), 1).diagonal_parity == 0,
+         "ending combat resets the diagonal parity");
 }
 
 auto TestAoe() -> void {
@@ -1444,11 +1962,11 @@ auto TestAoeCommands() -> void {
       std::holds_alternative<dnd::AoeUpdated>(placed.events.front())) {
     const auto& aoe = std::get<dnd::AoeUpdated>(placed.events.front()).aoe;
     Expect(aoe == set.aoe, "event carries the template");
-    Expect(server.EventVisibleToPlayers(placed.events.front()),
+    Expect(server.EventVisibleTo(placed.events.front(), "alice"),
            "templates are visible to players");
   }
   Expect(server.State().Aoe() == set.aoe, "server keeps the template");
-  Expect(server.ClientSnapshot().aoe == set.aoe,
+  Expect(server.ClientSnapshot("alice").aoe == set.aoe,
          "template is part of the snapshot");
 
   dnd::ClientView view;
@@ -1482,6 +2000,9 @@ auto TestAoeCommands() -> void {
 auto TestSaveLoadRoundtrip() -> void {
   dnd::GridMap map(6, 4);
   map.SetBlocked(CellAt(2, 1), true);
+  const std::vector<std::uint8_t> party_fog(24, 0);
+  std::vector<std::uint8_t> alice_fog(24, 0);
+  alice_fog[13] = 1;
   const dnd::GameSnapshot original{
       .map = map,
       .tokens =
@@ -1501,7 +2022,9 @@ auto TestSaveLoadRoundtrip() -> void {
                          .damage = "1d8+3",
                          .conditions = {dnd::Condition{"сбит с ног"},
                                         dnd::Condition{"концентрация"}},
+                         .xp = 900,
                          .movement_used = 4,
+                         .diagonal_parity = 1,
                          .kind = dnd::TokenKind::kPlayer,
                          .color = 0x507AC8U,
                          .portrait = "hero.png",
@@ -1534,6 +2057,9 @@ auto TestSaveLoadRoundtrip() -> void {
               .opacity = 60,
               .scale = 140,
           },
+      .revealed = {CellAt(0, 0), CellAt(5, 3)},
+      .fog = {dnd::FogRecord{.owner = {}, .explored = party_fog},
+              dnd::FogRecord{.owner = "alice", .explored = alice_fog}},
   };
 
   const std::filesystem::path path =
@@ -1548,8 +2074,23 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->map.IsBlocked(CellAt(2, 1)), "walls survive the roundtrip");
     Expect(loaded->tokens.size() == 2, "token count survives the roundtrip");
     Expect(loaded->tokens.front().name == "hero", "token name survives");
+    Expect(loaded->revealed.size() == 2 &&
+               loaded->revealed.front() == CellAt(0, 0) &&
+               loaded->revealed.back() == CellAt(5, 3),
+           "revealed cells survive the roundtrip");
+    Expect(loaded->fog.size() == 2 && loaded->fog.front().owner.empty(),
+           "the party fog survives the roundtrip");
+    Expect(loaded->fog.size() == 2 && loaded->fog.back().owner == "alice",
+           "the player fog survives the roundtrip");
+    Expect(loaded->fog.size() == 2 &&
+               loaded->fog.back().explored.size() == 24 &&
+               loaded->fog.back().explored[13] == 1,
+           "explored cells survive the roundtrip");
     Expect(loaded->tokens.front().owner == "alice", "token owner survives");
     Expect(loaded->tokens.front().hp == 7, "token hp survives");
+    Expect(loaded->tokens.front().xp == 900, "token xp survives");
+    Expect(loaded->tokens.front().diagonal_parity == 1,
+           "diagonal parity survives the roundtrip");
     Expect(loaded->tokens.front().max_hp == 12, "token max hp survives");
     Expect(loaded->tokens.front().temp_hp == 3, "token temporary hp survives");
     Expect(loaded->tokens.front().initiative == 15,
@@ -1884,8 +2425,8 @@ auto TestChatAndDice() -> void {
   Expect(view.Log().size() == 1, "client view stores log lines");
   Expect(view.AppendedLogLines() == 1, "client view counts stored lines");
   view.Apply(dnd::ViewUpdated{
-      .snapshot = server.ClientSnapshot(),
-      .fog = server.FogState(),
+      .snapshot = server.ClientSnapshot("alice"),
+      .fog = server.FogState("alice"),
   });
   Expect(view.Log().size() == 1, "view refresh keeps the log history");
 
@@ -1896,6 +2437,169 @@ auto TestChatAndDice() -> void {
          "local feedback stays in the client log");
   Expect(view.AppendedLogLines() == 2,
          "local feedback is counted for the session log");
+}
+
+auto TestChatCommandParsing() -> void {
+  using dnd::ChatCommandError;
+  using dnd::ChatCommandKind;
+  const auto parse = [](std::string_view text) -> dnd::ChatCommand {
+    return dnd::ParseChatCommand(text);
+  };
+
+  const dnd::ChatCommand say = parse("привет столу");
+  Expect(say.kind == ChatCommandKind::kSay, "plain text stays chat");
+  Expect(say.error == ChatCommandError::kNone, "plain text parses cleanly");
+  Expect(say.text == "привет столу", "plain text is kept");
+  Expect(parse("/неизвестно").kind == ChatCommandKind::kSay,
+         "unknown slash command stays chat");
+
+  // /roll
+  const dnd::ChatCommand roll = parse("/roll adv d20+5");
+  Expect(roll.kind == ChatCommandKind::kRoll, "/roll is a roll");
+  Expect(roll.text == "adv d20+5", "/roll keeps the expression");
+  Expect(parse("/roll 2d6+3").error == ChatCommandError::kNone,
+         "/roll accepts plain dice");
+  Expect(parse("/roll чушь").error == ChatCommandError::kBadRoll,
+         "/roll rejects a broken expression");
+  Expect(parse("/roll").error == ChatCommandError::kBadRoll,
+         "/roll without an expression is an error");
+
+  // /kick
+  const dnd::ChatCommand kick = parse("/kick bob");
+  Expect(kick.kind == ChatCommandKind::kKick, "/kick is recognized");
+  Expect(kick.text == "bob", "/kick keeps the player name");
+  Expect(parse("/kick ").error == ChatCommandError::kBadKick,
+         "/kick without a name is an error");
+
+  // /owner
+  const dnd::ChatCommand owner = parse("/owner bob");
+  Expect(owner.kind == ChatCommandKind::kOwner, "/owner is recognized");
+  Expect(owner.text == "bob", "/owner keeps the owner");
+  const dnd::ChatCommand owner_clear = parse("/owner");
+  Expect(owner_clear.kind == ChatCommandKind::kOwner &&
+             owner_clear.text.empty() &&
+             owner_clear.error == ChatCommandError::kNone,
+         "/owner without a name clears ownership");
+
+  // /scene
+  Expect(parse("/scene").kind == ChatCommandKind::kSceneList,
+         "/scene opens the list");
+  Expect(parse("/scene new").kind == ChatCommandKind::kSceneNew,
+         "/scene new copies the scene");
+  const dnd::ChatCommand scene_rename = parse("/scene rename Старый Новый");
+  Expect(scene_rename.kind == ChatCommandKind::kSceneRename,
+         "/scene rename is recognized");
+  Expect(scene_rename.text == " Старый Новый",
+         "/scene rename keeps both names");
+  const dnd::ChatCommand scene_switch = parse("/scene Пещера");
+  Expect(scene_switch.kind == ChatCommandKind::kSceneSwitch,
+         "/scene NAME switches");
+  Expect(scene_switch.text == "Пещера", "/scene keeps the target name");
+
+  // /rename
+  const dnd::ChatCommand rename = parse("/rename Гоблин вожак");
+  Expect(rename.kind == ChatCommandKind::kRename, "/rename is recognized");
+  Expect(rename.text == "Гоблин вожак", "/rename keeps the spaces");
+  Expect(parse("/rename ").error == ChatCommandError::kBadRename,
+         "/rename without a name is an error");
+
+  // /maxhp
+  const dnd::ChatCommand max_hp = parse("/maxhp 24");
+  Expect(max_hp.kind == ChatCommandKind::kMaxHp, "/maxhp is recognized");
+  Expect(max_hp.value == 24, "/maxhp keeps the value");
+  Expect(parse("/maxhp 0").error == ChatCommandError::kBadMaxHp,
+         "/maxhp rejects zero");
+  Expect(parse("/maxhp много").error == ChatCommandError::kBadMaxHp,
+         "/maxhp rejects text");
+
+  // /damage и /heal делят одну подсказку.
+  const dnd::ChatCommand damage = parse("/damage 7");
+  Expect(damage.kind == ChatCommandKind::kDamage && damage.value == 7,
+         "/damage keeps the amount");
+  const dnd::ChatCommand heal = parse("/heal 5");
+  Expect(heal.kind == ChatCommandKind::kHeal && heal.value == 5,
+         "/heal keeps the amount");
+  Expect(parse("/damage -1").error == ChatCommandError::kBadDamage,
+         "/damage rejects a negative amount");
+  Expect(parse("/heal 0").error == ChatCommandError::kBadDamage,
+         "/heal rejects zero");
+
+  // /aoe
+  const dnd::ChatCommand aoe = parse("/aoe 2d6 15");
+  Expect(aoe.kind == ChatCommandKind::kAoe, "/aoe is recognized");
+  Expect(aoe.text == "2d6" && aoe.save_dc == 15,
+         "/aoe keeps the damage and the DC");
+  Expect(parse("/aoe 2d6").error == ChatCommandError::kBadAoe,
+         "/aoe without a DC is an error");
+  Expect(parse("/aoe 2d6 200").error == ChatCommandError::kBadAoe,
+         "/aoe rejects an impossible DC");
+
+  // /portrait
+  const dnd::ChatCommand portrait = parse("/portrait hero.png");
+  Expect(portrait.kind == ChatCommandKind::kPortrait,
+         "/portrait is recognized");
+  Expect(portrait.text == "hero.png", "/portrait keeps the file name");
+  const dnd::ChatCommand portrait_off = parse("/portrait off");
+  Expect(portrait_off.kind == ChatCommandKind::kPortrait &&
+             portrait_off.text.empty(),
+         "/portrait off clears the picture");
+  Expect(
+      parse("/portrait ../secret.png").error == ChatCommandError::kBadPortrait,
+      "/portrait rejects a path");
+
+  // /map
+  Expect(parse("/map off").kind == ChatCommandKind::kMapOff, "/map off clears");
+  const dnd::ChatCommand opacity = parse("/map opacity 60");
+  Expect(opacity.kind == ChatCommandKind::kMapOpacity && opacity.value == 60,
+         "/map opacity keeps the value");
+  const dnd::ChatCommand scale = parse("/map scale 150");
+  Expect(scale.kind == ChatCommandKind::kMapScale && scale.value == 150,
+         "/map scale keeps the value");
+  const dnd::ChatCommand image = parse("/map cave.png");
+  Expect(image.kind == ChatCommandKind::kMapImage && image.text == "cave.png",
+         "/map keeps the file name");
+  Expect(parse("/map ../../cave.png").error == ChatCommandError::kBadMap,
+         "/map rejects a path");
+  Expect(parse("/map opacity 300").error == ChatCommandError::kBadMap,
+         "/map rejects an impossible opacity");
+  Expect(parse("/map").error == ChatCommandError::kBadMap,
+         "/map without arguments is an error");
+
+  // /reveal
+  Expect(parse("/reveal").kind == ChatCommandKind::kReveal,
+         "/reveal opens the area under the cursor");
+  Expect(parse("/reveal off").kind == ChatCommandKind::kRevealOff,
+         "/reveal off clears manual reveals");
+  Expect(parse("/reveal всё").error == ChatCommandError::kBadReveal,
+         "/reveal rejects unknown arguments");
+
+  // /xp
+  const dnd::ChatCommand xp = parse("/xp 300");
+  Expect(xp.kind == ChatCommandKind::kXp && xp.value == 300 && !xp.party,
+         "/xp keeps the amount for one character");
+  const dnd::ChatCommand xp_party = parse("/xp 300 all");
+  Expect(xp_party.kind == ChatCommandKind::kXp && xp_party.value == 300 &&
+             xp_party.party,
+         "/xp all awards the whole party");
+  Expect(parse("/xp").error == ChatCommandError::kBadXp,
+         "/xp without an amount is an error");
+  Expect(parse("/xp 300 some").error == ChatCommandError::kBadXp,
+         "/xp rejects an unknown target");
+  Expect(parse("/xp -5").error == ChatCommandError::kBadXp,
+         "/xp rejects negative experience");
+
+  // Короткие флаги.
+  Expect(parse("/claim").kind == ChatCommandKind::kClaim,
+         "/claim is a command");
+  Expect(parse("/ping").kind == ChatCommandKind::kPing, "/ping is a command");
+  Expect(parse("/deathsave").kind == ChatCommandKind::kDeathSave,
+         "/deathsave is a command");
+  const dnd::ChatCommand rest = parse("/rest");
+  Expect(rest.kind == ChatCommandKind::kRest && !rest.long_rest,
+         "/rest is a short rest");
+  const dnd::ChatCommand long_rest = parse("/longrest");
+  Expect(long_rest.kind == ChatCommandKind::kRest && long_rest.long_rest,
+         "/longrest is a long rest");
 }
 
 auto TestSessionLog() -> void {
@@ -1969,7 +2673,7 @@ auto TestPing() -> void {
     const auto& marker = std::get<dnd::PingMarker>(ping.events.front());
     Expect(marker.cell == CellAt(3, 4) && marker.author == "alice",
            "ping keeps the cell and the author");
-    Expect(server.EventVisibleToPlayers(ping.events.front()),
+    Expect(server.EventVisibleTo(ping.events.front(), "alice"),
            "ping is visible to every player");
   }
   Expect(
@@ -1992,8 +2696,8 @@ auto TestPing() -> void {
   Expect(view.Pings().empty(), "expired ping is pruned");
 
   view.Apply(dnd::PingMarker{.cell = CellAt(2, 2), .author = "bob"});
-  view.Apply(dnd::ViewUpdated{.snapshot = server.ClientSnapshot(),
-                              .fog = server.FogState()});
+  view.Apply(dnd::ViewUpdated{.snapshot = server.ClientSnapshot("alice"),
+                              .fog = server.FogState("alice")});
   Expect(view.Pings().empty(), "world refresh clears pings");
 }
 
@@ -2058,7 +2762,7 @@ auto TestMapBackground() -> void {
   if (!dm_change.events.empty() &&
       std::holds_alternative<dnd::MapBackgroundUpdated>(
           dm_change.events.front())) {
-    Expect(server.EventVisibleToPlayers(dm_change.events.front()),
+    Expect(server.EventVisibleTo(dm_change.events.front(), "alice"),
            "the background update reaches players");
     dnd::ClientView view;
     view.Apply(dm_change.events.front());
@@ -2233,6 +2937,52 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::PingMarker>(*marker_decoded).cell == CellAt(4, 5) &&
              std::get<dnd::PingMarker>(*marker_decoded).author == "Аня",
          "ping marker survives serialization");
+
+  const dnd::Command reveal_command{
+      dnd::RevealArea{.cell = CellAt(2, 3), .radius = 5}};
+  const std::vector<std::uint8_t> reveal_bytes =
+      dnd::EncodeCommand(reveal_command);
+  const std::optional<dnd::Command> reveal_decoded =
+      dnd::DecodeCommand(reveal_bytes.data(), reveal_bytes.size());
+  Expect(reveal_decoded.has_value() &&
+             std::holds_alternative<dnd::RevealArea>(*reveal_decoded) &&
+             std::get<dnd::RevealArea>(*reveal_decoded).cell == CellAt(2, 3) &&
+             std::get<dnd::RevealArea>(*reveal_decoded).radius == 5,
+         "reveal command survives serialization");
+
+  const dnd::Command clear_reveal_command{dnd::ClearRevealed{}};
+  const std::vector<std::uint8_t> clear_reveal_bytes =
+      dnd::EncodeCommand(clear_reveal_command);
+  const std::optional<dnd::Command> clear_reveal_decoded =
+      dnd::DecodeCommand(clear_reveal_bytes.data(), clear_reveal_bytes.size());
+  Expect(clear_reveal_decoded.has_value() &&
+             std::holds_alternative<dnd::ClearRevealed>(*clear_reveal_decoded),
+         "clear reveal command survives serialization");
+
+  const dnd::Command award_command{
+      dnd::AwardXp{.id = 4, .amount = 300, .party = true}};
+  const std::vector<std::uint8_t> award_bytes =
+      dnd::EncodeCommand(award_command);
+  const std::optional<dnd::Command> award_decoded =
+      dnd::DecodeCommand(award_bytes.data(), award_bytes.size());
+  Expect(award_decoded.has_value() &&
+             std::holds_alternative<dnd::AwardXp>(*award_decoded) &&
+             std::get<dnd::AwardXp>(*award_decoded).id == 4 &&
+             std::get<dnd::AwardXp>(*award_decoded).amount == 300 &&
+             std::get<dnd::AwardXp>(*award_decoded).party,
+         "xp command survives serialization");
+
+  const dnd::Event revealed_event{
+      dnd::RevealedUpdated{.cells = {CellAt(1, 1), CellAt(2, 2)}}};
+  const std::vector<std::uint8_t> revealed_bytes =
+      dnd::EncodeEvent(revealed_event);
+  const std::optional<dnd::Event> revealed_decoded =
+      dnd::DecodeEvent(revealed_bytes.data(), revealed_bytes.size());
+  Expect(
+      revealed_decoded.has_value() &&
+          std::holds_alternative<dnd::RevealedUpdated>(*revealed_decoded) &&
+          std::get<dnd::RevealedUpdated>(*revealed_decoded).cells.size() == 2,
+      "revealed event survives serialization");
 
   const dnd::Event line{dnd::LogLineAdded{
       .line =
@@ -2625,6 +3375,310 @@ auto TestSha256() -> void {
       "proof changes with the password");
 }
 
+auto Near(float first, float second) -> bool {
+  return std::fabs(first - second) < 0.001F;
+}
+
+auto TestCamera() -> void {
+  const dnd::Camera plain{};
+  Expect(plain.cell_size == dnd::kDefaultCellSize, "camera starts at 48 px");
+  Expect(dnd::CameraCellAt(plain, 0.0F, 0.0F) == CellAt(0, 0),
+         "top-left pixel is the first cell");
+  Expect(dnd::CameraCellAt(plain, 47.9F, 47.9F) == CellAt(0, 0),
+         "the whole first cell maps to zero");
+  Expect(dnd::CameraCellAt(plain, 48.0F, 48.0F) == CellAt(1, 1),
+         "a cell boundary starts the next cell");
+  Expect(dnd::CameraCellAt(plain, -1.0F, -1.0F) == CellAt(-1, -1),
+         "pixels left of the map give negative cells");
+
+  dnd::Camera shifted{};
+  shifted.x = -96.0F;
+  shifted.y = -48.0F;
+  Expect(dnd::CameraCellAt(shifted, 0.0F, 0.0F) == CellAt(2, 1),
+         "camera offset shifts cell coordinates");
+  Expect(dnd::CameraCellAt(shifted, 95.0F, 47.0F) == CellAt(3, 1),
+         "floor keeps the point inside the cell under it");
+
+  const dnd::Camera centered = dnd::CenteredCamera(1280.0F, 720.0F, 24, 12);
+  Expect(Near(centered.x, 64.0F) && Near(centered.y, 72.0F),
+         "a 24x12 map is centered in a 1280x720 window");
+  const dnd::Camera small = dnd::CenteredCamera(100.0F, 100.0F, 24, 12, 24.0F);
+  Expect(Near(small.x, -238.0F) && Near(small.y, -94.0F),
+         "a map larger than the window starts off-screen and centered");
+
+  dnd::Camera panned{};
+  dnd::PanCamera(panned, 5.0F, -3.0F);
+  dnd::PanCamera(panned, 2.0F, -4.0F);
+  Expect(Near(panned.x, 7.0F) && Near(panned.y, -7.0F),
+         "panning adds the mouse delta");
+
+  dnd::Camera zoom{};
+  zoom.cell_size = 50.0F;
+  zoom.x = 10.0F;
+  zoom.y = 20.0F;
+  dnd::ZoomCamera(zoom, 100.0F, 100.0F, 2.0F);
+  Expect(Near(zoom.cell_size, 58.0F), "wheel changes the cell size by 4 px");
+  Expect(Near(zoom.x, 100.0F - (90.0F / 50.0F * 58.0F)),
+         "zoom keeps the world point under the cursor on x");
+  Expect(Near(zoom.y, 100.0F - (80.0F / 50.0F * 58.0F)),
+         "zoom keeps the world point under the cursor on y");
+
+  dnd::Camera clamped{};
+  clamped.cell_size = 90.0F;
+  dnd::ZoomCamera(clamped, 0.0F, 0.0F, 10.0F);
+  Expect(Near(clamped.cell_size, dnd::kMaxCellSize), "zoom stops at 96 px");
+  dnd::ZoomCamera(clamped, 0.0F, 0.0F, -100.0F);
+  Expect(Near(clamped.cell_size, dnd::kMinCellSize), "zoom stops at 24 px");
+
+  const dnd::Camera untouched = clamped;
+  dnd::ZoomCamera(clamped, 10.0F, 10.0F, 0.0F);
+  Expect(Near(clamped.cell_size, untouched.cell_size) &&
+             Near(clamped.x, untouched.x) && Near(clamped.y, untouched.y),
+         "zero wheel leaves the camera untouched");
+}
+
+auto TestAutosave() -> void {
+  using Clock = dnd::AutosaveTimer::Clock;
+  const Clock::time_point start{};
+  dnd::AutosaveTimer timer;
+  Expect(!timer.Dirty(), "autosave starts clean");
+  Expect(!timer.Due(start + std::chrono::hours(1)),
+         "a clean timer is never due");
+
+  timer.MarkChanged(start);
+  Expect(timer.Dirty(), "a change marks the campaign dirty");
+  Expect(!timer.Due(start + std::chrono::seconds{7}),
+         "autosave waits for the full delay");
+  timer.MarkChanged(start + std::chrono::seconds{5});
+  Expect(!timer.Due(start + std::chrono::seconds{7}),
+         "later changes do not move the first deadline");
+  Expect(timer.Due(start + dnd::kAutosaveDelay),
+         "autosave fires eight seconds after the first change");
+
+  timer.SaveFailed(start + std::chrono::seconds{10});
+  Expect(timer.Dirty() && !timer.Due(start + std::chrono::seconds{17}) &&
+             timer.Due(start + std::chrono::seconds{18}),
+         "a failed write retries after another full delay");
+
+  timer.Saved();
+  Expect(!timer.Dirty() && !timer.Due(start + std::chrono::seconds{100}),
+         "a successful write clears the timer");
+}
+
+auto TestLogScroll() -> void {
+  dnd::LogScroll scroll(5);
+  Expect(scroll.Offset() == 0, "log starts at the newest line");
+  scroll.Scroll(1, 10);
+  Expect(scroll.Offset() == 1, "PageUp moves one line up until the page");
+  scroll.Scroll(100, 10);
+  Expect(scroll.Offset() == 5, "scrolling up stops at total minus page");
+  scroll.Scroll(-2, 10);
+  Expect(scroll.Offset() == 3, "scrolling down reduces the offset");
+
+  scroll.OnAppend(12);
+  Expect(scroll.Offset() == 5, "new lines do not shift the lines being read");
+  scroll.OnAppend(20);
+  Expect(scroll.Offset() == 13, "several new lines shift by the amount grown");
+  scroll.ToNewest();
+  Expect(scroll.Offset() == 0, "End returns to the newest line");
+  scroll.OnAppend(25);
+  Expect(scroll.Offset() == 0, "sticking to the bottom survives new lines");
+
+  scroll.Scroll(100, 25);
+  Expect(scroll.Offset() == 20, "a long log scrolls by its full history");
+  scroll.OnAppend(19);
+  Expect(scroll.Offset() == 14, "shrinking the log clamps the offset");
+  scroll.Scroll(3, 2);
+  Expect(scroll.Offset() == 0, "a log shorter than the page cannot scroll");
+}
+
+auto TestDeleteConfirm() -> void {
+  using Clock = dnd::DeleteConfirm::Clock;
+  const Clock::time_point start{};
+  dnd::DeleteConfirm confirm;
+  Expect(!confirm.Request(7, start), "the first Del only warns");
+  Expect(confirm.Pending() == 7, "the warned object is remembered");
+  Expect(confirm.Request(7, start + std::chrono::seconds{1}),
+         "a repeat within three seconds confirms");
+  Expect(confirm.Pending() == dnd::kNoConfirmId,
+         "a confirmed request is cleared");
+  Expect(!confirm.Request(7, start + std::chrono::seconds{2}),
+         "after a delete the next warning starts over");
+
+  dnd::DeleteConfirm other;
+  Expect(!other.Request(8, start), "another object starts its own warning");
+  Expect(!other.Request(9, start + std::chrono::seconds{1}),
+         "a different object does not confirm the first");
+  Expect(!other.Request(8, start + std::chrono::seconds{5}),
+         "a repeat after the delay only warns again");
+  Expect(other.Request(8, start + std::chrono::seconds{6}),
+         "a fresh repeat confirms");
+
+  dnd::DeleteConfirm deadline;
+  Expect(!deadline.Request(1, start),
+         "the deadline check starts with a warning");
+  Expect(deadline.Request(1, start + dnd::kDeleteConfirmDelay),
+         "the repeat exactly on the deadline still confirms");
+}
+
+auto TestMenuModel() -> void {
+  const std::span<const dnd::MenuField> host =
+      dnd::MenuFieldOrder(dnd::MenuTab::kHost);
+  Expect(host.size() == 2 && host[0] == dnd::MenuField::kPort &&
+             host[1] == dnd::MenuField::kPassword,
+         "the host tab edits port and password");
+  const std::span<const dnd::MenuField> join =
+      dnd::MenuFieldOrder(dnd::MenuTab::kJoin);
+  Expect(join.size() == 4 && join[0] == dnd::MenuField::kAddress &&
+             join[1] == dnd::MenuField::kPort &&
+             join[2] == dnd::MenuField::kName &&
+             join[3] == dnd::MenuField::kPassword,
+         "the join tab edits address, port, name and password");
+  Expect(dnd::MenuFieldOrder(dnd::MenuTab::kEditor).empty(),
+         "the editor tab has no text fields");
+
+  Expect(dnd::NextMenuField(dnd::MenuTab::kHost, dnd::MenuField::kPort, 1) ==
+             dnd::MenuField::kPassword,
+         "Tab moves to the next host field");
+  Expect(dnd::NextMenuField(dnd::MenuTab::kHost, dnd::MenuField::kPassword,
+                            1) == dnd::MenuField::kPort,
+         "Tab wraps around the host fields");
+  Expect(dnd::NextMenuField(dnd::MenuTab::kHost, dnd::MenuField::kPassword,
+                            -1) == dnd::MenuField::kPort,
+         "Shift+Tab moves backwards");
+  Expect(dnd::NextMenuField(dnd::MenuTab::kHost, dnd::MenuField::kNone, -1) ==
+             dnd::MenuField::kPassword,
+         "Shift+Tab from no field selects the last field");
+  Expect(dnd::NextMenuField(dnd::MenuTab::kEditor, dnd::MenuField::kNone, 1) ==
+             dnd::MenuField::kNone,
+         "the editor tab never focuses a field");
+
+  Expect(dnd::NextMenuTab(dnd::MenuTab::kHost, -1) == dnd::MenuTab::kEditor,
+         "left from the host tab wraps to the editor");
+  Expect(dnd::NextMenuTab(dnd::MenuTab::kEditor, 1) == dnd::MenuTab::kHost,
+         "right from the editor wraps to the host");
+  Expect(dnd::NextMenuTab(dnd::MenuTab::kJoin, -1) == dnd::MenuTab::kHost,
+         "left from the join tab goes to the host");
+
+  Expect(dnd::MenuFieldLimit(dnd::MenuField::kPort) == 5,
+         "the port field holds five bytes");
+  Expect(dnd::MenuFieldLimit(dnd::MenuField::kName) == 64,
+         "the name field holds 64 bytes");
+  Expect(dnd::MenuFieldLimit(dnd::MenuField::kNone) == 0,
+         "no field accepts no text");
+
+  dnd::MenuState menu;
+  menu.active_field = dnd::MenuField::kPort;
+  Expect(dnd::ActiveMenuText(menu) == &menu.port,
+         "the active field points at the port buffer");
+  menu.tab = dnd::MenuTab::kJoin;
+  menu.active_field = dnd::MenuField::kAddress;
+  Expect(dnd::ActiveMenuText(menu) == &menu.address,
+         "the join tab edits the address");
+  menu.tab = dnd::MenuTab::kHost;
+  Expect(dnd::ActiveMenuText(menu) == nullptr,
+         "the host tab has no address field");
+  menu.tab = dnd::MenuTab::kEditor;
+  menu.active_field = dnd::MenuField::kPort;
+  Expect(dnd::ActiveMenuText(menu) == nullptr,
+         "the editor tab does not edit text");
+
+  std::uint16_t port = 0;
+  Expect(dnd::ParsePort("7777", port) && port == 7777, "a plain port parses");
+  Expect(dnd::ParsePort("65535", port) && port == 65535,
+         "the largest port parses");
+  Expect(!dnd::ParsePort("0", port), "port zero is rejected");
+  Expect(!dnd::ParsePort("65536", port), "ports above 65535 are rejected");
+  Expect(!dnd::ParsePort("", port), "an empty port is rejected");
+  Expect(!dnd::ParsePort("-1", port), "a negative port is rejected");
+  Expect(!dnd::ParsePort(" 80", port), "leading spaces are rejected");
+  Expect(!dnd::ParsePort("80 ", port), "trailing spaces are rejected");
+  Expect(!dnd::ParsePort("80a", port), "trailing letters are rejected");
+
+  const dnd::HostAddress named = dnd::SplitHostPort("example.org:7778");
+  Expect(named.host == "example.org" && named.has_port && named.port == 7778,
+         "host:port splits into host and port");
+  const dnd::HostAddress plain_host = dnd::SplitHostPort("example.org");
+  Expect(plain_host.host == "example.org" && !plain_host.has_port,
+         "a host without a port stays whole");
+  const dnd::HostAddress bad_port = dnd::SplitHostPort("example.org:0");
+  Expect(bad_port.host == "example.org:0" && !bad_port.has_port,
+         "an invalid port keeps the whole address");
+  const dnd::HostAddress empty_host = dnd::SplitHostPort(":7777");
+  Expect(
+      empty_host.host.empty() && empty_host.has_port && empty_host.port == 7777,
+      "an empty host with a port is reported as such");
+}
+
+auto TestNavigation() -> void {
+  Expect(dnd::WrapIndex(0, -1, 3) == 2, "wrapping left from the first item");
+  Expect(dnd::WrapIndex(2, 1, 3) == 0, "wrapping right from the last item");
+  Expect(dnd::WrapIndex(1, 3, 5) == 4, "wrapping skips whole laps");
+  Expect(dnd::WrapIndex(4, 3, 5) == 2, "wrapping handles a negative result");
+  Expect(dnd::WrapIndex(2, 1, 0) == 0, "an empty list wraps to zero");
+
+  Expect(dnd::StepIndex(0, -1, 3) == 0, "the first item cannot step up");
+  Expect(dnd::StepIndex(2, 1, 3) == 2, "the last item cannot step down");
+  Expect(dnd::StepIndex(1, -1, 3) == 0, "stepping up moves one item");
+  Expect(dnd::StepIndex(1, 1, 3) == 2, "stepping down moves one item");
+  Expect(dnd::StepIndex(1, 0, 3) == 1, "a zero step keeps the index");
+  Expect(dnd::StepIndex(5, 1, 3) == 2, "an out-of-range index is clamped");
+  Expect(dnd::StepIndex(4, -1, 0) == 0, "an empty list steps to zero");
+
+  Expect(dnd::IndexAfterDelete(0, 2) == 0,
+         "deleting the first item opens the new first");
+  Expect(dnd::IndexAfterDelete(1, 2) == 0,
+         "deleting a middle item opens the previous one");
+  Expect(dnd::IndexAfterDelete(2, 2) == 1,
+         "deleting the last item opens the previous one");
+  Expect(dnd::IndexAfterDelete(5, 2) == 1,
+         "a stale removed index still opens the last remaining item");
+  Expect(dnd::IndexAfterDelete(0, 0) == 0,
+         "deleting the only item leaves index zero");
+
+  Expect(dnd::IndexForDigit(1, 3) == 0, "digit 1 opens the first scene");
+  Expect(dnd::IndexForDigit(3, 3) == 2, "digit 3 opens the third scene");
+  Expect(!dnd::IndexForDigit(4, 3).has_value(),
+         "a digit without a scene opens nothing");
+  Expect(!dnd::IndexForDigit(0, 3).has_value(), "digit zero opens nothing");
+  Expect(dnd::IndexForDigit(9, 10) == 8,
+         "digit 9 reaches the ninth scene in a longer campaign");
+}
+
+auto TestChatInput() -> void {
+  dnd::ChatInput chat;
+  Expect(!chat.Active() && chat.Text().empty(), "chat starts closed");
+  chat.Open();
+  Expect(chat.Active() && chat.Text().empty(), "Enter opens an empty line");
+  chat.Append("привет");
+  Expect(chat.Text() == "привет", "chat accepts Cyrillic text");
+  chat.Backspace();
+  Expect(chat.Text() == "приве", "backspace removes a whole code point");
+  chat.Backspace();
+  Expect(chat.Text() == "прив", "backspace keeps the line valid");
+
+  chat.OpenWith("/aoe ");
+  Expect(chat.Active() && chat.Text() == "/aoe ",
+         "the area template primes the damage command");
+  const std::string taken = chat.Take();
+  Expect(taken == "/aoe " && chat.Text().empty() && chat.Active(),
+         "taking the line clears it and keeps the input open");
+  chat.Close();
+  Expect(!chat.Active() && chat.Text().empty(), "Esc closes and clears");
+
+  chat.Open();
+  for (int i = 0; i < 100; ++i) {
+    chat.Append("я");
+  }
+  Expect(chat.Text().size() == dnd::kMaxChatInputBytes,
+         "chat stops at the byte limit");
+  chat.Append("я");
+  Expect(chat.Text().size() == dnd::kMaxChatInputBytes &&
+             dnd::PreviousCodePointStart(chat.Text()) ==
+                 dnd::kMaxChatInputBytes - 2,
+         "the byte limit never splits a Cyrillic letter");
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -2645,14 +3699,23 @@ auto main() -> int {
     TestDiceExpression();
     TestBestiary();
     TestDynamicFogObservers();
+    TestFogSurvivesReset();
+    TestSeparateVisibility();
+    TestFogMovement();
+    TestLevels();
+    TestExperience();
     TestUtf8();
+    TestPlayerNames();
+    TestCaseInsensitiveOwnership();
     TestTokenManagement();
     TestEncounter();
     TestEncounterCommands();
     TestMovementBudget();
+    TestMovementPathsAndDiagonals();
     TestAoe();
     TestAoeCommands();
     TestChatAndDice();
+    TestChatCommandParsing();
     TestPing();
     TestMapBackground();
     TestTokenPortrait();
@@ -2662,6 +3725,13 @@ auto main() -> int {
     TestDamagedPayloads();
     TestSessionLog();
     TestSha256();
+    TestCamera();
+    TestAutosave();
+    TestLogScroll();
+    TestDeleteConfirm();
+    TestMenuModel();
+    TestNavigation();
+    TestChatInput();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());
     return 1;

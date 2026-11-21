@@ -100,6 +100,16 @@ auto FogOfWar::Recompute(const GridMap& map, const std::vector<Cell>& observers,
   }
 }
 
+auto FogOfWar::Reveal(const std::vector<Cell>& cells) -> void {
+  for (const Cell cell : cells) {
+    if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) {
+      continue;
+    }
+    visible_[Index(cell)] = 1;
+    explored_[Index(cell)] = 1;
+  }
+}
+
 auto FogOfWar::Snapshot() const -> FogSnapshot {
   return FogSnapshot{
       .width = width_,

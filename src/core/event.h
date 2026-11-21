@@ -67,8 +67,14 @@ struct MapBackgroundUpdated {
   MapBackground background;
 };
 
-using Event = std::variant<TokenMoved, ViewUpdated, LogLineAdded, TokenAdded,
-                           TokenRemoved, TokenUpdated, EncounterUpdated,
-                           AoeUpdated, PingMarker, MapBackgroundUpdated>;
+// DM открыл столу области вручную; пустой список снимает все открытия.
+struct RevealedUpdated {
+  std::vector<Cell> cells;
+};
+
+using Event =
+    std::variant<TokenMoved, ViewUpdated, LogLineAdded, TokenAdded,
+                 TokenRemoved, TokenUpdated, EncounterUpdated, AoeUpdated,
+                 PingMarker, MapBackgroundUpdated, RevealedUpdated>;
 
 }  // namespace dnd

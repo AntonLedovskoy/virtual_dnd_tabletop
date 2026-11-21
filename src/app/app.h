@@ -13,11 +13,18 @@
 #include <string_view>
 #include <vector>
 
+#include "core/autosave.h"
+#include "core/camera.h"
 #include "core/campaign.h"
 #include "core/campaign_io.h"
+#include "core/chat_command.h"
+#include "core/chat_input.h"
 #include "core/client_view.h"
+#include "core/delete_confirm.h"
 #include "core/game_server.h"
 #include "core/local_transport.h"
+#include "core/log_scroll.h"
+#include "core/menu_model.h"
 #include "core/session_log.h"
 #include "net/net_client.h"
 #include "net/net_server.h"
@@ -201,8 +208,8 @@ class App {
       -> void;
   // Портреты токенов: одна текстура на имя файла, nullptr — файла нет.
   auto PortraitTexture(const std::string& image) -> SDL_Texture*;
-  // Разбирает хвост команды «/map ...».
-  auto SubmitMapCommand(std::string_view args) -> void;
+  // Ставит подложку по разобранной команде «/map ...».
+  auto SubmitMapCommand(const ChatCommand& command) -> void;
   auto LoadFont() -> void;
 
   [[nodiscard]] auto CellFromPixel(float x, float y) const -> Cell;
@@ -276,9 +283,7 @@ class App {
   bool measuring_ = false;
   std::optional<Cell> measure_start_;
   std::optional<Cell> measure_end_;
-  float cell_size_ = 48.0F;
-  float camera_x_ = 0.0F;
-  float camera_y_ = 0.0F;
+  Camera camera_;
   bool panning_ = false;
   float pan_last_x_ = 0.0F;
   float pan_last_y_ = 0.0F;
@@ -288,15 +293,12 @@ class App {
   std::chrono::steady_clock::time_point next_reconnect_;
   std::chrono::steady_clock::time_point connect_deadline_;
 
-  bool chat_active_ = false;
-  std::string chat_input_;
+  ChatInput chat_;
 
-  bool campaign_dirty_ = false;
-  std::chrono::steady_clock::time_point campaign_changed_at_;
+  AutosaveTimer autosave_;
 
   bool help_active_ = false;
-  int log_scroll_ = 0;
-  std::size_t log_count_ = 0;
+  LogScroll log_scroll_{kLogVisibleLines};
   // Индекс в kUiScales: 1.0, 1.25, 1.5, 2.0.
   int ui_scale_index_ = 0;
   // Файл сессии и число строк, которые в него уже попали.
@@ -316,10 +318,8 @@ class App {
   std::mt19937 rng_{std::random_device{}()};
 
   std::deque<GameSnapshot> undo_stack_;
-  TokenId pending_delete_token_ = 0;
-  std::chrono::steady_clock::time_point pending_delete_token_at_;
-  std::size_t pending_delete_scene_ = kNoScene;
-  std::chrono::steady_clock::time_point pending_delete_scene_at_;
+  DeleteConfirm delete_token_;
+  DeleteConfirm delete_scene_;
 
   TokenId selected_id_ = 0;
   bool dragging_ = false;
