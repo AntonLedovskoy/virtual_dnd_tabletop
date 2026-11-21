@@ -285,8 +285,8 @@ auto App::Initialize() -> bool {
     SDL_Log("SDL_Init failed: %s", SDL_GetError());
     return false;
   }
-  window_ = SDL_CreateWindow("dnd", kWindowWidth, kWindowHeight,
-                             SDL_WINDOW_RESIZABLE);
+  window_ = SDL_CreateWindow("virtual_dnd_tabletop", kWindowWidth,
+                             kWindowHeight, SDL_WINDOW_RESIZABLE);
   if (window_ == nullptr) {
     SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
     return false;

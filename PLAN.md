@@ -170,7 +170,8 @@
 ## Этап 0. Инженерная база (P0, S–M) — готово
 
 - [x] Флаги `-Wall -Wextra -Wpedantic` для своих целей в `CMakeLists.txt`
-      (`dnd_core`, `dnd_net`, `dnd`, тесты). Сборка чистая; отключено только
+      (`dnd_core`, `dnd_net`, `virtual_dnd_tabletop`, тесты). Сборка чистая;
+      отключено только
       `-Wno-missing-field-initializers` — агрегаты с частично заполненными
       полями это стиль проекта.
 - [x] Необязательный прогон `clang-tidy` по `compile_commands.json`:
@@ -443,14 +444,14 @@ DM-ом, лог читается как протокол боя.
 автообновление полное (скачивание exe, проверка sha256, подмена, перезапуск).
 
 Исходные условия: SDL3, SDL3_ttf и SDL3_image слинкованы статически
-(`SDL_STATIC ON`), `WIN32_EXECUTABLE TRUE` — на выходе один `dnd.exe` без DLL и
-без консоли, установщик не нужен. Данные стола лежат рядом с `.exe`
-(`SDL_GetBasePath()`): `savegame.bin`, `*.dndcamp`, `session.log`, подложки,
-портреты, `assets/fonts/DejaVuSans.ttf`. Значит обновление — подмена только
-`.exe`, папку игры трогать нельзя. Протокол строгий (`kProtocolVersion`),
-сейвы и кампании читают ещё и `N-1`. Версия теперь приходит из
-`git describe` на configure: на теге — `v0.5.2`, без тега —
-`0.0.0-dirty` (developer build).
+(`SDL_STATIC ON`), `WIN32_EXECUTABLE TRUE` — на выходе один
+`virtual_dnd_tabletop.exe` без DLL и без консоли, установщик не нужен. Данные
+стола лежат рядом с `.exe` (`SDL_GetBasePath()`): `savegame.bin`, `*.dndcamp`,
+`session.log`, подложки, портреты, `assets/fonts/DejaVuSans.ttf`. Значит
+обновление — подмена только `.exe`, папку игры трогать нельзя. Протокол
+строгий (`kProtocolVersion`), сейвы и кампании читают ещё и `N-1`. Версия
+теперь приходит из `git describe` на configure: на теге — `v0.5.2`, без
+тега — `0.0.0-dirty` (developer build).
 
 ### 7.1 Версия сборки
 
@@ -468,31 +469,33 @@ DM-ом, лог читается как протокол боя.
 
 ### 7.2 Канал раздачи
 
-- [ ] Публичный репозиторий на GitHub, релиз на тег `v0.5.2`; в каждом релизе
-      три файла: `dnd.exe`, `dnd-<ver>-win64.zip` (exe +
-      `assets/fonts/DejaVuSans.ttf`) и `latest.json`.
-- [ ] Манифест читается по стабильной ссылке
-      `https://github.com/USER/dnd/releases/latest/download/latest.json` — без
-      GitHub API: нет лимитов, нет токена в клиенте, не нужен GitHub Pages:
+- [x] Публичный репозиторий `virtual_dnd_tabletop` на GitHub; релиз на тег
+      `vX.Y.Z`, в каждом три файла: `virtual_dnd_tabletop.exe`,
+      `virtual_dnd_tabletop-<ver>-win64.zip` (exe + `assets/fonts/DejaVuSans.ttf`,
+      если шрифт есть в репозитории) и `latest.json`.
+- [x] Манифест читается по стабильной ссылке
+      `https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases/latest/download/latest.json`
+      — без GitHub API: нет лимитов, нет токена в клиенте, не нужен GitHub
+      Pages:
 
 ```json
 {
   "version": "0.5.2",
   "protocol": 36,
-  "url": "https://github.com/USER/dnd/releases/download/v0.5.2/dnd.exe",
+  "url": "https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases/download/v0.5.2/virtual_dnd_tabletop.exe",
   "sha256": "…",
   "notes": "что нового",
   "published": "2026-11-21"
 }
 ```
 
-- [ ] `package.bat` рядом с `build.bat` (тот же MSYS2/UCRT64) +
-      `tools/package.sh`: release-сборка → `dist/dnd-<ver>/` → sha256 →
-      `latest.json` → zip.
-- [ ] Загрузка: `gh release create v0.5.2 --notes-file …` (CLI сейчас не
-      установлен — `winget install GitHub.cli`), иначе те же три файла
-      загружаются через веб-форму GitHub.
-- [ ] Флоу в `AGENTS.md` (раздел «Релизы»): тег → `package.bat` → загрузка, и
+- [x] `package.bat` рядом с `build.bat` (тот же MSYS2/UCRT64) +
+      `tools/package.sh`: release-сборка с `-c` → `dist/virtual_dnd_tabletop-<ver>/`
+      → sha256 → `latest.json` → zip; собирает только с чистого тега,
+      `--allow-dev` — проверка пайплайна.
+- [x] Загрузка: `gh release create vX.Y.Z …` или веб-форма Releases (CLI не
+      установлен); команда печатается в конце `package.bat`.
+- [x] Флоу в `AGENTS.md` (раздел «Релизы»): тег → `package.bat` → загрузка, и
       правило «бамп протокола = новый релиз в тот же день».
 
 ### 7.3 Проверка обновлений в приложении
@@ -518,26 +521,31 @@ DM-ом, лог читается как протокол боя.
 Windows разрешает переименовать запущенный `.exe`, но не удалить — на этом и
 строится обновление без установщика и без прав администратора.
 
-- [ ] Скачивание в `dnd.update.exe` рядом с текущим exe; проверка размера и
-      `sha256` из манифеста (переиспользуется `src/core/sha256`, файл читается
-      в память целиком — около 20 МБ).
+- [ ] Скачивание в `virtual_dnd_tabletop.update.exe` рядом с текущим exe;
+      проверка размера и `sha256` из манифеста (переиспользуется
+      `src/core/sha256`, файл читается в память целиком — около 20 МБ).
 - [ ] Проверка, что папка доступна на запись; если нет (игра в
       `Program Files`) — самообновление отключается, остаётся кнопка
       «Скачать» в браузере.
 - [ ] У хоста перед подменой — `CampaignSaver::Flush()`, чтобы не потерять
       окно автосейва.
-- [ ] Подмена: `dnd.exe → dnd.old.exe`, `dnd.update.exe → dnd.exe`,
-      `CreateProcess` нового бинарника, старый процесс выходит; `dnd.old.exe`
-      удаляется при следующем запуске.
+- [ ] Подмена: `virtual_dnd_tabletop.exe →
+      virtual_dnd_tabletop.old.exe`, `virtual_dnd_tabletop.update.exe →
+      virtual_dnd_tabletop.exe`, `CreateProcess` нового бинарника, старый
+      процесс выходит; `virtual_dnd_tabletop.old.exe` удаляется при следующем
+      запуске.
 - [ ] Откат: если второй rename не удался (антивирус держит файл) —
-      `dnd.old.exe → dnd.exe` и понятный текст ошибки.
-- [ ] `PlanStartupRecovery` в `src/core/update`: комбинации `dnd.exe` /
-      `dnd.old.exe` / `dnd.update.exe` → `None`, `RestoreOld`, `FinishSwap`,
+      `virtual_dnd_tabletop.old.exe → virtual_dnd_tabletop.exe` и понятный
+      текст ошибки.
+- [ ] `PlanStartupRecovery` в `src/core/update`: комбинации
+      `virtual_dnd_tabletop.exe` / `virtual_dnd_tabletop.old.exe` /
+      `virtual_dnd_tabletop.update.exe` → `None`, `RestoreOld`, `FinishSwap`,
       `Cleanup`; вызывается до создания окна, тест `TestStartupRecovery` на
       все комбинации — обрыв между шагами не должен оставлять «игра не
       запускается».
 - [ ] Именованный мьютекс на путь папки: два экземпляра из одной папки не
-      запускаются, иначе `dnd.old.exe` залочен и подмена ломается.
+      запускаются, иначе `virtual_dnd_tabletop.old.exe` залочен и подмена
+      ломается.
 - [ ] Подмена только в меню: во время сессии — баннер «Обновление после выхода
       из игры», стол не теряется.
 
@@ -683,7 +691,9 @@ Windows разрешает переименовать запущенный `.exe
 | 21.11.2026 | Манифест обновлений по `releases/latest/download/latest.json` | Нет GitHub API: без лимитов, без токена в клиенте и без GitHub Pages |
 | 21.11.2026 | HTTP через WinHTTP, а не libcurl и не SDL_net | Нет новых зависимостей, TLS из системы; `dnd_core` остаётся без платформенного кода |
 | 21.11.2026 | Подмена exe только в меню | Подмена бинарника во время стола уронила бы сессию хоста и всех клиентов |
-| 21.11.2026 | Версия — из `git describe` на configure; без тега `0.0.0-dirty` | Один источник правды: тег делает релиз, а сборка не ровно с тега не предлагает себе обновление |
+| 21.11.2026 | Версия — из `git describe` на configure; без тега `0.0.0-dirty` | Один источник правды: тег делает релиз, а сборка не ровно на теге не предлагает себе обновление |
+| 21.11.2026 | Пакет, exe и CMake-проект названы `virtual_dnd_tabletop` | Совпадает с репозиторием и ссылками релиза; namespace `dnd`, расширения `.dndcamp`/`.dndscene` и цели `dnd_core`/`dnd_net` остаются внутренними именами |
+| 21.11.2026 | `package.bat` собирает только с чистого тега, `--allow-dev` — для проверки пайплайна | Версия в бинарнике, имени архива и манифесте не может разойтись |
 | 21.11.2026 | Строгое равенство протокола сохранено, разнообразие версий лечим кнопкой обновления | Обратная совместимость на две версии — версионирование каждого сообщения; при 8 игроках дешевле одно нажатие |
 
 Сюда же добавляйте решения вроде «пароль оставляем открытым» или «подложку

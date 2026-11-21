@@ -25,7 +25,7 @@ if(DND_GIT_EXECUTABLE)
   endif()
 endif()
 
-project(dnd VERSION ${DND_VERSION_NUMERIC} LANGUAGES C CXX)
+project(virtual_dnd_tabletop VERSION ${DND_VERSION_NUMERIC} LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -184,7 +184,8 @@ add_executable(${PROJECT_NAME}
   src/render/ui_renderer.cpp
 )
 
-# GUI-сборка без окна консоли: диагностика идёт в dnd.log рядом с .exe.
+# GUI-сборка без окна консоли: диагностика идёт в virtual_dnd_tabletop.log
+# рядом с .exe.
 if(WIN32)
   set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()

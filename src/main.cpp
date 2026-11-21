@@ -24,14 +24,14 @@ namespace {
 
 // Окно консоли у GUI-сборки нет, поэтому справка показывается диалогом.
 constexpr const char* kUsage =
-    "usage: dnd [--menu] [--host] [--editor] [--port N] [--name NAME] "
-    "[--password PASS] [--connect HOST[:PORT]] [--version] "
+    "usage: virtual_dnd_tabletop [--menu] [--host] [--editor] [--port N] "
+    "[--name NAME] [--password PASS] [--connect HOST[:PORT]] [--version] "
     "[--no-update-check]";
 
 // `--version` — тоже диалогом: консоли нет. В developer build видно, почему
 // автообновление выключено.
 auto VersionInfo() -> std::string {
-  std::string text = "dnd ";
+  std::string text = "virtual_dnd_tabletop ";
   dnd::Version version;
   if (dnd::ParseVersion(DND_VERSION, version)) {
     text += dnd::FormatVersion(version);
@@ -130,36 +130,38 @@ auto ParseOptions(int argc, char** argv) -> CommandLine {
 }  // namespace
 
 auto SDL_AppInit(void** appstate, int argc, char* argv[]) -> SDL_AppResult {
-  SDL_SetAppMetadata("dnd", DND_VERSION, "com.example.dnd");
-  // Окна консоли нет: журнал приложения и сообщения SDL пишутся в dnd.log.
+  SDL_SetAppMetadata("virtual_dnd_tabletop", DND_VERSION,
+                     "com.example.virtual_dnd_tabletop");
+  // Окна консоли нет: журнал приложения и сообщения SDL пишутся в
+  // virtual_dnd_tabletop.log.
   dnd::InstallFileLog();
 
   const CommandLine command_line = ParseOptions(argc, argv);
-  SDL_Log("dnd %s", DND_VERSION);
+  SDL_Log("virtual_dnd_tabletop %s", DND_VERSION);
   if (command_line.show_version) {
     const std::string version = VersionInfo();
     SDL_Log("%s", version.c_str());
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "dnd", version.c_str(),
-                             nullptr);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "virtual_dnd_tabletop",
+                             version.c_str(), nullptr);
     dnd::ShutdownFileLog();
     return SDL_APP_SUCCESS;
   }
   if (command_line.show_help) {
     SDL_Log("%s", kUsage);
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "dnd", kUsage,
-                             nullptr);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "virtual_dnd_tabletop",
+                             kUsage, nullptr);
     dnd::ShutdownFileLog();
     return SDL_APP_SUCCESS;
   }
 
   auto app = std::make_unique<dnd::App>(command_line.options);
   if (!app->Initialize()) {
-    const std::string error = std::string("Не удалось запустить dnd: ") +
-                              SDL_GetError() +
-                              "\n\nПодробности: " + dnd::kFileLogName;
+    const std::string error =
+        std::string("Не удалось запустить virtual_dnd_tabletop: ") +
+        SDL_GetError() + "\n\nПодробности: " + dnd::kFileLogName;
     SDL_Log("app initialization failed: %s", SDL_GetError());
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "dnd", error.c_str(),
-                             nullptr);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "virtual_dnd_tabletop",
+                             error.c_str(), nullptr);
     dnd::ShutdownFileLog();
     return SDL_APP_FAILURE;
   }

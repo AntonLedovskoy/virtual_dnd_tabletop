@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Virtual D&D tabletop, C++20 + SDL3. One `dnd` binary: authoritative host/DM or
-TCP client. No README/CI: build scripts and tests are the source of truth;
-roadmap and weak spots in `PLAN.md`.
+Virtual D&D tabletop, C++20 + SDL3. One `virtual_dnd_tabletop` binary:
+authoritative host/DM or TCP client. No README/CI: build scripts and tests are
+the source of truth; roadmap and weak spots in `PLAN.md`.
 
 Language: code, comments, docs in Russian; identifiers and terms in English.
 Local rules win where stricter than global (language, live UI checks).
@@ -15,8 +15,8 @@ Old rules appear only as a deliberate note in `PLAN.md`.
 
 - Windows: `.\build.bat` (debug default). `-p debug|release|relwithdebinfo|minsize`, `-c` reconfigure, `-j N` jobs, `-t`/`--tidy` runs `clang-tidy` on our `.cpp`, fails on any finding.
 - `build.bat` runs `build.sh` in MSYS2 UCRT64 (`C:\msys64` or `%MSYS2_ROOT%`); never run `build.sh` from PowerShell.
-- Binaries in `.build/<profile>/`, e.g. `.build/debug/dnd.exe`.
-- `dnd.exe` — GUI-подсистема без окна консоли: `SDL_Log` дописывается в `dnd.log` рядом с `.exe` (`src/app/file_log.h`), а `--help` и ошибка запуска показываются диалогом. Тесты остаются консольными.
+- Binaries in `.build/<profile>/`, e.g. `.build/debug/virtual_dnd_tabletop.exe`.
+- `virtual_dnd_tabletop.exe` — GUI-подсистема без окна консоли: `SDL_Log` дописывается в `virtual_dnd_tabletop.log` рядом с `.exe` (`src/app/file_log.h`), а `--help` и ошибка запуска показываются диалогом. Тесты остаются консольными.
 - First configure fetches SDL3, SDL3_ttf, SDL3_image via FetchContent (network, minutes); `.build/<profile>` reused unless `-c`.
 - Our targets: `-Wall -Wextra -Wpedantic`; deps use own flags; new warnings in our code = error.
 - All tests: `ctest --test-dir .build/debug --output-on-failure`; one suite: `-R core_tests` or `.build/debug/dnd_core_tests.exe`.
@@ -24,6 +24,15 @@ Old rules appear only as a deliberate note in `PLAN.md`.
 - `net_tests`: temp localhost port, 3 s timeouts, no external services.
 - GUI needs a display: debug via `.vscode/launch.json`, not tests.
 - UI: verify on live GUI with client-area screenshots, not `ctest`. Run host + client, walk the scenario, snapshot each changed visual behavior. SendInput/`SendKeys` in client coordinates is fine, outcome must be a snapshot.
+
+## Релизы
+
+- Релиз — аннотированный тег `vX.Y.Z` на чистом `master`; тело тега становится заметками в `latest.json`: `git tag -a vX.Y.Z -m "что нового"`, затем `git push origin master --tags`.
+- `.\package.bat` собирает release (с `-c`, чтобы версия попала в бинарник) и кладёт в `dist/`: `virtual_dnd_tabletop.exe`, `virtual_dnd_tabletop-X.Y.Z-win64.zip`, `latest.json` и `notes.txt`. Проверяет, что exe несёт версию тега, и хеширует его в манифест. `--allow-dev` — прогон пайплайна без тега, такой архив не выкладывать.
+- Загрузка: `gh release create vX.Y.Z dist/virtual_dnd_tabletop.exe dist/virtual_dnd_tabletop-X.Y.Z-win64.zip dist/latest.json --title "virtual_dnd_tabletop X.Y.Z" --notes-file dist/notes.txt`; если `gh` нет — те же три файла через веб-форму Releases.
+- Клиент читает манифест по стабильной ссылке `https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases/latest/download/latest.json`.
+- Бамп `kProtocolVersion` — новый релиз в тот же день: клиент со старой версией получает отказ при подключении.
+- Обновление ставится поверх той же папки: данные стола лежат рядом с `.exe`.
 
 ## Architecture
 
