@@ -53,6 +53,8 @@ struct AppOptions {
   std::string password;
   bool auto_start = false;
   bool start_editor = false;
+  // `--no-update-check`: отладка и офлайн. Проверку обновлений читает 7.3.
+  bool no_update_check = false;
 };
 
 // Владеет окном/рендерером SDL и связывает ввод с командами, локальным

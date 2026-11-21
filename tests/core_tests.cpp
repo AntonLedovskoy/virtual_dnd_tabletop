@@ -49,6 +49,7 @@
 #include "core/sha256.h"
 #include "core/ui_hint.h"
 #include "core/utf8.h"
+#include "core/version.h"
 #include "core/visibility.h"
 #include "core/x25519.h"
 
@@ -2061,6 +2062,54 @@ auto TestPlayerNames() -> void {
   Expect(!dnd::SamePlayerName("", "dm"), "an empty name differs from a name");
   Expect(dnd::SamePlayerName("", ""), "empty names are equal");
   Expect(dnd::PlayerNameKey("DM") == "dm", "the reserved name folds too");
+}
+
+auto TestVersion() -> void {
+  dnd::Version version;
+  const auto parse = [&version](std::string_view text) -> bool {
+    return dnd::ParseVersion(text, version);
+  };
+
+  Expect(parse("0.5.2") && version.major == 0 && version.minor == 5 &&
+             version.patch == 2 && !version.dirty,
+         "a plain version parses as a release");
+  Expect(parse("v0.5.2") && dnd::FormatVersion(version) == "0.5.2",
+         "a tag with the v prefix parses the same");
+  Expect(parse("0.5.2-3-gabc123") && version.major == 0 && version.minor == 5 &&
+             version.patch == 2 && version.dirty,
+         "commits past the tag make a developer build");
+  Expect(parse("0.5.2-3-gabc123-dirty") && version.dirty,
+         "a dirty describe is a developer build");
+  Expect(parse("0.0.0-dirty") && version.dirty,
+         "the no-git fallback is a developer build");
+
+  const dnd::Version before = version;
+  Expect(!parse("") && !parse("0.5") && !parse("0.5.2.1") && !parse("x0.5.2") &&
+             !parse("0.5.-2") && !parse("0.5.2-") && !parse(" 0.5.2") &&
+             !parse("99999999999.0.0"),
+         "malformed versions are rejected");
+  Expect(version.major == before.major && version.minor == before.minor &&
+             version.patch == before.patch && version.dirty == before.dirty,
+         "a rejected version leaves the output untouched");
+
+  Expect(parse("1.2.3"), "version for comparisons parses");
+  const dnd::Version older{.major = 1, .minor = 2, .patch = 3};
+  const dnd::Version newer_patch{.major = 1, .minor = 2, .patch = 4};
+  const dnd::Version newer_minor{.major = 1, .minor = 3, .patch = 0};
+  const dnd::Version newer_major{.major = 2, .minor = 0, .patch = 0};
+  const dnd::Version dirty_same{
+      .major = 1, .minor = 2, .patch = 3, .dirty = true};
+  Expect(dnd::CompareVersion(older, older) == 0 &&
+             dnd::CompareVersion(older, newer_patch) == -1 &&
+             dnd::CompareVersion(newer_patch, older) == 1,
+         "versions compare by patch number");
+  Expect(dnd::CompareVersion(older, newer_minor) == -1 &&
+             dnd::CompareVersion(newer_minor, newer_major) == -1,
+         "minor and major outrank a patch difference");
+  Expect(dnd::CompareVersion(older, dirty_same) == 0,
+         "dirty does not change the numeric order");
+  Expect(dnd::FormatVersion(dirty_same) == "1.2.3-dirty",
+         "a developer build is formatted with -dirty");
 }
 
 auto TestCaseInsensitiveOwnership() -> void {
@@ -4962,6 +5011,7 @@ auto main() -> int {
     TestExperience();
     TestUtf8();
     TestPlayerNames();
+    TestVersion();
     TestCaseInsensitiveOwnership();
     TestTokenManagement();
     TestEncounter();

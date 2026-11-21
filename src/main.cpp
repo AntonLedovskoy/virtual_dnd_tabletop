@@ -10,13 +10,42 @@
 
 #include "app/app.h"
 #include "app/file_log.h"
+#include "core/campaign_io.h"
+#include "core/scene_io.h"
+#include "core/version.h"
+#include "net/protocol.h"
+
+// CMake подставляет версию из git describe; вне CMake-сборки — developer build.
+#ifndef DND_VERSION
+#define DND_VERSION "0.0.0-dirty"
+#endif
 
 namespace {
 
 // Окно консоли у GUI-сборки нет, поэтому справка показывается диалогом.
 constexpr const char* kUsage =
     "usage: dnd [--menu] [--host] [--editor] [--port N] [--name NAME] "
-    "[--password PASS] [--connect HOST[:PORT]]";
+    "[--password PASS] [--connect HOST[:PORT]] [--version] "
+    "[--no-update-check]";
+
+// `--version` — тоже диалогом: консоли нет. В developer build видно, почему
+// автообновление выключено.
+auto VersionInfo() -> std::string {
+  std::string text = "dnd ";
+  dnd::Version version;
+  if (dnd::ParseVersion(DND_VERSION, version)) {
+    text += dnd::FormatVersion(version);
+    if (version.dirty) {
+      text += " (developer build)";
+    }
+  } else {
+    text += DND_VERSION;
+  }
+  text += "\n\nПротокол: " + std::to_string(dnd::kProtocolVersion);
+  text += "\nСохранения: " + std::to_string(dnd::kSaveVersion);
+  text += "\nКампании: " + std::to_string(dnd::kCampaignVersion);
+  return text;
+}
 
 auto ParsePort(std::string_view text, std::uint16_t& port) -> bool {
   if (text.empty()) {
@@ -46,8 +75,9 @@ auto ParseEndpoint(std::string_view text, dnd::AppOptions& options) -> bool {
 
 struct CommandLine {
   dnd::AppOptions options;
-  // Справка в GUI-сборке показывается диалогом, а не в консоли.
+  // Справка и версия в GUI-сборке показываются диалогом, а не в консоли.
   bool show_help = false;
+  bool show_version = false;
 };
 
 auto ParseOptions(int argc, char** argv) -> CommandLine {
@@ -85,6 +115,10 @@ auto ParseOptions(int argc, char** argv) -> CommandLine {
       options.auto_start = false;
     } else if (argument == "--help" || argument == "-h") {
       command_line.show_help = true;
+    } else if (argument == "--version") {
+      command_line.show_version = true;
+    } else if (argument == "--no-update-check") {
+      options.no_update_check = true;
     }
   }
   if (force_menu) {
@@ -96,11 +130,20 @@ auto ParseOptions(int argc, char** argv) -> CommandLine {
 }  // namespace
 
 auto SDL_AppInit(void** appstate, int argc, char* argv[]) -> SDL_AppResult {
-  SDL_SetAppMetadata("dnd", "0.1.0", "com.example.dnd");
+  SDL_SetAppMetadata("dnd", DND_VERSION, "com.example.dnd");
   // Окна консоли нет: журнал приложения и сообщения SDL пишутся в dnd.log.
   dnd::InstallFileLog();
 
   const CommandLine command_line = ParseOptions(argc, argv);
+  SDL_Log("dnd %s", DND_VERSION);
+  if (command_line.show_version) {
+    const std::string version = VersionInfo();
+    SDL_Log("%s", version.c_str());
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "dnd", version.c_str(),
+                             nullptr);
+    dnd::ShutdownFileLog();
+    return SDL_APP_SUCCESS;
+  }
   if (command_line.show_help) {
     SDL_Log("%s", kUsage);
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "dnd", kUsage,

@@ -1,6 +1,31 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(dnd VERSION 0.1.0 LANGUAGES C CXX)
+# Версия сборки — из ближайшего тега: на самом теге `v0.5.2`, после коммитов
+# `v0.5.2-3-gabc123`, с правками в рабочей копии `...-dirty`. Без git, вне
+# репозитория или без тегов — `0.0.0-dirty`: такая сборка считается
+# developer build, и автообновление ей выключается.
+find_program(DND_GIT_EXECUTABLE NAMES git)
+set(DND_VERSION "0.0.0-dirty")
+set(DND_VERSION_NUMERIC "0.0.0")
+if(DND_GIT_EXECUTABLE)
+  execute_process(
+    COMMAND ${DND_GIT_EXECUTABLE} describe --tags --always --dirty
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE DND_GIT_DESCRIBE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE DND_GIT_RESULT
+  )
+  if(DND_GIT_RESULT EQUAL 0 AND
+     DND_GIT_DESCRIBE MATCHES
+     "^[vV]?([0-9]+)\\.([0-9]+)\\.([0-9]+)(-.*)?$")
+    set(DND_VERSION "${DND_GIT_DESCRIBE}")
+    set(DND_VERSION_NUMERIC
+      "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+  endif()
+endif()
+
+project(dnd VERSION ${DND_VERSION_NUMERIC} LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -123,6 +148,7 @@ add_library(dnd_core STATIC
   src/core/sha256.cpp
   src/core/ui_hint.cpp
   src/core/utf8.cpp
+  src/core/version.cpp
   src/core/visibility.cpp
   src/core/x25519.cpp
 )
@@ -163,7 +189,12 @@ if(WIN32)
   set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
-target_compile_definitions(${PROJECT_NAME} PRIVATE SDL_MAIN_USE_CALLBACKS)
+# Версия из git describe: строка `DND_VERSION` уходит в `--version`, в
+# метаданные SDL и в решение об автообновлении (суффикс = developer build).
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+  SDL_MAIN_USE_CALLBACKS
+  DND_VERSION="${DND_VERSION}"
+)
 target_compile_options(${PROJECT_NAME} PRIVATE ${DND_WARNINGS})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
