@@ -49,6 +49,8 @@ class NetServer {
   auto operator=(const NetServer&) -> NetServer& = delete;
 
   auto Start(std::uint16_t port, const std::string& password = {}) -> bool;
+  // Закрывает порт и все соединения: хост вернулся в стартовое меню.
+  auto Stop() -> void;
   [[nodiscard]] auto Port() const -> std::uint16_t { return listener_.Port(); }
   [[nodiscard]] auto PeerCount() const -> std::size_t { return peers_.size(); }
   [[nodiscard]] auto Peers() const -> std::vector<PeerInfo>;

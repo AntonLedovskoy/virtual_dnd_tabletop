@@ -79,6 +79,8 @@ class TcpListener {
 
   // Порт 0 просит ОС выделить временный порт (используется в тестах).
   auto Listen(std::uint16_t port) -> bool;
+  // Закрывает слушающий сокет; Stop можно звать повторно.
+  auto Stop() -> void;
   [[nodiscard]] auto Listening() const -> bool;
   [[nodiscard]] auto Port() const -> std::uint16_t;
   [[nodiscard]] auto Accept() const -> std::unique_ptr<TcpConnection>;

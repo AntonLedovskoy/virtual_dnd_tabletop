@@ -519,6 +519,56 @@ auto App::SubmitMenu() -> void {
   }
 }
 
+auto App::ExitToMenu() -> void {
+  exit_confirm_active_ = false;
+  const bool was_host = options_.mode == AppMode::kHost;
+  if (was_host) {
+    if (in_game_) {
+      // Кампания — источник стартового мира: сохраняем её до закрытия порта.
+      StoreActiveScene();
+      SaveCampaign();
+    }
+    net_server_.Stop();
+  } else {
+    net_client_.Disconnect();
+  }
+
+  in_game_ = false;
+  in_editor_ = false;
+  client_connecting_ = false;
+  client_connected_ = false;
+  client_is_dm_ = false;
+  claimed_once_ = false;
+  menu_.tab = was_host ? MenuTab::kHost : MenuTab::kJoin;
+  menu_.active_field = MenuField::kNone;
+  menu_.busy = false;
+  menu_.status.clear();
+
+  chat_.Close();
+  help_active_ = false;
+  history_active_ = false;
+  sheet_active_ = false;
+  bestiary_active_ = false;
+  conditions_active_ = false;
+  scenes_active_ = false;
+  aoe_mode_ = false;
+  show_movement_range_ = false;
+  measuring_ = false;
+  measure_start_.reset();
+  measure_end_.reset();
+  dragging_ = false;
+  drag_target_.reset();
+  panning_ = false;
+  selected_id_ = 0;
+  log_scroll_.ToNewest();
+  log_top_ = 0.0F;
+  players_.clear();
+  player_owners_.clear();
+  ClearUndo();
+  RefreshCampaignLibrary();
+  SDL_Log("returned to menu");
+}
+
 auto App::SaveScene() -> void {
   if (editor_scene_ >= campaign_.scenes.size()) {
     editor_status_ = "Сцена не выбрана";
@@ -1127,6 +1177,18 @@ auto App::HandleEvent(SDL_Event event) -> void {
       return;
     }
   }
+  // Подтверждение выхода — верхняя модальная панель стола: пока она открыта,
+  // остальной ввод не проходит.
+  if (exit_confirm_active_) {
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+      if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
+        ExitToMenu();
+      } else if (event.key.key == SDLK_ESCAPE) {
+        exit_confirm_active_ = false;
+      }
+    }
+    return;
+  }
   // Справку ловим раньше остальных панелей: F1 должен открываться всегда,
   // даже поверх листа персонажа или строки чата.
   if (in_game_ && !in_editor_ && event.type == SDL_EVENT_KEY_DOWN &&
@@ -1354,12 +1416,20 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     if (chat_.Active()) {
       chat_.Close();
     } else {
+      // Сначала Esc снимает активный режим, и только свободный Esc спрашивает
+      // подтверждение выхода: случайное нажатие не рвёт сессию.
+      const bool had_mode = dragging_ || measure_start_.has_value() ||
+                            measure_end_.has_value() || aoe_mode_ ||
+                            view_.Aoe().shape != AoeShape::kNone;
       dragging_ = false;
       drag_target_.reset();
       measuring_ = false;
       measure_start_.reset();
       measure_end_.reset();
       ClearAoe();
+      if (!had_mode) {
+        exit_confirm_active_ = true;
+      }
     }
     return;
   }
@@ -3740,6 +3810,10 @@ auto App::Iterate() -> void {
   // Справка рисуется последней и перекрывает все остальные панели.
   if (help_active_) {
     DrawHelpPanel(renderer_, text_.get(), is_dm);
+  }
+  if (exit_confirm_active_) {
+    DrawExitToMenuPanel(renderer_, text_.get(),
+                        options_.mode == AppMode::kHost);
   }
   SDL_RenderPresent(renderer_);
 }

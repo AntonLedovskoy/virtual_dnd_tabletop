@@ -142,4 +142,9 @@ auto DrawConnectionBanner(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawHelpPanel(SDL_Renderer* renderer, TextRenderer* text, bool is_dm)
     -> void;
 
+// Подтверждение выхода в стартовое меню. is_host меняет текст: хост
+// предупреждает, что отключит игроков.
+auto DrawExitToMenuPanel(SDL_Renderer* renderer, TextRenderer* text,
+                         bool is_host) -> void;
+
 }  // namespace dnd

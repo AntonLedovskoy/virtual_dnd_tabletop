@@ -19,7 +19,8 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
       break;
   }
 
-  std::vector<Hint> hints{Hint::kChat, Hint::kHelp, Hint::kLog, Hint::kJournal};
+  std::vector<Hint> hints{Hint::kChat, Hint::kHelp, Hint::kExitMenu, Hint::kLog,
+                          Hint::kJournal};
   if (context.log_scrolled) {
     hints.push_back(Hint::kLogNewest);
   }

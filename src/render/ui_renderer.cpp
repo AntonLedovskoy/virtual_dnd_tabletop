@@ -1104,4 +1104,44 @@ auto DrawHelpPanel(SDL_Renderer* renderer, TextRenderer* text, bool is_dm)
              width - (2.0F * padding));
 }
 
+auto DrawExitToMenuPanel(SDL_Renderer* renderer, TextRenderer* text,
+                         bool is_host) -> void {
+  if (renderer == nullptr || text == nullptr) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!RenderSize(renderer, window_width, window_height)) {
+    return;
+  }
+  constexpr float padding = 24.0F;
+  constexpr float gap = 10.0F;
+  const float width =
+      std::min(560.0F, static_cast<float>(window_width) - 40.0F);
+  const float content_width = width - (2.0F * padding);
+  const std::string_view message =
+      is_host ? strings::kExitMenuHost : strings::kExitMenuClient;
+  const float line_height = text->LineHeight();
+  const float message_height = text->Measure(message, content_width).height;
+  const float height =
+      (2.0F * padding) + (2.0F * line_height) + message_height + (2.0F * gap);
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const float left = x + padding;
+  float top = y + padding;
+  text->Draw(strings::kExitMenuTitle, left, top, kInputText, content_width);
+  top += line_height + gap;
+  top = text->DrawWrapped(message, left, top, kLogText, content_width);
+  top += gap;
+  text->Draw(strings::kExitMenuHint, left, top, kHintText, content_width);
+}
+
 }  // namespace dnd

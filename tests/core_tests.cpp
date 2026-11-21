@@ -4806,6 +4806,8 @@ auto TestBottomHints() -> void {
          "the bottom hint starts with chat");
   Expect(has(player_hints, dnd::Hint::kJournal),
          "the journal is offered to every role");
+  Expect(has(player_hints, dnd::Hint::kExitMenu),
+         "every role can return to the menu");
   Expect(has(player_hints, dnd::Hint::kSelect),
          "no selection asks to pick a token");
   Expect(!has(player_hints, dnd::Hint::kAttack) &&

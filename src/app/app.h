@@ -102,6 +102,9 @@ class App {
   auto HandlePanMotion(const SDL_MouseMotionEvent& motion) -> void;
   auto HandleWheel(const SDL_MouseWheelEvent& wheel) -> void;
   auto SubmitMenu() -> void;
+  // Возвращает стол в стартовое меню: хост сохраняет кампанию и закрывает
+  // порт, клиент разрывает соединение. Мир при этом не сбрасывается.
+  auto ExitToMenu() -> void;
   auto HandleMenuKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleMenuTextInput(const char* text) -> void;
   auto HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void;
@@ -264,6 +267,8 @@ class App {
   std::vector<std::string> player_owners_;
   bool in_game_ = false;
   bool in_editor_ = false;
+  // Esc без активного режима спрашивает подтверждение выхода в меню.
+  bool exit_confirm_active_ = false;
   // Сцена, которую редактор сейчас правит и куда пишет F5.
   std::size_t editor_scene_ = 0;
   bool editor_scenes_active_ = false;

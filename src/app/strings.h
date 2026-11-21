@@ -44,6 +44,7 @@ inline constexpr std::string_view kColorHint = "V — цвет";
 // общие клавиши, клавиши выбранного токена и добавки роли.
 inline constexpr std::string_view kHintChat = "Enter — чат (/roll d20+5)";
 inline constexpr std::string_view kHintHelp = "F1 — справка";
+inline constexpr std::string_view kHintExitMenu = "Esc — меню";
 inline constexpr std::string_view kHintLog = "PgUp/PgDn — лог";
 inline constexpr std::string_view kHintLogNewest = "End — к новым";
 inline constexpr std::string_view kHintJournal = "F3 — журнал";
@@ -106,9 +107,10 @@ inline constexpr std::string_view kHelpCommonTitle = "Для всех";
 inline constexpr std::string_view kHelpDmTitle = "Мастер (DM)";
 inline constexpr std::string_view kHelpPlayerTitle = "Игрок";
 inline constexpr std::string_view kHelpClose = "F1 или Esc — закрыть";
-inline constexpr std::array<std::string_view, 16> kHelpCommon = {
+inline constexpr std::array<std::string_view, 17> kHelpCommon = {
     "Enter — чат и команды",
     "F1 — справка, Esc — закрыть",
+    "Esc без активного режима — выйти в меню",
     "F3 — журнал стола с поиском и прошлыми сессиями",
     "ЛКМ — выбрать, перетащить; в списках — клик",
     "СКМ — панорама, колесо — зум",
@@ -174,6 +176,15 @@ inline constexpr std::string_view kTabHint =
     "← → — вкладка | Tab — следующее поле | Enter — продолжить";
 inline constexpr std::string_view kConnecting = "Подключение...";
 inline constexpr std::string_view kPlayers = "Игроки";
+
+// Подтверждение возврата в стартовое меню.
+inline constexpr std::string_view kExitMenuTitle = "Выйти в меню?";
+inline constexpr std::string_view kExitMenuHost =
+    "Все игроки будут отключены. Кампания сохранится.";
+inline constexpr std::string_view kExitMenuClient =
+    "Соединение с хостом будет разорвано.";
+inline constexpr std::string_view kExitMenuHint =
+    "Enter — выйти в меню | Esc — остаться";
 
 inline constexpr std::string_view kEditorTab = "Карта";
 inline constexpr std::string_view kOpenEditor = "Открыть редактор";
@@ -311,6 +322,8 @@ inline constexpr std::string_view kTimeDmOnly =
       return kHintChat;
     case Hint::kHelp:
       return kHintHelp;
+    case Hint::kExitMenu:
+      return kHintExitMenu;
     case Hint::kLog:
       return kHintLog;
     case Hint::kLogNewest:

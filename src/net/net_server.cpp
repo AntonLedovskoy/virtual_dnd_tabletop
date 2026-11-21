@@ -38,6 +38,16 @@ auto NetServer::Start(std::uint16_t port, const std::string& password) -> bool {
   return listener_.Listen(port);
 }
 
+auto NetServer::Stop() -> void {
+  // Соединения закрываются вместе с объектами Peer; порт освобождается сразу,
+  // чтобы новый хост в том же процессе занял тот же адрес.
+  peers_.clear();
+  listener_.Stop();
+  next_peer_id_ = 1;
+  banned_names_.clear();
+  roster_dirty_ = false;
+}
+
 auto NetServer::Poll(std::vector<PeerJoined>& joined,
                      std::vector<PeerCommand>& commands,
                      std::vector<PeerId>& dropped) -> void {

@@ -317,9 +317,12 @@ auto TcpConnection::ParseFrames(std::vector<ReceivedFrame>& frames) -> void {
                   incoming_.begin() + static_cast<std::ptrdiff_t>(offset));
 }
 
-TcpListener::~TcpListener() {
+TcpListener::~TcpListener() { Stop(); }
+
+auto TcpListener::Stop() -> void {
   if (handle_ != kInvalidHandle) {
     closesocket(ToSocket(handle_));
+    handle_ = kInvalidHandle;
   }
 }
 

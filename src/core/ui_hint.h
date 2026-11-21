@@ -21,6 +21,7 @@ enum class HintMode : std::uint8_t {
 enum class Hint : std::uint8_t {
   kChat,
   kHelp,
+  kExitMenu,
   kLog,
   kLogNewest,
   kJournal,
