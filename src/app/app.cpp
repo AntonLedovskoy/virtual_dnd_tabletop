@@ -1515,8 +1515,11 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
 
 auto App::HandleMouseDown(const SDL_MouseButtonEvent& button) -> void {
   // Панели списков рисуются поверх карты и первыми забирают клик.
-  const TokenId listed = InitiativeTokenAt(renderer_, text_.get(),
-                                           view_.Tokens(), button.x, button.y);
+  const TokenId listed =
+      view_.EncounterState().active
+          ? InitiativeTokenAt(renderer_, text_.get(), view_.Tokens(), button.x,
+                              button.y)
+          : 0;
   if (listed != 0) {
     selected_id_ = listed;
     dragging_ = false;
@@ -3643,7 +3646,9 @@ auto App::Iterate() -> void {
         SDL_Color{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = SDL_ALPHA_OPAQUE},
         120.0F);
   }
-  DrawInitiativePanel(renderer_, text_.get(), view_.Tokens(), encounter);
+  if (encounter.active) {
+    DrawInitiativePanel(renderer_, text_.get(), view_.Tokens(), encounter);
+  }
   const bool is_client = options_.mode == AppMode::kClient;
   const Token* selected = FindSelectedToken();
   const bool can_claim = is_client && selected != nullptr &&
