@@ -147,6 +147,9 @@ class App {
   // Атака выбранным токеном по цели под курсором; сервер применяет урон.
   auto AttackTarget(bool advantage, bool disadvantage) -> void;
   [[nodiscard]] auto CanEditToken(const Token& token) const -> bool;
+  // Лист своего и любого чужого персонажа открыт на просмотр; прочие токены
+  // (монстры, NPC) показывает только DM или их владелец.
+  [[nodiscard]] auto CanOpenSheet(const Token& token) const -> bool;
   // DM ведёт стол: правит листы, состояния и прочие данные токенов.
   [[nodiscard]] auto IsDm() const -> bool;
   auto OpenBestiary() -> void;
@@ -314,6 +317,9 @@ class App {
 
   bool client_connected_ = false;
   bool client_is_dm_ = false;
+  // Игрок уже выбирал персонажа в этой кампании: повторный выбор сервер
+  // отклонит, поэтому подсказка «забрать» больше не показывается.
+  bool claimed_once_ = false;
   std::chrono::steady_clock::time_point next_reconnect_;
   std::chrono::steady_clock::time_point connect_deadline_;
 

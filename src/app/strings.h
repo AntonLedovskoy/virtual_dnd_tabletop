@@ -26,7 +26,13 @@ inline constexpr std::string_view kPlayer = "персонаж";
 inline constexpr std::string_view kNpc = "NPC";
 inline constexpr std::string_view kMonster = "монстр";
 inline constexpr std::string_view kClaimHint = "C — забрать персонажа";
-inline constexpr std::string_view kReleaseHint = "R — освободить персонажа";
+inline constexpr std::string_view kClaimOnce =
+    "Персонажа выбирают один раз, дальше назначает DM";
+inline constexpr std::string_view kReleaseDmOnly =
+    "Освободить персонажа может только DM";
+inline constexpr std::string_view kColorDmOnly = "Цвет токена меняет только DM";
+inline constexpr std::string_view kRenameDmOnly =
+    "Переименовывает токен только DM";
 inline constexpr std::string_view kYourToken = "это ваш персонаж";
 inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, N — монстр, B — бестиарий, Del дважды — удалить";
@@ -238,7 +244,7 @@ inline constexpr std::string_view kSheetBadHitDie =
 inline constexpr std::string_view kSheetBadCon =
     "Модификатор Телосложения: от -20 до 20";
 inline constexpr std::string_view kSheetNoAccess =
-    "Нельзя редактировать чужого персонажа";
+    "Лист этого токена показывает только DM";
 inline constexpr std::string_view kBestiaryTitle = "Бестиарий";
 inline constexpr std::string_view kBestiaryHint =
     "1–9 — поставить одного | Shift+1–9 — группа 3–5 | Esc — закрыть";
@@ -315,8 +321,6 @@ inline constexpr std::string_view kTimeDmOnly =
       return kHintSelect;
     case Hint::kClaim:
       return kClaimHint;
-    case Hint::kRelease:
-      return kReleaseHint;
     case Hint::kAttack:
       return kHintAttack;
     case Hint::kSave:

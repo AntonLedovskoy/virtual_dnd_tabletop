@@ -433,8 +433,8 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
 
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
-                    bool is_client, bool can_claim, bool can_release,
-                    MovementInfo movement) -> float {
+                    bool is_client, bool can_claim, MovementInfo movement)
+    -> float {
   if (renderer == nullptr || text == nullptr || token == nullptr) {
     return 0.0F;
   }
@@ -508,17 +508,14 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
   if (is_client && can_claim) {
     hints.emplace_back(strings::kClaimHint);
   }
-  if (is_client && can_release) {
-    hints.emplace_back(strings::kReleaseHint);
-  }
   if (is_client && SamePlayerName(token->owner, player_name)) {
     hints.emplace_back(strings::kYourToken);
   }
   if (!is_client) {
     hints.emplace_back(strings::kDmSpawnHint);
     hints.emplace_back(strings::kDmCommandHint);
+    hints.emplace_back(strings::kColorHint);
   }
-  hints.emplace_back(strings::kColorHint);
 
   constexpr int panel_width = 300;
   constexpr int panel_padding = 10;

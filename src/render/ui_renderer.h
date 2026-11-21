@@ -70,8 +70,8 @@ enum class MovementInfo : std::uint8_t {
 // Возвращает нижнюю границу панели или 0, если ничего не нарисовано.
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
-                    bool is_client, bool can_claim, bool can_release,
-                    MovementInfo movement) -> float;
+                    bool is_client, bool can_claim, MovementInfo movement)
+    -> float;
 
 // Список игроков слева из ростера хоста, размещается на заданной координате y.
 auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,

@@ -448,24 +448,28 @@ auto TestClaimAndTokenAdmin() -> void {
           .accepted,
       "the DM can release a character");
   Expect(
-      server.HandleCommand(dnd::ClaimToken{.id = 1}, "alice", false).accepted,
-      "a released character can be claimed again");
+      !server.HandleCommand(dnd::ClaimToken{.id = 1}, "alice", false).accepted,
+      "a player cannot choose again after the DM released the character");
+  Expect(server
+             .HandleCommand(dnd::SetTokenOwner{.id = 1, .owner = "alice"}, "",
+                            true)
+             .accepted,
+         "the DM assigns the released character");
 
-  const dnd::CommandOutcome rename = server.HandleCommand(
-      dnd::RenameToken{.id = 1, .name = "Алиса"}, "alice", false);
-  Expect(rename.accepted, "the owner can rename the token");
+  Expect(!server
+              .HandleCommand(dnd::RenameToken{.id = 1, .name = "Алиса"},
+                             "alice", false)
+              .accepted,
+         "players cannot rename the token");
+  Expect(
+      server.HandleCommand(dnd::RenameToken{.id = 1, .name = "Алиса"}, "", true)
+          .accepted,
+      "the DM renames the token");
   Expect(TokenOf(server.State(), 1).name == "Алиса",
          "the renamed value is stored");
-  Expect(!server
-              .HandleCommand(dnd::RenameToken{.id = 1, .name = "Боб"}, "bob",
-                             false)
+  Expect(!server.HandleCommand(dnd::RenameToken{.id = 1, .name = ""}, "", true)
               .accepted,
-         "other players cannot rename the token");
-  Expect(
-      !server
-           .HandleCommand(dnd::RenameToken{.id = 1, .name = ""}, "alice", false)
-           .accepted,
-      "empty names are rejected");
+         "empty names are rejected");
 
   Expect(
       server.HandleCommand(dnd::SetTokenHp{.id = 1, .hp = 10}, "alice", false)
@@ -485,9 +489,14 @@ auto TestClaimAndTokenAdmin() -> void {
          "a zero maximum is rejected");
 
   const dnd::CommandOutcome color = server.HandleCommand(
-      dnd::SetTokenColor{.id = 1, .color = 0xC85046U}, "alice", false);
-  Expect(color.accepted, "the owner can set the colour");
+      dnd::SetTokenColor{.id = 1, .color = 0xC85046U}, "", true);
+  Expect(color.accepted, "the DM can set the colour");
   Expect(TokenOf(server.State(), 1).color == 0xC85046U, "the colour is stored");
+  Expect(!server
+              .HandleCommand(dnd::SetTokenColor{.id = 1, .color = 0xC85046U},
+                             "alice", false)
+              .accepted,
+         "players cannot set the colour");
 
   // Лист и состояния правит только DM: игрок их лишь смотрит.
   Expect(!server
@@ -588,17 +597,21 @@ auto TestClaimAndTokenAdmin() -> void {
               .accepted,
          "empty condition is rejected");
 
-  Expect(
-      !server.HandleCommand(dnd::ReleaseToken{.id = 1}, "bob", false).accepted,
-      "another player cannot release the character");
-  Expect(
-      server.HandleCommand(dnd::ReleaseToken{.id = 1}, "alice", false).accepted,
-      "the owner can release the character");
+  Expect(!server.HandleCommand(dnd::ReleaseToken{.id = 1}, "alice", false)
+              .accepted,
+         "players cannot release the character");
+  Expect(server.HandleCommand(dnd::ReleaseToken{.id = 1}, "", true).accepted,
+         "the DM can release the character");
   Expect(TokenOf(server.State(), 1).owner.empty(),
          "released character becomes free");
   Expect(
-      server.HandleCommand(dnd::ClaimToken{.id = 3}, "alice", false).accepted,
-      "the player can claim another character after releasing");
+      !server.HandleCommand(dnd::ClaimToken{.id = 3}, "alice", false).accepted,
+      "the player cannot choose another character after the DM released");
+  Expect(server
+             .HandleCommand(dnd::SetTokenOwner{.id = 3, .owner = "alice"}, "",
+                            true)
+             .accepted,
+         "the DM assigns another character instead");
 }
 
 auto TestDamageHealRest() -> void {
@@ -4753,11 +4766,10 @@ auto TestBottomHints() -> void {
              !has(player_hints, dnd::Hint::kScenes),
          "a player gets no DM hints");
 
-  // Свой персонаж: клавиши токена и освобождение.
+  // Свой персонаж: клавиши токена и лист; цвет меняет только DM.
   dnd::HintContext own;
   own.has_selection = true;
-  own.can_edit = true;
-  own.can_release = true;
+  own.can_view_sheet = true;
   const std::vector<dnd::Hint> own_hints = dnd::BottomHints(own);
   Expect(!has(own_hints, dnd::Hint::kSelect),
          "a selection hides the pick hint");
@@ -4767,41 +4779,44 @@ auto TestBottomHints() -> void {
              has(own_hints, dnd::Hint::kConditions),
          "a selection shows token keys");
   Expect(
-      has(own_hints, dnd::Hint::kRelease) && !has(own_hints, dnd::Hint::kClaim),
-      "an owned character offers release, not claim");
+      !has(own_hints, dnd::Hint::kClaim) && !has(own_hints, dnd::Hint::kColor),
+      "an owned character offers neither claim nor colour");
 
-  // Чужой персонаж: состояния видно, лист и правку — нет.
+  // Чужой персонаж: состояния и лист на просмотр, цвет — нет.
   dnd::HintContext foreign;
   foreign.has_selection = true;
+  foreign.can_view_sheet = true;
   const std::vector<dnd::Hint> foreign_hints = dnd::BottomHints(foreign);
   Expect(has(foreign_hints, dnd::Hint::kAttack) &&
              has(foreign_hints, dnd::Hint::kMoveRange),
          "a foreign token still shows attack and reach");
   Expect(has(foreign_hints, dnd::Hint::kConditions),
          "a foreign token still shows conditions");
-  Expect(!has(foreign_hints, dnd::Hint::kSheet),
-         "a foreign token hides the sheet key");
+  Expect(has(foreign_hints, dnd::Hint::kSheet),
+         "a foreign character sheet opens for viewing");
+  Expect(!has(foreign_hints, dnd::Hint::kColor) &&
+             !has(foreign_hints, dnd::Hint::kClaim),
+         "a foreign character hides colour and claim");
 
   // Свободный персонаж игроку без своего: забрать.
   dnd::HintContext claimable;
   claimable.has_selection = true;
   claimable.can_claim = true;
   const std::vector<dnd::Hint> claimable_hints = dnd::BottomHints(claimable);
-  Expect(has(claimable_hints, dnd::Hint::kClaim) &&
-             !has(claimable_hints, dnd::Hint::kRelease),
+  Expect(has(claimable_hints, dnd::Hint::kClaim),
          "a free character offers claim");
 
   // DM: добавки роли, а ход — только в бою.
   dnd::HintContext dm;
   dm.is_dm = true;
   dm.has_selection = true;
-  dm.can_edit = true;
   std::vector<dnd::Hint> dm_hints = dnd::BottomHints(dm);
   Expect(has(dm_hints, dnd::Hint::kDmSpawn) &&
              has(dm_hints, dnd::Hint::kBestiary) &&
              has(dm_hints, dnd::Hint::kScenes) &&
              has(dm_hints, dnd::Hint::kDmUndo),
          "the DM gets spawn, bestiary, scenes and undo");
+  Expect(has(dm_hints, dnd::Hint::kColor), "the DM can recolour tokens");
   Expect(!has(dm_hints, dnd::Hint::kDmTurn),
          "out of combat the DM has no turn key");
   dm.in_combat = true;

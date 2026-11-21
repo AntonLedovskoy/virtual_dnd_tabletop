@@ -396,6 +396,7 @@ auto App::StartHost() -> bool {
   start.encounter = Encounter{};
   scene_ = start;
   server_.Reset(std::move(start));
+  server_.ClearClaimHistory();
   ClearUndo();
   delete_token_.Clear();
   delete_scene_.Clear();
@@ -461,6 +462,7 @@ auto App::StartClient() -> bool {
   menu_.status = "Подключение...";
   client_connecting_ = true;
   client_connected_ = false;
+  claimed_once_ = false;
   in_game_ = false;
   help_active_ = false;
   log_scroll_.ToNewest();
@@ -1743,12 +1745,11 @@ auto App::BottomHintText() const -> std::string {
   HintContext context;
   context.is_dm = !is_client;
   context.has_selection = selected != nullptr;
-  context.can_edit = selected != nullptr && CanEditToken(*selected);
+  context.can_view_sheet = selected != nullptr && CanOpenSheet(*selected);
   context.can_claim = is_client && selected != nullptr &&
                       selected->kind == TokenKind::kPlayer &&
-                      selected->owner.empty() && !PlayerHasCharacter();
-  context.can_release = is_client && selected != nullptr &&
-                        SamePlayerName(selected->owner, options_.player_name);
+                      selected->owner.empty() && !PlayerHasCharacter() &&
+                      !claimed_once_;
   context.in_combat = view_.EncounterState().active;
   context.log_scrolled = log_scroll_.Offset() > 0;
   // Открытый режим важнее выделения: пока он включён, остальные клавиши
@@ -1795,24 +1796,26 @@ auto App::ClaimSelectedToken() -> void {
   }
   if (!SamePlayerName(token->owner, options_.player_name) &&
       PlayerHasCharacter()) {
-    view_.AddLocalLine("У вас уже есть персонаж. Сначала освободите его (R)");
+    view_.AddLocalLine("У вас уже есть персонаж");
+    return;
+  }
+  // Выбор даётся один раз: после /owner прежний игрок сам не забирает.
+  if (!SamePlayerName(token->owner, options_.player_name) && claimed_once_) {
+    view_.AddLocalLine(std::string(strings::kClaimOnce));
     return;
   }
   SendCommand(ClaimToken{.id = token->id});
 }
 
 auto App::ReleaseSelectedToken() -> void {
+  // Освобождать персонажа может только DM: у игрока от этого пропадал обзор.
+  if (!IsDm()) {
+    view_.AddLocalLine(std::string(strings::kReleaseDmOnly));
+    return;
+  }
   const Token* token = FindSelectedToken();
   if (token == nullptr) {
     view_.AddLocalLine(std::string(strings::kSelectToken));
-    return;
-  }
-  if (options_.mode == AppMode::kHost) {
-    view_.AddLocalLine("DM: используйте /owner имя");
-    return;
-  }
-  if (!SamePlayerName(token->owner, options_.player_name)) {
-    view_.AddLocalLine("Это не ваш персонаж");
     return;
   }
   SendCommand(ReleaseToken{.id = token->id});
@@ -1830,6 +1833,10 @@ auto App::CanEditToken(const Token& token) const -> bool {
          SamePlayerName(token.owner, options_.player_name);
 }
 
+auto App::CanOpenSheet(const Token& token) const -> bool {
+  return token.kind == TokenKind::kPlayer || CanEditToken(token);
+}
+
 auto App::IsDm() const -> bool {
   return options_.mode == AppMode::kHost || client_is_dm_;
 }
@@ -1840,8 +1847,8 @@ auto App::OpenSheet() -> void {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
-  // Игрок может открыть лист, но только для просмотра: правит лист DM.
-  if (!CanEditToken(*token)) {
+  // Чужой лист персонажа открыт на просмотр: правит листы только DM.
+  if (!CanOpenSheet(*token)) {
     view_.AddLocalLine(std::string(strings::kSheetNoAccess));
     return;
   }
@@ -2423,6 +2430,10 @@ auto App::CycleSelectedColor() -> void {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
+  if (!IsDm()) {
+    view_.AddLocalLine(std::string(strings::kColorDmOnly));
+    return;
+  }
   const std::uint32_t current =
       token->color != 0 ? token->color
                         : kTokenPalette[(token->id - 1) % kAutoTokenColorCount];
@@ -2513,6 +2524,10 @@ auto App::SubmitChat() -> void {
       SendCommand(SetTokenOwner{.id = token->id, .owner = command.text});
       return;
     case ChatCommandKind::kRename:
+      if (!IsDm()) {
+        view_.AddLocalLine(std::string(strings::kRenameDmOnly));
+        return;
+      }
       if (token == nullptr) {
         view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
         return;
@@ -2769,6 +2784,11 @@ auto App::PumpClient() -> void {
   }
   for (const Event& event : update.events) {
     view_.Apply(event);
+  }
+  // Как только у игрока появился персонаж, выбор считается сделанным: даже
+  // если DM потом снимет владельца, «забрать» больше не предлагаем.
+  if (PlayerHasCharacter()) {
+    claimed_once_ = true;
   }
   if (update.roster.has_value()) {
     UpdatePlayersFromRoster(*update.roster);
@@ -3628,10 +3648,8 @@ auto App::Iterate() -> void {
   const Token* selected = FindSelectedToken();
   const bool can_claim = is_client && selected != nullptr &&
                          selected->kind == TokenKind::kPlayer &&
-                         selected->owner.empty() && !PlayerHasCharacter();
-  const bool can_release =
-      is_client && selected != nullptr &&
-      SamePlayerName(selected->owner, options_.player_name);
+                         selected->owner.empty() && !PlayerHasCharacter() &&
+                         !claimed_once_;
   MovementInfo movement = MovementInfo::kFree;
   if (is_dm) {
     movement = MovementInfo::kHidden;
@@ -3640,7 +3658,7 @@ auto App::Iterate() -> void {
   }
   const float token_bottom =
       DrawTokenPanel(renderer_, text_.get(), selected, options_.player_name,
-                     is_client, can_claim, can_release, movement);
+                     is_client, can_claim, movement);
   const float players_y = token_bottom > 0.0F ? token_bottom + 12.0F : 280.0F;
   players_top_ = players_y;
   DrawPlayersPanel(renderer_, text_.get(), players_, players_y);

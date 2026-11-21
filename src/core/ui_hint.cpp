@@ -26,17 +26,17 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
   if (context.can_claim) {
     hints.push_back(Hint::kClaim);
   }
-  if (context.can_release) {
-    hints.push_back(Hint::kRelease);
-  }
   // Без выделения половина клавиш только пишет «сначала выберите токен».
   if (!context.has_selection) {
     hints.push_back(Hint::kSelect);
   } else {
     hints.insert(hints.end(), {Hint::kAttack, Hint::kSave, Hint::kMoveRange,
                                Hint::kRuler, Hint::kConditions});
-    if (context.can_edit) {
-      hints.insert(hints.end(), {Hint::kSheet, Hint::kColor});
+    if (context.can_view_sheet) {
+      hints.push_back(Hint::kSheet);
+    }
+    if (context.is_dm) {
+      hints.push_back(Hint::kColor);
     }
     if (context.is_dm) {
       hints.insert(hints.end(), {Hint::kInitiative, Hint::kDmAdjust,

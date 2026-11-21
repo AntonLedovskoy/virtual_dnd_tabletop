@@ -26,7 +26,6 @@ enum class Hint : std::uint8_t {
   kJournal,
   kSelect,
   kClaim,
-  kRelease,
   kAttack,
   kSave,
   kInitiative,
@@ -59,9 +58,10 @@ struct HintContext {
   HintMode mode = HintMode::kTable;
   bool is_dm = false;
   bool has_selection = false;
-  bool can_edit = false;
+  // can_view_sheet — лист можно открыть на просмотр, даже если он чужой;
+  // цвет меняет только DM (is_dm).
+  bool can_view_sheet = false;
   bool can_claim = false;
-  bool can_release = false;
   bool in_combat = false;
   bool log_scrolled = false;
 };

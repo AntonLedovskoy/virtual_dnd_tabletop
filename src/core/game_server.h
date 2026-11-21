@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <map>
 #include <random>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,6 +34,9 @@ class GameServer {
 
   // Заменяет мир (загрузка/сохранение) и пересчитывает видимость.
   auto Reset(GameSnapshot snapshot) -> void;
+  // Новая кампания: игроки снова выбирают персонажа один раз. Смену сцены и
+  // отмену это не трогает, иначе выбор можно было бы повторить.
+  auto ClearClaimHistory() -> void { claimed_players_.clear(); }
 
   // Применяет команду. `actor` — имя игрока из handshake, `can_control_all`
   // истинно для DM. Токены с непустым owner может менять только владелец;
@@ -127,20 +131,17 @@ class GameServer {
                                       const std::string& actor)
       -> CommandOutcome;
   [[nodiscard]] auto HandleReleaseToken(const ReleaseToken& command,
-                                        const std::string& actor)
-      -> CommandOutcome;
+                                        bool can_control_all) -> CommandOutcome;
   [[nodiscard]] auto HandleSetTokenOwner(const SetTokenOwner& command,
                                          bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleRenameToken(const RenameToken& command,
-                                       const std::string& actor,
                                        bool can_control_all) -> CommandOutcome;
   [[nodiscard]] auto HandleSetTokenMaxHp(const SetTokenMaxHp& command,
                                          const std::string& actor,
                                          bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleSetTokenColor(const SetTokenColor& command,
-                                         const std::string& actor,
                                          bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleSetTokenPortrait(const SetTokenPortrait& command,
@@ -195,6 +196,9 @@ class GameServer {
     FogSnapshot fog;
   };
   std::map<std::string, SentView, std::less<>> sent_views_;
+  // Кто уже выбирал персонажа в этой кампании: выбор даётся один раз, потом
+  // владельцев назначает только DM через /owner.
+  std::set<std::string, std::less<>> claimed_players_;
   // Обзор партии: его получает игрок, пока не выбрал персонажа.
   FogOfWar party_fog_;
   int sight_radius_;

@@ -85,7 +85,7 @@ struct SetTokenOwner {
   std::string owner;
 };
 
-// Владелец или DM: переименовать токен.
+// Только DM: переименовать токен.
 struct RenameToken {
   TokenId id = 0;
   std::string name;
@@ -97,7 +97,7 @@ struct SetTokenMaxHp {
   int max_hp = 10;
 };
 
-// Владелец или DM: задать цвет токена 0xRRGGBB (0 — автоматический цвет).
+// Только DM: задать цвет токена 0xRRGGBB (0 — автоматический цвет).
 struct SetTokenColor {
   TokenId id = 0;
   std::uint32_t color = 0;

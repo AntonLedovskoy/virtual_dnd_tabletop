@@ -128,15 +128,15 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
         } else if constexpr (std::is_same_v<T, ClaimToken>) {
           return HandleClaimToken(cmd, actor);
         } else if constexpr (std::is_same_v<T, ReleaseToken>) {
-          return HandleReleaseToken(cmd, actor);
+          return HandleReleaseToken(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, SetTokenOwner>) {
           return HandleSetTokenOwner(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, RenameToken>) {
-          return HandleRenameToken(cmd, actor, can_control_all);
+          return HandleRenameToken(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, SetTokenMaxHp>) {
           return HandleSetTokenMaxHp(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, SetTokenColor>) {
-          return HandleSetTokenColor(cmd, actor, can_control_all);
+          return HandleSetTokenColor(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, SetTokenPortrait>) {
           return HandleSetTokenPortrait(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, UpdateTokenSheet>) {
@@ -899,10 +899,18 @@ auto GameServer::HandleClaimToken(const ClaimToken& command,
       return CommandOutcome{.reject_reason = "у игрока уже есть персонаж"};
     }
   }
+  // Выбор даётся один раз: после того как DM снял владельца, персонажа
+  // назначает только DM, а не прежний игрок повторным «забрать».
+  const bool already_owned = SamePlayerName(token->owner, actor);
+  if (!already_owned && claimed_players_.contains(PlayerNameKey(actor))) {
+    return CommandOutcome{
+        .reject_reason = "персонажа выбирают один раз, дальше назначает DM"};
+  }
   const std::optional<Token> updated = state_.SetTokenOwner(command.id, actor);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось забрать персонажа"};
   }
+  claimed_players_.insert(PlayerNameKey(actor));
   RecomputeFog();
   CommandOutcome outcome;
   outcome.accepted = true;
@@ -911,17 +919,13 @@ auto GameServer::HandleClaimToken(const ClaimToken& command,
 }
 
 auto GameServer::HandleReleaseToken(const ReleaseToken& command,
-                                    const std::string& actor)
-    -> CommandOutcome {
-  if (actor.empty()) {
-    return CommandOutcome{.reject_reason = "DM использует /owner"};
+                                    bool can_control_all) -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "персонажа освобождает только DM"};
   }
   const Token* token = FindToken(command.id);
   if (token == nullptr) {
     return CommandOutcome{.reject_reason = "токен не найден"};
-  }
-  if (!SamePlayerName(token->owner, actor)) {
-    return CommandOutcome{.reject_reason = "это не ваш персонаж"};
   }
   const std::optional<Token> updated = state_.SetTokenOwner(command.id, "");
   if (!updated.has_value()) {
@@ -947,6 +951,11 @@ auto GameServer::HandleSetTokenOwner(const SetTokenOwner& command,
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "токен не найден"};
   }
+  // Назначенный DM игрок тоже считается выбравшим: снятие владельца позже
+  // не даёт ему забрать персонажа самому.
+  if (updated->kind == TokenKind::kPlayer && !command.owner.empty()) {
+    claimed_players_.insert(PlayerNameKey(command.owner));
+  }
   RecomputeFog();
   CommandOutcome outcome;
   outcome.accepted = true;
@@ -955,14 +964,13 @@ auto GameServer::HandleSetTokenOwner(const SetTokenOwner& command,
 }
 
 auto GameServer::HandleRenameToken(const RenameToken& command,
-                                   const std::string& actor,
                                    bool can_control_all) -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "переименовывает токен только DM"};
+  }
   const Token* token = FindToken(command.id);
   if (token == nullptr) {
     return CommandOutcome{.reject_reason = "токен не найден"};
-  }
-  if (!CanControl(*token, actor, can_control_all)) {
-    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
   }
   if (command.name.empty()) {
     return CommandOutcome{.reject_reason = "имя токена не может быть пустым"};
@@ -1006,14 +1014,13 @@ auto GameServer::HandleSetTokenMaxHp(const SetTokenMaxHp& command,
 }
 
 auto GameServer::HandleSetTokenColor(const SetTokenColor& command,
-                                     const std::string& actor,
                                      bool can_control_all) -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "цвет токена меняет только DM"};
+  }
   const Token* token = FindToken(command.id);
   if (token == nullptr) {
     return CommandOutcome{.reject_reason = "токен не найден"};
-  }
-  if (!CanControl(*token, actor, can_control_all)) {
-    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
   }
   const std::optional<Token> updated =
       state_.SetTokenColor(command.id, command.color);
