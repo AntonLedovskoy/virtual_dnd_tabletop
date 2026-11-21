@@ -25,6 +25,9 @@ class AutosaveTimer {
   auto Saved() -> void;
   // Запись не удалась: повтор через полную паузу, а не каждый кадр.
   auto SaveFailed(Clock::time_point now) -> void;
+  // Запись удалась, но мир изменился, пока она шла: ещё один проход
+  // после полной паузы.
+  auto ChangedDuringSave(Clock::time_point now) -> void;
 
  private:
   Clock::duration delay_;

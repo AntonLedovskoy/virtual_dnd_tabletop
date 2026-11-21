@@ -15,6 +15,9 @@ set(DND_WARNINGS -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
 
 include(FetchContent)
 
+# std::thread в фоновой записи кампании: на MinGW нужен winpthreads.
+find_package(Threads REQUIRED)
+
 # Собираем все зависимости статически, чтобы исполняемый файл был автономным.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
@@ -91,6 +94,7 @@ add_library(dnd_core STATIC
   src/core/camera.cpp
   src/core/campaign.cpp
   src/core/campaign_io.cpp
+  src/core/campaign_save.cpp
   src/core/chacha20.cpp
   src/core/chat_command.cpp
   src/core/chat_input.cpp
@@ -123,6 +127,7 @@ add_library(dnd_core STATIC
   src/core/x25519.cpp
 )
 target_include_directories(dnd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(dnd_core PUBLIC Threads::Threads)
 target_compile_options(dnd_core PRIVATE ${DND_WARNINGS})
 if(WIN32)
   # rand_s из UCRT объявлен только при этом флаге: им заполняются ключи и

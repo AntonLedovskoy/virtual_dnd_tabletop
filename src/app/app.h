@@ -17,6 +17,7 @@
 #include "core/camera.h"
 #include "core/campaign.h"
 #include "core/campaign_io.h"
+#include "core/campaign_save.h"
 #include "core/chat_command.h"
 #include "core/chat_input.h"
 #include "core/client_view.h"
@@ -172,6 +173,8 @@ class App {
   auto SaveGame() -> void;
   auto LoadGame() -> void;
   auto SaveCampaign() -> void;
+  // Ставит кампанию в фоновую запись; кадр диск не ждёт.
+  auto RequestCampaignSave() -> void;
   // Библиотека кампаний: файлы *.dndcamp рядом с .exe и выбор при старте.
   auto RefreshCampaignLibrary() -> void;
   // Читает выбранный файл в campaign_/scene_/server_/view_; false — не вышло.
@@ -317,6 +320,11 @@ class App {
   ChatInput chat_;
 
   AutosaveTimer autosave_;
+  // Автосейв пишет кампанию в отдельном потоке, чтобы кадр не ждал диск.
+  CampaignSaver campaign_saver_;
+  // Правка мира: номер текущей версии и версии, ушедшей в последнюю запись.
+  std::uint64_t world_revision_ = 0;
+  std::uint64_t saved_revision_ = 0;
 
   bool help_active_ = false;
   LogScroll log_scroll_{kLogVisibleLines};

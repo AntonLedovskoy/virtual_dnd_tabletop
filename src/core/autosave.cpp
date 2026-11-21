@@ -23,4 +23,9 @@ auto AutosaveTimer::SaveFailed(Clock::time_point now) -> void {
   }
 }
 
+auto AutosaveTimer::ChangedDuringSave(Clock::time_point now) -> void {
+  dirty_ = true;
+  changed_at_ = now;
+}
+
 }  // namespace dnd

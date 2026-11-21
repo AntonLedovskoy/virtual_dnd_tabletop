@@ -2970,14 +2970,24 @@ auto App::LoadGame() -> void {
 }
 
 auto App::SaveCampaign() -> void {
-  const std::string file = campaign_files_.empty()
-                               ? std::string("campaign.dndcamp")
-                               : campaign_files_[campaign_index_];
-  if (!WriteCampaign(campaign_, AssetPath(file))) {
+  RequestCampaignSave();
+  // Явное сохранение доводим до диска: кадр подождёт, зато сообщение честное.
+  if (!campaign_saver_.Flush()) {
     SDL_Log("campaign save failed");
     return;
   }
+  // Пока шла запись, главный поток был занят, поэтому мир на диске свежий.
   autosave_.Saved();
+}
+
+auto App::RequestCampaignSave() -> void {
+  const std::string file = campaign_files_.empty()
+                               ? std::string("campaign.dndcamp")
+                               : campaign_files_[campaign_index_];
+  // Копия кампании снимается сейчас: правки после Request ждут следующего
+  // прохода, и ChangedDuringSave это учтёт.
+  saved_revision_ = world_revision_;
+  campaign_saver_.Request(campaign_, AssetPath(file));
 }
 
 auto App::RefreshCampaignLibrary() -> void {
@@ -3007,6 +3017,8 @@ auto App::LoadSelectedCampaign() -> bool {
   }
   const std::string& file = campaign_files_[campaign_index_];
   const std::filesystem::path path = AssetPath(file);
+  // Фоновая запись могла ещё не закрыть файл: читаем только после неё.
+  campaign_saver_.Flush();
   std::error_code error;
   if (!std::filesystem::exists(path, error)) {
     // Пустой слот: кампания создастся при первом сохранении.
@@ -3035,25 +3047,34 @@ auto App::SelectCampaign(int delta) -> void {
 }
 
 auto App::MarkCampaignDirty() -> void {
+  ++world_revision_;
   autosave_.MarkChanged(std::chrono::steady_clock::now());
 }
 
 auto App::CheckAutosave() -> void {
-  if (!autosave_.Dirty() || options_.mode != AppMode::kHost || !in_game_) {
+  const auto now = std::chrono::steady_clock::now();
+  if (const std::optional<bool> result = campaign_saver_.TakeResult()) {
+    if (!*result) {
+      SDL_Log("campaign save failed");
+      // Запись не удалась: не долбим диск каждый кадр, повторим позже.
+      autosave_.SaveFailed(now);
+    } else if (world_revision_ != saved_revision_) {
+      // Мир изменился, пока шла запись: нужен ещё один проход после паузы.
+      autosave_.ChangedDuringSave(now);
+    } else {
+      autosave_.Saved();
+      SDL_Log("campaign autosaved");
+    }
+  }
+  if (!autosave_.Dirty() || options_.mode != AppMode::kHost || !in_game_ ||
+      campaign_saver_.Busy()) {
     return;
   }
-  const auto now = std::chrono::steady_clock::now();
   if (!autosave_.Due(now)) {
     return;
   }
   StoreActiveScene();
-  SaveCampaign();
-  if (autosave_.Dirty()) {
-    // Запись не удалась: не долбим диск каждый кадр, повторим позже.
-    autosave_.SaveFailed(now);
-  } else {
-    SDL_Log("campaign autosaved");
-  }
+  RequestCampaignSave();
 }
 
 auto App::StoreActiveScene() -> void {

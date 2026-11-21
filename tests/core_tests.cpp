@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "core/camera.h"
 #include "core/campaign.h"
 #include "core/campaign_io.h"
+#include "core/campaign_save.h"
 #include "core/chacha20.h"
 #include "core/chat_command.h"
 #include "core/chat_input.h"
@@ -2956,6 +2958,66 @@ auto TestCampaign() -> void {
   std::filesystem::remove_all(library, cleanup_error);
 }
 
+// Кампания уходит на диск в фоновом потоке: кадр не ждёт, а новая просьба
+// заменяет ещё не начатую запись, поэтому на диске остаётся свежий мир.
+auto TestCampaignSaver() -> void {
+  const dnd::GameSnapshot map_snapshot{
+      .map = dnd::GridMap(4, 4),
+      .next_token_id = 1,
+  };
+  dnd::Campaign campaign = dnd::MakeCampaign(map_snapshot, "Фон");
+  campaign.scenes.push_back(
+      dnd::Scene{.name = "Вторая", .snapshot = map_snapshot});
+  campaign.active = 1;
+
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_saver.dndcamp";
+  std::error_code cleanup_error;
+  std::filesystem::remove(path, cleanup_error);
+
+  dnd::CampaignSaver saver;
+  Expect(!saver.Busy(), "a saver starts idle");
+  saver.Request(campaign, path);
+  Expect(saver.Busy(), "a request keeps the saver busy until the disk answers");
+  Expect(!saver.TakeResult().has_value(),
+         "nothing is reported before the write finishes");
+
+  int waited = 0;
+  while (saver.Busy() && waited < 2000) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ++waited;
+  }
+  const std::optional<bool> result = saver.TakeResult();
+  Expect(result.has_value() && *result, "background save reports success");
+  Expect(!saver.TakeResult().has_value(), "a result is reported only once");
+  const std::optional<dnd::Campaign> loaded = dnd::ReadCampaign(path);
+  Expect(loaded.has_value() && loaded->scenes.size() == 2 &&
+             loaded->active == 1 && loaded->scenes.back().name == "Вторая",
+         "the background write produces a readable campaign");
+
+  campaign.active = 0;
+  saver.Request(campaign, path);
+  Expect(saver.Flush(), "Flush reports the last write succeeded");
+  Expect(!saver.Busy(), "Flush leaves the saver idle");
+  const std::optional<dnd::Campaign> newer = dnd::ReadCampaign(path);
+  Expect(newer.has_value() && newer->active == 0,
+         "the latest request wins on disk");
+
+  saver.Request(campaign, std::filesystem::temp_directory_path() /
+                              "dnd_no_such_dir" / "campaign.dndcamp");
+  Expect(!saver.Flush(), "a failed write is reported");
+  Expect(!saver.TakeResult().has_value(), "Flush consumes the result");
+
+  // Деструктор дописывает уже поставленную просьбу, а не теряет её.
+  {
+    dnd::CampaignSaver last;
+    last.Request(campaign, path);
+  }
+  Expect(dnd::ReadCampaign(path).has_value(),
+         "the destructor finishes a queued write");
+  std::filesystem::remove(path, cleanup_error);
+}
+
 // Испорченные байты — обычное дело при обрыве связи или битом файле.
 // Декодеры должны отвечать отказом, а не падать и не читать за границей
 // буфера; случайно принятые данные обязаны переживать повторное кодирование.
@@ -4508,6 +4570,12 @@ auto TestAutosave() -> void {
   timer.Saved();
   Expect(!timer.Dirty() && !timer.Due(start + std::chrono::seconds{100}),
          "a successful write clears the timer");
+
+  timer.MarkChanged(start + std::chrono::seconds{20});
+  timer.ChangedDuringSave(start + std::chrono::seconds{25});
+  Expect(timer.Dirty() && !timer.Due(start + std::chrono::seconds{32}) &&
+             timer.Due(start + std::chrono::seconds{33}),
+         "a change during the write schedules another pass");
 }
 
 auto TestLogScroll() -> void {
@@ -4895,6 +4963,7 @@ auto main() -> int {
     TestCommandEventSerialization();
     TestSaveLoadRoundtrip();
     TestCampaign();
+    TestCampaignSaver();
     TestDamagedPayloads();
     TestSessionLog();
     TestSessionLogHistory();
