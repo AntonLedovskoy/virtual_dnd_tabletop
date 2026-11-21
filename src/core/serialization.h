@@ -15,7 +15,9 @@ namespace dnd {
 // Формат передачи, общий для сохранений и TCP-сообщений. Декодеры строгие:
 // отвергают обрезанные данные, лишние байты и значения вне диапазона.
 auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t>;
-auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
+// conditions_have_dc == false читает старые сейвы, где у состояний не было КС.
+auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
+                    bool conditions_have_dc = true)
     -> std::optional<GameSnapshot>;
 
 auto EncodeFog(const FogSnapshot& fog) -> std::vector<std::uint8_t>;

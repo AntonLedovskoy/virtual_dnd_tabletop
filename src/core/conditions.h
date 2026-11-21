@@ -22,6 +22,8 @@ inline constexpr int kSecondsPerHour = 60 * kSecondsPerMinute;
 inline constexpr int kDefaultConditionSeconds = kSecondsPerMinute;
 // Предел длительности одного состояния и разового сдвига времени: 7 дней.
 inline constexpr int kMaxConditionSeconds = 7 * 24 * kSecondsPerHour;
+// Предел КС спасброска состояния.
+inline constexpr int kMaxSaveDc = 30;
 
 // Игровая длительность по-русски: «1 минута», «10 ходов», «2 часа».
 // 0 — состояние держится до ручного снятия.

@@ -22,16 +22,18 @@ enum class TokenKind : std::uint8_t {
 };
 
 // Состояние токена. seconds > 0 — сколько игровых секунд ещё действует,
-// 0 — до ручного снятия (например, «без сознания»).
+// 0 — до ручного снятия. save_dc > 0 — в конце хода токена бросается
+// спасбросок против этой КС, успех снимает состояние; 0 — без спасброска.
 struct Condition {
   std::string name;
   int seconds = 0;
+  int save_dc = 0;
 
   Condition() = default;
-  explicit Condition(std::string condition_name, int remaining = 0)
-      : name(std::move(condition_name)), seconds(remaining) {}
-  explicit Condition(const char* condition_name, int remaining = 0)
-      : name(condition_name), seconds(remaining) {}
+  explicit Condition(std::string condition_name, int remaining = 0, int dc = 0)
+      : name(std::move(condition_name)), seconds(remaining), save_dc(dc) {}
+  explicit Condition(const char* condition_name, int remaining = 0, int dc = 0)
+      : name(condition_name), seconds(remaining), save_dc(dc) {}
 };
 
 struct Token {

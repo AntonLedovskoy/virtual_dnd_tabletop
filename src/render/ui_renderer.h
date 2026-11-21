@@ -97,11 +97,12 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
                        const std::vector<MonsterTemplate>& bestiary) -> void;
 
 // Модальный список состояний выбранного токена. read_only — игрок только
-// смотрит, состояния назначает и снимает DM.
+// смотрит, состояния и КС задаёт DM.
 auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
                          const std::vector<Condition>& conditions,
-                         bool read_only) -> void;
+                         bool read_only, std::size_t selected, bool edit_dc,
+                         const std::string& dc_buffer) -> void;
 
 // Модальный список сцен кампании для DM: имя, заметка, активная и выбранная.
 // edit_label непустой, когда DM правит имя или заметку; status — сообщение

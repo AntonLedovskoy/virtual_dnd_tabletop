@@ -196,9 +196,16 @@ inline constexpr std::string_view kSheetLevel = "Уровень";
 inline constexpr std::string_view kSheetXp = "Опыт";
 inline constexpr std::string_view kConditions = "Состояния";
 inline constexpr std::string_view kConditionsHint =
-    "1–8 — 1 минута | Shift+1–8 — до снятия | 0 — очистить | Esc — закрыть";
+    "1–8 — вкл/выкл | ↑↓ — выбор | C — КС | Esc — закрыть";
+inline constexpr std::string_view kConditionsPanelHint =
+    "1–8 — вкл/выкл | Shift+1–8 — до снятия | 0 — очистить";
+inline constexpr std::string_view kConditionsPanelHint2 =
+    "↑↓ — выбор | C — КС спасброска | Esc — закрыть";
 inline constexpr std::string_view kConditionsViewHint =
     "Только просмотр, состояния меняет DM | Esc — закрыть";
+inline constexpr std::string_view kConditionDcPrompt = "КС (0–30): ";
+inline constexpr std::string_view kConditionDcNeedActive =
+    "Сначала включите состояние";
 inline constexpr std::string_view kMovementLeft = "Осталось хода";
 inline constexpr std::string_view kMovementOf = "из";
 inline constexpr std::string_view kMovementFree =

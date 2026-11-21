@@ -17,8 +17,9 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x43444E44;  // "DNDC" в little-endian
 constexpr std::uint32_t kMaxPayload = 256U * 1024U * 1024U;
-// До версии 12 длительность состояний хранилась в ходах.
-constexpr std::uint32_t kLegacyCampaignVersion = 11;
+// До версии 13 у состояний не было КС; до версии 12 длительность была в ходах.
+constexpr std::uint32_t kLegacyRoundsCampaignVersion = 11;
+constexpr std::uint32_t kLegacySecondsCampaignVersion = 12;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -54,8 +55,8 @@ auto EncodeCampaign(const Campaign& campaign) -> std::vector<std::uint8_t> {
   return writer.Data();
 }
 
-auto DecodeCampaign(const std::uint8_t* data, std::size_t size)
-    -> std::optional<Campaign> {
+auto DecodeCampaign(const std::uint8_t* data, std::size_t size,
+                    bool conditions_have_dc) -> std::optional<Campaign> {
   ByteReader reader(data, size);
   std::uint32_t scene_count = 0;
   std::uint32_t active = 0;
@@ -80,7 +81,7 @@ auto DecodeCampaign(const std::uint8_t* data, std::size_t size)
       return std::nullopt;
     }
     const std::optional<GameSnapshot> snapshot =
-        DecodeSnapshot(blob.data(), blob.size());
+        DecodeSnapshot(blob.data(), blob.size(), conditions_have_dc);
     if (!snapshot.has_value()) {
       return std::nullopt;
     }
@@ -128,8 +129,9 @@ auto ReadCampaign(const std::filesystem::path& path)
   if (!ReadU32(in, magic) || magic != kMagic) {
     return std::nullopt;
   }
-  if (!ReadU32(in, version) ||
-      (version != kCampaignVersion && version != kLegacyCampaignVersion)) {
+  if (!ReadU32(in, version) || (version != kCampaignVersion &&
+                                version != kLegacySecondsCampaignVersion &&
+                                version != kLegacyRoundsCampaignVersion)) {
     return std::nullopt;
   }
   if (!ReadU32(in, payload_size) || payload_size == 0 ||
@@ -143,9 +145,9 @@ auto ReadCampaign(const std::filesystem::path& path)
   if (!in) {
     return std::nullopt;
   }
-  std::optional<Campaign> campaign =
-      DecodeCampaign(payload.data(), payload.size());
-  if (campaign.has_value() && version == kLegacyCampaignVersion) {
+  std::optional<Campaign> campaign = DecodeCampaign(
+      payload.data(), payload.size(), version == kCampaignVersion);
+  if (campaign.has_value() && version == kLegacyRoundsCampaignVersion) {
     for (Scene& scene : campaign->scenes) {
       for (Token& token : scene.snapshot.tokens) {
         ConvertLegacyConditionRounds(token.conditions);

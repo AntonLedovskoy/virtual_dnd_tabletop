@@ -1158,6 +1158,9 @@ auto App::HandleEvent(SDL_Event event) -> void {
 
   if (conditions_active_) {
     switch (event.type) {
+      case SDL_EVENT_TEXT_INPUT:
+        HandleConditionsTextInput(event.text.text);
+        break;
       case SDL_EVENT_KEY_DOWN:
         HandleConditionsKeyDown(event.key);
         break;
@@ -2132,6 +2135,19 @@ auto App::OpenConditions() -> void {
   conditions_read_only_ = !IsDm();
   conditions_token_id_ = token->id;
   conditions_draft_ = token->conditions;
+  conditions_selected_ = 0;
+  conditions_dc_edit_ = false;
+  conditions_dc_buffer_.clear();
+  const auto& standard = DefaultConditions();
+  for (std::size_t i = 0; i < standard.size(); ++i) {
+    if (std::ranges::any_of(conditions_draft_,
+                            [&standard, i](const Condition& item) -> bool {
+                              return item.name == standard[i];
+                            })) {
+      conditions_selected_ = i;
+      break;
+    }
+  }
   sheet_active_ = false;
   sheet_read_only_ = false;
   bestiary_active_ = false;
@@ -2140,6 +2156,8 @@ auto App::OpenConditions() -> void {
 auto App::CloseConditions() -> void {
   conditions_active_ = false;
   conditions_read_only_ = false;
+  conditions_dc_edit_ = false;
+  conditions_dc_buffer_.clear();
   conditions_token_id_ = 0;
   conditions_draft_.clear();
 }
@@ -2152,6 +2170,7 @@ auto App::ToggleCondition(int index, bool until_removed) -> void {
   if (std::cmp_greater_equal(index, standard.size())) {
     return;
   }
+  conditions_selected_ = static_cast<std::size_t>(index);
   const std::string& condition = standard[static_cast<std::size_t>(index)];
   const auto it = std::ranges::find_if(
       conditions_draft_, [&condition](const Condition& item) -> bool {
@@ -2168,6 +2187,22 @@ auto App::ToggleCondition(int index, bool until_removed) -> void {
 }
 
 auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (conditions_dc_edit_) {
+    if (key.key == SDLK_ESCAPE) {
+      conditions_dc_edit_ = false;
+      conditions_dc_buffer_.clear();
+      return;
+    }
+    if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
+      ApplyConditionDc();
+      return;
+    }
+    if (key.key == SDLK_BACKSPACE) {
+      EraseLastCodePoint(conditions_dc_buffer_);
+      return;
+    }
+    return;
+  }
   if (key.key == SDLK_ESCAPE || key.key == SDLK_K) {
     CloseConditions();
     return;
@@ -2175,8 +2210,36 @@ auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
   if (conditions_read_only_) {
     return;
   }
+  const std::size_t count = DefaultConditions().size();
+  if (key.key == SDLK_UP && count > 0) {
+    conditions_selected_ = (conditions_selected_ + count - 1) % count;
+    return;
+  }
+  if (key.key == SDLK_DOWN && count > 0) {
+    conditions_selected_ = (conditions_selected_ + 1) % count;
+    return;
+  }
+  if (key.key == SDLK_C) {
+    const auto& standard = DefaultConditions();
+    if (std::cmp_greater_equal(conditions_selected_, standard.size())) {
+      return;
+    }
+    const std::string& name = standard[conditions_selected_];
+    const auto it = std::ranges::find_if(
+        conditions_draft_,
+        [&name](const Condition& item) -> bool { return item.name == name; });
+    if (it == conditions_draft_.end()) {
+      view_.AddLocalLine(std::string(strings::kConditionDcNeedActive));
+      return;
+    }
+    conditions_dc_edit_ = true;
+    conditions_dc_buffer_ = it->save_dc > 0 ? std::to_string(it->save_dc) : "";
+    return;
+  }
   if (key.key == SDLK_0) {
     conditions_draft_.clear();
+    conditions_dc_edit_ = false;
+    conditions_dc_buffer_.clear();
     SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
                                   .conditions = conditions_draft_});
     return;
@@ -2185,6 +2248,37 @@ auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
     ToggleCondition(static_cast<int>(key.key - SDLK_1),
                     (key.mod & SDL_KMOD_SHIFT) != 0);
   }
+}
+
+auto App::HandleConditionsTextInput(const char* text) -> void {
+  if (text == nullptr || conditions_read_only_ || !conditions_dc_edit_) {
+    return;
+  }
+  AppendBoundedNumber(conditions_dc_buffer_, text, 0, kMaxSaveDc, false);
+}
+
+auto App::ApplyConditionDc() -> void {
+  const auto& standard = DefaultConditions();
+  if (!std::cmp_greater_equal(conditions_selected_, standard.size())) {
+    const std::string& name = standard[conditions_selected_];
+    const auto it = std::ranges::find_if(
+        conditions_draft_,
+        [&name](const Condition& item) -> bool { return item.name == name; });
+    if (it == conditions_draft_.end()) {
+      view_.AddLocalLine(std::string(strings::kConditionDcNeedActive));
+    } else {
+      int dc = 0;
+      if (!conditions_dc_buffer_.empty() &&
+          !ParseNumber(conditions_dc_buffer_, dc)) {
+        dc = 0;
+      }
+      it->save_dc = std::clamp(dc, 0, kMaxSaveDc);
+      SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
+                                    .conditions = conditions_draft_});
+    }
+  }
+  conditions_dc_edit_ = false;
+  conditions_dc_buffer_.clear();
 }
 
 auto App::SendAoe(const AoeTemplate& aoe) -> void {
@@ -3471,7 +3565,9 @@ auto App::Iterate() -> void {
       CloseConditions();
     } else {
       DrawConditionsPanel(renderer_, text_.get(), *condition_token,
-                          conditions_draft_, conditions_read_only_);
+                          conditions_draft_, conditions_read_only_,
+                          conditions_selected_, conditions_dc_edit_,
+                          conditions_dc_buffer_);
     }
   }
   // Клиент остаётся на последнем снапшоте, пока идёт переподключение; баннер

@@ -96,6 +96,7 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   for (const Condition& condition : token.conditions) {
     writer.String(condition.name);
     writer.I32(condition.seconds);
+    writer.I32(condition.save_dc);
   }
   writer.I32(token.movement_used);
   writer.I32(token.diagonal_parity);
@@ -107,7 +108,8 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.con_modifier);
 }
 
-auto ReadToken(ByteReader& reader, Token& token) -> bool {
+auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
+    -> bool {
   std::uint32_t id = 0;
   std::string name;
   std::string owner;
@@ -151,11 +153,17 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   for (std::uint32_t i = 0; i < condition_count; ++i) {
     std::string condition_name;
     std::int32_t seconds = 0;
+    std::int32_t save_dc = 0;
     if (!reader.String(condition_name, kMaxConditionLength) ||
         !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds) {
       return false;
     }
-    conditions.emplace_back(std::move(condition_name), seconds);
+    if (conditions_have_dc) {
+      if (!reader.I32(save_dc) || save_dc < 0 || save_dc > kMaxSaveDc) {
+        return false;
+      }
+    }
+    conditions.emplace_back(std::move(condition_name), seconds, save_dc);
   }
   if (!reader.I32(movement_used) || !reader.I32(diagonal_parity) ||
       !reader.I32(death_successes) || !reader.I32(death_failures) ||
@@ -703,11 +711,13 @@ auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
   for (std::uint32_t i = 0; i < count; ++i) {
     std::string condition_name;
     std::int32_t seconds = 0;
+    std::int32_t save_dc = 0;
     if (!reader.String(condition_name, kMaxConditionLength) ||
-        !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds) {
+        !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds ||
+        !reader.I32(save_dc) || save_dc < 0 || save_dc > kMaxSaveDc) {
       return std::nullopt;
     }
-    conditions.emplace_back(std::move(condition_name), seconds);
+    conditions.emplace_back(std::move(condition_name), seconds, save_dc);
   }
   if (!reader.Done()) {
     return std::nullopt;
@@ -834,7 +844,7 @@ auto DecodeLogLineEvent(ByteReader& reader) -> std::optional<Event> {
 
 auto DecodeTokenAddedEvent(ByteReader& reader) -> std::optional<Event> {
   Token token;
-  if (!ReadToken(reader, token) || !reader.Done()) {
+  if (!ReadToken(reader, token, true) || !reader.Done()) {
     return std::nullopt;
   }
   return Event{TokenAdded{.token = std::move(token)}};
@@ -850,7 +860,7 @@ auto DecodeTokenRemovedEvent(ByteReader& reader) -> std::optional<Event> {
 
 auto DecodeTokenUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   Token token;
-  if (!ReadToken(reader, token) || !reader.Done()) {
+  if (!ReadToken(reader, token, true) || !reader.Done()) {
     return std::nullopt;
   }
   return Event{TokenUpdated{.token = std::move(token)}};
@@ -914,8 +924,8 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
   return writer.Data();
 }
 
-auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
-    -> std::optional<GameSnapshot> {
+auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
+                    bool conditions_have_dc) -> std::optional<GameSnapshot> {
   ByteReader reader(data, size);
   std::uint32_t width = 0;
   std::uint32_t height = 0;
@@ -948,7 +958,8 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size)
   tokens.reserve(token_count);
   for (std::uint32_t i = 0; i < token_count; ++i) {
     Token token;
-    if (!ReadToken(reader, token) || !map.Contains(token.cell)) {
+    if (!ReadToken(reader, token, conditions_have_dc) ||
+        !map.Contains(token.cell)) {
       return std::nullopt;
     }
     tokens.push_back(std::move(token));
@@ -1126,6 +1137,7 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           for (const Condition& condition : cmd.conditions) {
             writer.String(condition.name);
             writer.I32(condition.seconds);
+            writer.I32(condition.save_dc);
           }
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           writer.U8(kCommandStartEncounter);

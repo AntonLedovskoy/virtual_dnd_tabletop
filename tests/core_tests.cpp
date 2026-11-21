@@ -1085,6 +1085,102 @@ auto TestConditionDurationAndInitiative() -> void {
          "legacy rounds migrate to seconds");
 }
 
+auto TestConditionSaves() -> void {
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .initiative = 20,
+                         .save_bonus = 100,
+                         .initiative_bonus = 100,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "weak",
+                         .initiative = 10,
+                         .save_bonus = -100,
+                         .initiative_bonus = -100,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 2)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 6, 1234);
+  Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the DM starts the encounter for condition saves");
+
+  Expect(server
+             .HandleCommand(
+                 dnd::UpdateTokenCombat{
+                     .id = 1,
+                     .conditions = {dnd::Condition{"отравлен", 0, 15},
+                                    dnd::Condition{"испуган"}}},
+                 "", true)
+             .accepted,
+         "the DM sets a condition with a save DC");
+  const dnd::CommandOutcome saved =
+      server.HandleCommand(dnd::NextTurn{}, "", true);
+  Expect(saved.accepted, "the turn ends and saves are rolled");
+  const dnd::Token after_success = TokenOf(server.State(), 1);
+  Expect(after_success.conditions.size() == 1 &&
+             after_success.conditions.front().name == "испуган",
+         "a successful save removes the condition, permanent stays");
+  Expect(std::ranges::any_of(
+             saved.events,
+             [](const dnd::Event& event) -> bool {
+               if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+                 return false;
+               }
+               const dnd::LogLine& line =
+                   std::get<dnd::LogLineAdded>(event).line;
+               return line.text.find("против КС 15") != std::string::npos;
+             }),
+         "the save roll is written to the log with КС");
+
+  Expect(
+      server
+          .HandleCommand(
+              dnd::UpdateTokenCombat{
+                  .id = 2, .conditions = {dnd::Condition{"захвачен", 0, 15}}},
+              "", true)
+          .accepted,
+      "the DM sets a condition on the failed saver");
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the turn ends again");
+  const dnd::Token after_failure = TokenOf(server.State(), 2);
+  Expect(after_failure.conditions.size() == 1 &&
+             after_failure.conditions.front().name == "захвачен",
+         "a failed save keeps the condition");
+
+  const dnd::CommandOutcome dc_changed = server.HandleCommand(
+      dnd::UpdateTokenCombat{.id = 2,
+                             .conditions = {dnd::Condition{"захвачен", 0, 18}}},
+      "", true);
+  Expect(dc_changed.accepted &&
+             std::ranges::any_of(
+                 dc_changed.events,
+                 [](const dnd::Event& event) -> bool {
+                   if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+                     return false;
+                   }
+                   return std::get<dnd::LogLineAdded>(event).line.text.find(
+                              "КС 15→18") != std::string::npos;
+                 }),
+         "changing the save DC is written to the log");
+
+  Expect(
+      !server
+           .HandleCommand(
+               dnd::UpdateTokenCombat{
+                   .id = 1, .conditions = {dnd::Condition{"отравлен", 0, 31}}},
+               "", true)
+           .accepted,
+      "a save DC above 30 is rejected");
+}
+
 auto TestDiceExpression() -> void {
   dnd::DiceExpression expression;
   Expect(dnd::ParseDiceExpression("d20+5", expression), "d20+5 is parsed");
@@ -2405,7 +2501,7 @@ auto TestSaveLoadRoundtrip() -> void {
                          .save_bonus = 2,
                          .damage = "1d8+3",
                          .conditions = {dnd::Condition{"сбит с ног"},
-                                        dnd::Condition{"концентрация"}},
+                                        dnd::Condition{"концентрация", 60, 12}},
                          .xp = 900,
                          .movement_used = 4,
                          .diagonal_parity = 1,
@@ -2491,6 +2587,10 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().save_bonus == 2, "token save bonus survives");
     Expect(loaded->tokens.front().damage == "1d8+3",
            "token damage expression survives");
+    Expect(loaded->tokens.front().conditions.size() == 2 &&
+               loaded->tokens.front().conditions.back().seconds == 60 &&
+               loaded->tokens.front().conditions.back().save_dc == 12,
+           "condition duration and КС survive the roundtrip");
     Expect(loaded->tokens.front().conditions.size() == 2,
            "token conditions survive");
     Expect(loaded->tokens.front().movement_used == 4,
@@ -3551,10 +3651,10 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).con_modifier == 2,
       "sheet command survives serialization");
 
-  const dnd::Command combat_command{
-      dnd::UpdateTokenCombat{.id = 4,
-                             .conditions = {dnd::Condition{"сбит с ног"},
-                                            dnd::Condition{"отравлен"}}}};
+  const dnd::Command combat_command{dnd::UpdateTokenCombat{
+      .id = 4,
+      .conditions = {dnd::Condition{"сбит с ног"},
+                     dnd::Condition{"отравлен", 60, 15}}}};
   const std::vector<std::uint8_t> combat_bytes =
       dnd::EncodeCommand(combat_command);
   const std::optional<dnd::Command> combat_decoded =
@@ -3563,8 +3663,14 @@ auto TestCommandEventSerialization() -> void {
       combat_decoded.has_value() &&
           std::holds_alternative<dnd::UpdateTokenCombat>(*combat_decoded) &&
           std::get<dnd::UpdateTokenCombat>(*combat_decoded).conditions.size() ==
-              2,
-      "combat command survives serialization");
+              2 &&
+          std::get<dnd::UpdateTokenCombat>(*combat_decoded)
+                  .conditions.back()
+                  .seconds == 60 &&
+          std::get<dnd::UpdateTokenCombat>(*combat_decoded)
+                  .conditions.back()
+                  .save_dc == 15,
+      "combat command with save DC survives serialization");
 
   const dnd::Command damage{dnd::DamageToken{.id = 4, .amount = 7}};
   const std::vector<std::uint8_t> damage_bytes = dnd::EncodeCommand(damage);
@@ -3643,7 +3749,7 @@ auto TestCommandEventSerialization() -> void {
                           .attack_bonus = 4,
                           .save_bonus = 1,
                           .damage = "1d8+2",
-                          .conditions = {dnd::Condition{"оглушён", 2}},
+                          .conditions = {dnd::Condition{"оглушён", 2, 13}},
                           .xp = 1200,
                           .movement_used = 5,
                           .death_save_successes = 1,
@@ -3680,6 +3786,9 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::TokenUpdated>(*updated_decoded)
                   .token.conditions.front()
                   .seconds == 2 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded)
+                  .token.conditions.front()
+                  .save_dc == 13 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.movement_used ==
               5 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)
@@ -4475,6 +4584,7 @@ auto main() -> int {
     TestAoeDamage();
     TestDeathSaves();
     TestConditionDurationAndInitiative();
+    TestConditionSaves();
     TestDiceExpression();
     TestBestiary();
     TestDynamicFogObservers();

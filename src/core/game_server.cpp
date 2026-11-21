@@ -1130,7 +1130,8 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
   }
   for (const Condition& condition : command.conditions) {
     if (condition.name.empty() || condition.name.size() > kMaxConditionLength ||
-        condition.seconds < 0 || condition.seconds > kMaxConditionSeconds) {
+        condition.seconds < 0 || condition.seconds > kMaxConditionSeconds ||
+        condition.save_dc < 0 || condition.save_dc > kMaxSaveDc) {
       return CommandOutcome{.reject_reason = "некорректное состояние"};
     }
   }
@@ -1151,12 +1152,25 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
     });
   };
   for (const Condition& condition : command.conditions) {
-    if (has_condition(before.conditions, condition.name)) {
+    const auto before_condition = std::ranges::find_if(
+        before.conditions, [&condition](const Condition& item) -> bool {
+          return item.name == condition.name;
+        });
+    if (before_condition == before.conditions.end()) {
+      std::string entry = "+" + condition.name;
+      entry += " (" + FormatConditionDuration(condition.seconds);
+      if (condition.save_dc > 0) {
+        entry += ", КС " + std::to_string(condition.save_dc);
+      }
+      entry += ")";
+      changes.push_back(std::move(entry));
       continue;
     }
-    std::string entry = "+" + condition.name;
-    entry += " (" + FormatConditionDuration(condition.seconds) + ")";
-    changes.push_back(std::move(entry));
+    if (before_condition->save_dc != condition.save_dc) {
+      changes.push_back(condition.name + ": КС " +
+                        std::to_string(before_condition->save_dc) + "→" +
+                        std::to_string(condition.save_dc));
+    }
   }
   for (const Condition& condition : before.conditions) {
     if (!has_condition(command.conditions, condition.name)) {
@@ -1284,19 +1298,64 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
   if (!can_control_all) {
     return CommandOutcome{.reject_reason = "ход переключает только DM"};
   }
-  const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
-  if (!state_.NextTurn()) {
+  if (!state_.EncounterState().active) {
     return CommandOutcome{.reject_reason = "нет активного боя"};
   }
   CommandOutcome outcome;
   outcome.accepted = true;
-  outcome.events.emplace_back(
-      EncounterUpdated{.encounter = state_.EncounterState()});
+  std::vector<TokenId> changed;
+  const auto remember = [&changed](TokenId id) -> void {
+    if (std::ranges::find(changed, id) == changed.end()) {
+      changed.push_back(id);
+    }
+  };
+
+  // Конец хода активного токена: состояния с КС дают спасбросок d20 +
+  // бонус спасброска. Успех снимает состояние, провал оставляет его.
+  const TokenId ending_id = state_.ActiveTokenId();
+  if (const std::optional<Token> ending = state_.TokenCopy(ending_id)) {
+    std::uniform_int_distribution<int> d20(1, 20);
+    for (const Condition& condition : ending->conditions) {
+      if (condition.save_dc <= 0) {
+        continue;
+      }
+      const int roll = d20(rng_) + ending->save_bonus;
+      const bool success = roll >= condition.save_dc;
+      std::string text = "спасбросок " + std::to_string(roll) + " против КС " +
+                         std::to_string(condition.save_dc);
+      if (success) {
+        text += " — снято «" + condition.name + "»";
+        if (state_.RemoveTokenCondition(ending_id, condition.name)
+                .has_value()) {
+          remember(ending_id);
+        }
+      } else {
+        text += " — остаётся «" + condition.name + "»";
+      }
+      outcome.events.emplace_back(LogLineAdded{
+          .line = LogLine{.author = ending->name,
+                          .text = std::move(text),
+                          .timestamp = CurrentTimeSeconds()},
+      });
+    }
+  }
+
+  const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
+  if (!state_.NextTurn()) {
+    return CommandOutcome{.reject_reason = "нет активного боя"};
+  }
   for (const TokenId id : spent) {
+    remember(id);
+  }
+  // У нового активного токена время хода уже срезало его состояния.
+  remember(state_.ActiveTokenId());
+  for (const TokenId id : changed) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
     }
   }
+  outcome.events.emplace_back(
+      EncounterUpdated{.encounter = state_.EncounterState()});
   return outcome;
 }
 

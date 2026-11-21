@@ -724,7 +724,8 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
                          const std::vector<Condition>& conditions,
-                         bool read_only) -> void {
+                         bool read_only, std::size_t selected, bool edit_dc,
+                         const std::string& dc_buffer) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -761,19 +762,33 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
     const bool active = found != conditions.end();
     std::string line;
     if (!read_only) {
-      line = std::to_string(i + 1) + ". ";
+      line = (i == selected ? "> " : "  ") + std::to_string(i + 1) + ". ";
     }
     line += (active ? "[x] " : "[ ] ") + standard[i];
     if (active) {
-      line += " (" + FormatConditionDuration(found->seconds) + ")";
+      line += " (" + FormatConditionDuration(found->seconds);
+      if (found->save_dc > 0) {
+        line += ", КС " + std::to_string(found->save_dc);
+      }
+      line += ")";
     }
     text->Draw(line, left, cursor_y, active ? kAuthorText : kLogText,
                content_width);
     cursor_y += text->LineHeight() + 2.0F;
   }
-  text->Draw(std::string(read_only ? strings::kConditionsViewHint
-                                   : strings::kConditionsHint),
-             left, y + height - 30.0F, kHintText, content_width);
+  if (read_only) {
+    text->Draw(std::string(strings::kConditionsViewHint), left,
+               y + height - 30.0F, kHintText, content_width);
+    return;
+  }
+  if (edit_dc) {
+    text->Draw(std::string(strings::kConditionDcPrompt) + dc_buffer + "_", left,
+               y + height - 74.0F, kAuthorText, content_width);
+  }
+  text->Draw(std::string(strings::kConditionsPanelHint), left,
+             y + height - 48.0F, kHintText, content_width);
+  text->Draw(std::string(strings::kConditionsPanelHint2), left,
+             y + height - 26.0F, kHintText, content_width);
 }
 
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,
