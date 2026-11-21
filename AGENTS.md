@@ -14,7 +14,7 @@ Old rules appear only as a deliberate note in `PLAN.md`.
 ## Build and tests
 
 - Windows: `.\build.bat` (debug default). `-p debug|release|relwithdebinfo|minsize`, `-c` reconfigure, `-j N` jobs, `-t`/`--tidy` runs `clang-tidy` on our `.cpp`, fails on any finding.
-- `build.bat` runs `build.sh` in MSYS2 UCRT64 (`C:\msys64` or `%MSYS2_ROOT%`); never run `build.sh` from PowerShell.
+- `build.bat` runs `tools/build.sh` in MSYS2 UCRT64 (`C:\msys64` or `%MSYS2_ROOT%`); never run `tools/build.sh` from PowerShell.
 - Binaries in `.build/<profile>/`, e.g. `.build/debug/virtual_dnd_tabletop.exe`.
 - `virtual_dnd_tabletop.exe` — GUI-подсистема без окна консоли: `SDL_Log` дописывается в `virtual_dnd_tabletop.log` рядом с `.exe` (`src/app/file_log.h`), а `--help` и ошибка запуска показываются диалогом. Тесты остаются консольными.
 - First configure fetches SDL3, SDL3_ttf, SDL3_image via FetchContent (network, minutes); `.build/<profile>` reused unless `-c`.
@@ -28,7 +28,7 @@ Old rules appear only as a deliberate note in `PLAN.md`.
 ## Релизы
 
 - Релиз — аннотированный тег `vX.Y.Z` на чистом `master`; тело тега становится заметками в `latest.json`: `git tag -a vX.Y.Z -m "что нового"`, затем `git push origin master --tags`.
-- `.\package.bat` собирает release (с `-c`, чтобы версия попала в бинарник) и кладёт в `dist/`: `virtual_dnd_tabletop.exe`, `virtual_dnd_tabletop-X.Y.Z-win64.zip`, `latest.json` и `notes.txt`. Проверяет, что exe несёт версию тега, и хеширует его в манифест. `--allow-dev` — прогон пайплайна без тега, такой архив не выкладывать.
+- `.\package.bat` собирает release (с `-c`, чтобы версия попала в бинарник) и кладёт в `dist/`: `virtual_dnd_tabletop.exe`, `virtual_dnd_tabletop-X.Y.Z-win64.zip`, `latest.json` и `notes.txt`. В zip — exe, `assets/fonts/DejaVuSans.ttf` и `LICENSE-DejaVu.txt`. Скрипт проверяет, что exe несёт версию тега, и хеширует его в манифест. `--allow-dev` — прогон пайплайна без тега, такой архив не выкладывать.
 - Загрузка: `gh release create vX.Y.Z dist/virtual_dnd_tabletop.exe dist/virtual_dnd_tabletop-X.Y.Z-win64.zip dist/latest.json --title "virtual_dnd_tabletop X.Y.Z" --notes-file dist/notes.txt`; если `gh` нет — те же три файла через веб-форму Releases.
 - Клиент читает манифест по стабильной ссылке `https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases/latest/download/latest.json`.
 - Бамп `kProtocolVersion` — новый релиз в тот же день: клиент со старой версией получает отказ при подключении.

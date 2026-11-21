@@ -76,7 +76,7 @@ PACKAGE=virtual_dnd_tabletop
 EXE_NAME=$PACKAGE.exe
 
 # git нужен для версии и заметок; в MSYS2 его может не быть, тогда берём
-# Git for Windows — так же, как build.sh подсказывает путь CMake.
+# Git for Windows — так же, как tools/build.sh подсказывает путь CMake.
 GIT_BIN=$(command -v git 2>/dev/null || true)
 if [[ -z "$GIT_BIN" ]]; then
   for candidate in "/c/Program Files/Git/cmd/git.exe" \
@@ -89,6 +89,21 @@ if [[ -z "$GIT_BIN" ]]; then
 fi
 [[ -n "$GIT_BIN" ]] || {
   echo "error: git не найден; он нужен для версии и заметок релиза" >&2
+  exit 1
+}
+
+# cmake нужен только для zip; в чистом MSYS2-shell его нет в PATH.
+CMAKE_BIN=$(command -v cmake 2>/dev/null || true)
+if [[ -z "$CMAKE_BIN" ]]; then
+  for candidate in /ucrt64/bin/cmake.exe /mingw64/bin/cmake.exe; do
+    if [[ -x "$candidate" ]]; then
+      CMAKE_BIN=$candidate
+      break
+    fi
+  done
+fi
+[[ -n "$CMAKE_BIN" ]] || {
+  echo "error: cmake не найден; он нужен для сборки zip" >&2
   exit 1
 }
 
@@ -149,9 +164,9 @@ if (( SKIP_BUILD )); then
 else
   # -c обязателен: DND_VERSION фиксируется на configure, а тег появился позже.
   if [[ -n "$JOBS" ]]; then
-    "$ROOT_DIR/build.sh" -p release -c -j "$JOBS"
+    "$ROOT_DIR/tools/build.sh" -p release -c -j "$JOBS"
   else
-    "$ROOT_DIR/build.sh" -p release -c
+    "$ROOT_DIR/tools/build.sh" -p release -c
   fi
 fi
 
@@ -181,17 +196,26 @@ json_escape() {
 }
 
 STAGE="$DIST_DIR/$STAGE_NAME"
-rm -rf "$STAGE"
+# Каталог может держать антивирус или проводник: сам путь не удаляется, зато
+# его содержимое — чистим и переиспользуем.
+mkdir -p "$STAGE"
+find "$STAGE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 rm -f "$DIST_DIR/$EXE_NAME" "$DIST_DIR/$ZIP_NAME" \
   "$DIST_DIR/latest.json" "$DIST_DIR/notes.txt"
-mkdir -p "$STAGE"
 cp "$EXE" "$STAGE/$EXE_NAME"
 # Шрифт кладём в архив, если он есть в репозитории: без него игра возьмёт
 # системный, но тогда вёрстка у игроков будет разной.
 FONT="$ROOT_DIR/assets/fonts/DejaVuSans.ttf"
+FONT_LICENSE="$ROOT_DIR/assets/fonts/LICENSE-DejaVu.txt"
 if [[ -f "$FONT" ]]; then
+  # Лицензия Bitstream Vera требует распространять текст вместе со шрифтом.
+  [[ -f "$FONT_LICENSE" ]] || {
+    echo "error: $FONT_LICENSE не найден; шрифт нельзя класть в архив" >&2
+    exit 1
+  }
   mkdir -p "$STAGE/assets/fonts"
   cp "$FONT" "$STAGE/assets/fonts/DejaVuSans.ttf"
+  cp "$FONT_LICENSE" "$STAGE/assets/fonts/LICENSE-DejaVu.txt"
 else
   echo "warning: $FONT не найден, zip соберётся без шрифта" >&2
 fi
@@ -199,7 +223,7 @@ cp "$EXE" "$DIST_DIR/$EXE_NAME"
 
 # zip без внешнего пакета: cmake -E tar есть в тех же UCRT64-инструментах.
 (cd "$STAGE" &&
-  cmake -E tar cf "$(cygpath -m "$DIST_DIR/$ZIP_NAME")" --format=zip .)
+  "$CMAKE_BIN" -E tar cf "$(cygpath -m "$DIST_DIR/$ZIP_NAME")" --format=zip .)
 
 SHA256=$(sha256sum "$DIST_DIR/$EXE_NAME" | cut -d' ' -f1)
 PUBLISHED=$(date -u +%Y-%m-%d)

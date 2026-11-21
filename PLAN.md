@@ -175,7 +175,7 @@
       `-Wno-missing-field-initializers` — агрегаты с частично заполненными
       полями это стиль проекта.
 - [x] Необязательный прогон `clang-tidy` по `compile_commands.json`:
-      флаг `-t`/`--tidy` в `build.sh`, лог в `.build/<profile>/clang-tidy.log`,
+      флаг `-t`/`--tidy` в `tools/build.sh`, лог в `.build/<profile>/clang-tidy.log`,
       падение на любом замечании. В `.clang-tidy` осознанно выключены
       `readability-math-missing-parentheses`,
       `readability-function-cognitive-complexity` и
@@ -471,8 +471,8 @@ DM-ом, лог читается как протокол боя.
 
 - [x] Публичный репозиторий `virtual_dnd_tabletop` на GitHub; релиз на тег
       `vX.Y.Z`, в каждом три файла: `virtual_dnd_tabletop.exe`,
-      `virtual_dnd_tabletop-<ver>-win64.zip` (exe + `assets/fonts/DejaVuSans.ttf`,
-      если шрифт есть в репозитории) и `latest.json`.
+      `virtual_dnd_tabletop-<ver>-win64.zip` (exe + `assets/fonts/DejaVuSans.ttf`
+      и `LICENSE-DejaVu.txt`) и `latest.json`.
 - [x] Манифест читается по стабильной ссылке
       `https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases/latest/download/latest.json`
       — без GitHub API: нет лимитов, нет токена в клиенте, не нужен GitHub
@@ -694,6 +694,7 @@ Windows разрешает переименовать запущенный `.exe
 | 21.11.2026 | Версия — из `git describe` на configure; без тега `0.0.0-dirty` | Один источник правды: тег делает релиз, а сборка не ровно на теге не предлагает себе обновление |
 | 21.11.2026 | Пакет, exe и CMake-проект названы `virtual_dnd_tabletop` | Совпадает с репозиторием и ссылками релиза; namespace `dnd`, расширения `.dndcamp`/`.dndscene` и цели `dnd_core`/`dnd_net` остаются внутренними именами |
 | 21.11.2026 | `package.bat` собирает только с чистого тега, `--allow-dev` — для проверки пайплайна | Версия в бинарнике, имени архива и манифесте не может разойтись |
+| 21.11.2026 | В репозитории лежит DejaVuSans 2.37 с лицензией Bitstream Vera | Один шрифт у всех игроков; текст лицензии едет в zip, чтобы распространение было законным |
 | 21.11.2026 | Строгое равенство протокола сохранено, разнообразие версий лечим кнопкой обновления | Обратная совместимость на две версии — версионирование каждого сообщения; при 8 игроках дешевле одно нажатие |
 
 Сюда же добавляйте решения вроде «пароль оставляем открытым» или «подложку

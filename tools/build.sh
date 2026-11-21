@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 usage() {
   cat <<EOF
@@ -18,10 +18,10 @@ usage() {
 Каталог сборки: .build/<profile>
 
 Примеры:
-  ./build.sh
-  ./build.sh -p release
-  ./build.sh -p release -c
-  ./build.sh -p debug -- --verbose
+  ./tools/build.sh
+  ./tools/build.sh -p release
+  ./tools/build.sh -p release -c
+  ./tools/build.sh -p debug -- --verbose
 EOF
 }
 
@@ -129,12 +129,12 @@ if ! command -v git >/dev/null 2>&1; then
   fi
 fi
 
-BUILD_DIR="$SCRIPT_DIR/.build/$PROFILE"
+BUILD_DIR="$ROOT_DIR/.build/$PROFILE"
 CACHE="$BUILD_DIR/CMakeCache.txt"
 
 configure() {
   echo "==> Configuring '$PROFILE' ($BUILD_TYPE) in .build/$PROFILE"
-  cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" \
+  cmake -S "$ROOT_DIR" -B "$BUILD_DIR" \
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         ${GENERATOR[@]+"${GENERATOR[@]}"} \
@@ -143,7 +143,7 @@ configure() {
 
 update_compile_db() {
   local source="$BUILD_DIR/compile_commands.json"
-  local target="$SCRIPT_DIR/compile_commands.json"
+  local target="$ROOT_DIR/compile_commands.json"
   local relative=".build/$PROFILE/compile_commands.json"
   [[ -f "$source" ]] || return 0
   rm -f "$target"
@@ -155,7 +155,7 @@ cache_matches_sources() {
   cached=$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$CACHE" | head -n 1)
   [[ -n "$cached" ]] || return 1
   local here there
-  here=$(cd "$SCRIPT_DIR" && pwd -W 2>/dev/null || pwd)
+  here=$(cd "$ROOT_DIR" && pwd -W 2>/dev/null || pwd)
   there=$(cd "$cached" 2>/dev/null && pwd -W 2>/dev/null || printf '%s' "$cached")
   [[ "$here" == "$there" ]]
 }
@@ -216,7 +216,7 @@ run_tidy() {
   local file
   while IFS= read -r file; do
     files+=("$file")
-  done < <(find "$SCRIPT_DIR/src" "$SCRIPT_DIR/tests" -name '*.cpp' | sort)
+  done < <(find "$ROOT_DIR/src" "$ROOT_DIR/tests" -name '*.cpp' | sort)
 
   local log="$BUILD_DIR/clang-tidy.log"
   echo "==> clang-tidy: ${#files[@]} файлов, лог в .build/$PROFILE/clang-tidy.log"

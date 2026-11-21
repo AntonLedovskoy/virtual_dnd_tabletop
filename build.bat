@@ -19,5 +19,5 @@ if not exist "%MSYS2_ROOT%\ucrt64\bin" (
 )
 
 cd /d "%~dp0"
-"%BASH%" -lc "exec ./build.sh \"$@\"" build.sh %*
+"%BASH%" -lc "exec ./tools/build.sh \"$@\"" tools/build.sh %*
 exit /b %ERRORLEVEL%
