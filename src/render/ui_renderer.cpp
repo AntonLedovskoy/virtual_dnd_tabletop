@@ -216,6 +216,101 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
   return panel_top;
 }
 
+auto DrawLogHistoryPanel(SDL_Renderer* renderer, TextRenderer* text,
+                         const std::vector<HistoryLine>& lines,
+                         const std::vector<std::size_t>& matches,
+                         std::string_view query, int scroll) -> void {
+  if (renderer == nullptr || text == nullptr) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!RenderSize(renderer, window_width, window_height)) {
+    return;
+  }
+  constexpr float padding = 24.0F;
+  constexpr int line_spacing = 3;
+  const float line_height = text->LineHeight() + line_spacing;
+  const float width =
+      std::clamp(static_cast<float>(window_width) - 80.0F, 560.0F, 1100.0F);
+  // Заголовок, строка поиска, счётчик, строки журнала и две строки подсказки.
+  const float height =
+      (2.0F * padding) +
+      (line_height * static_cast<float>(kLogHistoryVisibleRows + 5));
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const float left = x + padding;
+  const float content_width = width - (2.0F * padding);
+  auto cursor_y = y + padding;
+  text->Draw(strings::kLogHistoryTitle, left, cursor_y, kInputText,
+             content_width);
+  cursor_y += line_height;
+  text->Draw(std::string(strings::kLogHistorySearch) + std::string(query) + "_",
+             left, cursor_y, kInputText, content_width);
+  cursor_y += line_height;
+
+  std::string count;
+  if (lines.empty()) {
+    count = std::string(strings::kLogHistoryEmpty);
+  } else if (query.empty()) {
+    count =
+        std::string(strings::kLogHistoryCount) + std::to_string(lines.size());
+  } else {
+    count = std::string(strings::kLogHistoryFound) +
+            std::to_string(matches.size()) +
+            std::string(strings::kLogHistoryOf) + std::to_string(lines.size());
+  }
+  text->Draw(count, left, cursor_y, kHintText, content_width);
+  cursor_y += line_height;
+
+  const int total = static_cast<int>(matches.size());
+  const int max_scroll = std::max(0, total - kLogHistoryVisibleRows);
+  const int offset = std::clamp(scroll, 0, max_scroll);
+  const int first = std::max(0, total - kLogHistoryVisibleRows - offset);
+  const int last = std::min(total, first + kLogHistoryVisibleRows);
+  for (int i = first; i < last; ++i) {
+    const HistoryLine& line = lines[matches[static_cast<std::size_t>(i)]];
+    if (line.header) {
+      const std::string header =
+          std::string(strings::kLogHistorySessionPrefix) + line.time +
+          std::string(strings::kLogHistorySessionSuffix);
+      text->Draw(header, left, cursor_y, kAuthorText, content_width);
+    } else {
+      auto row_x = left;
+      if (!line.time.empty()) {
+        const std::string stamp = "[" + line.time + "] ";
+        text->Draw(stamp, left, cursor_y, kHintText, content_width);
+        row_x += text->Measure(stamp).width;
+      }
+      if (!line.author.empty()) {
+        const std::string author = line.author + ":";
+        const float available = content_width - (row_x - left);
+        if (available > 0.0F) {
+          text->Draw(author, row_x, cursor_y, kAuthorText, available);
+        }
+        row_x += text->Measure(author + " ").width;
+      }
+      const float available = content_width - (row_x - left);
+      if (available > 0.0F) {
+        text->Draw(line.text, row_x, cursor_y, kLogText, available);
+      }
+    }
+    cursor_y += line_height;
+  }
+
+  const float hint_y = y + height - padding - (2.0F * line_height);
+  text->DrawWrapped(strings::kLogHistoryHint, left, hint_y, kHintText,
+                    content_width);
+}
+
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
                          const std::vector<Token>& tokens,
                          const Encounter& encounter) -> void {

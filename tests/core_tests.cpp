@@ -34,6 +34,7 @@
 #include "core/grid_map.h"
 #include "core/levels.h"
 #include "core/local_transport.h"
+#include "core/log_history.h"
 #include "core/log_scroll.h"
 #include "core/menu_model.h"
 #include "core/navigation.h"
@@ -3307,6 +3308,61 @@ auto TestSessionLog() -> void {
          "unwritable session log reports failure");
 }
 
+auto TestSessionLogHistory() -> void {
+  const std::string content =
+      "\n=== сессия 2026-11-20 18:40:12 ===\n"
+      "[2026-11-20 18:40:13] alice: привет\n"
+      "[2026-11-20 18:40:14] bob: бросок d20\n"
+      "без времени\n"
+      "\n=== сессия 2026-11-21 10:00:00 ===\n"
+      "[2026-11-21 10:00:01] DM: Огонь по площади\n";
+  const std::vector<dnd::HistoryLine> lines =
+      dnd::ParseSessionLog(content, 100);
+  Expect(lines.size() == 6, "session history parses every non-empty line");
+  Expect(lines[0].header && lines[0].time == "2026-11-20 18:40:12",
+         "session history keeps the session header");
+  Expect(lines[1].time == "2026-11-20 18:40:13" && lines[1].author == "alice" &&
+             lines[1].text == "привет",
+         "session history splits time and author");
+  Expect(!lines[3].header && lines[3].author.empty() &&
+             lines[3].text == "без времени",
+         "session history keeps untimed system lines");
+  Expect(lines[4].header && lines[5].author == "DM",
+         "session history parses later sessions");
+
+  std::vector<std::size_t> found = dnd::SearchSessionLog(lines, "ПРИВЕТ");
+  Expect(found == std::vector<std::size_t>{0, 1},
+         "search is case-insensitive and keeps the session header");
+  found = dnd::SearchSessionLog(lines, "огонь");
+  Expect(found == std::vector<std::size_t>{4, 5},
+         "search finds a line from a past session");
+  found = dnd::SearchSessionLog(lines, "d20");
+  Expect(found == std::vector<std::size_t>{0, 2},
+         "search skips sessions without matches");
+  Expect(dnd::SearchSessionLog(lines, "abc").empty(),
+         "search returns nothing for an absent word");
+  Expect(dnd::SearchSessionLog(lines, "").size() == lines.size(),
+         "empty search shows the whole journal");
+
+  const std::vector<dnd::HistoryLine> tail = dnd::ParseSessionLog(content, 2);
+  Expect(tail.size() == 2 && tail.back().text == "Огонь по площади",
+         "history keeps only the requested tail");
+
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_history.log";
+  {
+    std::ofstream out(path, std::ios::binary);
+    out << content;
+  }
+  const std::vector<dnd::HistoryLine> loaded =
+      dnd::LoadSessionLog(path.string(), 100);
+  Expect(loaded.size() == lines.size() && loaded[1].text == "привет",
+         "history reader loads a session log file");
+  Expect(dnd::LoadSessionLog(path.string() + ".missing", 100).empty(),
+         "missing session log loads as empty");
+  std::filesystem::remove(path);
+}
+
 auto TestPing() -> void {
   const dnd::GridMap map(10, 10);
   const dnd::GameSnapshot snapshot{.map = map, .next_token_id = 1};
@@ -4540,6 +4596,8 @@ auto TestBottomHints() -> void {
   const std::vector<dnd::Hint> player_hints = dnd::BottomHints(player);
   Expect(!player_hints.empty() && player_hints[0] == dnd::Hint::kChat,
          "the bottom hint starts with chat");
+  Expect(has(player_hints, dnd::Hint::kJournal),
+         "the journal is offered to every role");
   Expect(has(player_hints, dnd::Hint::kSelect),
          "no selection asks to pick a token");
   Expect(!has(player_hints, dnd::Hint::kAttack) &&
@@ -4760,6 +4818,7 @@ auto main() -> int {
     TestCampaign();
     TestDamagedPayloads();
     TestSessionLog();
+    TestSessionLogHistory();
     TestSha256();
     TestX25519();
     TestChaCha20();

@@ -39,6 +39,7 @@ inline constexpr std::string_view kHintChat = "Enter — чат (/roll d20+5)";
 inline constexpr std::string_view kHintHelp = "F1 — справка";
 inline constexpr std::string_view kHintLog = "PgUp/PgDn — лог";
 inline constexpr std::string_view kHintLogNewest = "End — к новым";
+inline constexpr std::string_view kHintJournal = "F3 — журнал";
 inline constexpr std::string_view kHintSelect = "ЛКМ — выбрать токен";
 inline constexpr std::string_view kHintAttack = "A — атака цели под курсором";
 inline constexpr std::string_view kHintSave = "S — спасбросок";
@@ -78,15 +79,30 @@ inline constexpr std::string_view kConnectionRestored =
 inline constexpr std::string_view kLogScrolledPrefix = "Прокручено вверх: ";
 inline constexpr std::string_view kLogScrolledSuffix = " стр. | End — к новым";
 
+// Журнал стола: прошлые и текущая сессии из session.log с поиском.
+inline constexpr std::string_view kLogHistoryTitle = "Журнал стола";
+inline constexpr std::string_view kLogHistorySearch = "Поиск: ";
+inline constexpr std::string_view kLogHistoryEmpty =
+    "В session.log пока нет строк";
+inline constexpr std::string_view kLogHistoryCount = "Строк: ";
+inline constexpr std::string_view kLogHistoryFound = "Найдено: ";
+inline constexpr std::string_view kLogHistoryOf = " из ";
+inline constexpr std::string_view kLogHistorySessionPrefix = "=== сессия ";
+inline constexpr std::string_view kLogHistorySessionSuffix = " ===";
+inline constexpr std::string_view kLogHistoryHint =
+    "Печать — поиск | Backspace — стереть | ↑ ↓ / PgUp PgDn / колесо — "
+    "прокрутка | End — к новым | Esc — закрыть";
+
 // Справка F1: общая часть и набор, зависящий от роли.
 inline constexpr std::string_view kHelpTitle = "Справка по клавишам";
 inline constexpr std::string_view kHelpCommonTitle = "Для всех";
 inline constexpr std::string_view kHelpDmTitle = "Мастер (DM)";
 inline constexpr std::string_view kHelpPlayerTitle = "Игрок";
 inline constexpr std::string_view kHelpClose = "F1 или Esc — закрыть";
-inline constexpr std::array<std::string_view, 15> kHelpCommon = {
+inline constexpr std::array<std::string_view, 16> kHelpCommon = {
     "Enter — чат и команды",
     "F1 — справка, Esc — закрыть",
+    "F3 — журнал стола с поиском и прошлыми сессиями",
     "ЛКМ — выбрать, перетащить; в списках — клик",
     "СКМ — панорама, колесо — зум",
     "Ctrl+= / Ctrl+- — масштаб интерфейса",
@@ -292,6 +308,8 @@ inline constexpr std::string_view kTimeDmOnly =
       return kHintLog;
     case Hint::kLogNewest:
       return kHintLogNewest;
+    case Hint::kJournal:
+      return kHintJournal;
     case Hint::kSelect:
       return kHintSelect;
     case Hint::kClaim:

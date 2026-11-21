@@ -23,6 +23,7 @@ enum class Hint : std::uint8_t {
   kHelp,
   kLog,
   kLogNewest,
+  kJournal,
   kSelect,
   kClaim,
   kRelease,

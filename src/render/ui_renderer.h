@@ -8,6 +8,7 @@
 #include "core/bestiary.h"
 #include "core/campaign.h"
 #include "core/encounter.h"
+#include "core/log_history.h"
 #include "core/log_line.h"
 #include "core/token.h"
 
@@ -19,6 +20,8 @@ class TextRenderer;
 
 // Сколько строк лога помещается в нижнюю панель.
 inline constexpr int kLogVisibleLines = 7;
+// Сколько строк прошлых сессий видно в модальном журнале.
+inline constexpr int kLogHistoryVisibleRows = 16;
 
 // Размер области рисования в координатах интерфейса: при включённом
 // логическом масштабе это его логические размеры, иначе — размер вывода.
@@ -32,6 +35,14 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                   const std::vector<LogLine>& lines, bool typing,
                   const std::string& input, std::string_view hint, int scroll)
     -> float;
+
+// Модальный журнал стола: строки session.log всех сессий, найденные по
+// запросу. matches — индексы в lines, scroll — на сколько строк прокручено
+// вверх от самых свежих.
+auto DrawLogHistoryPanel(SDL_Renderer* renderer, TextRenderer* text,
+                         const std::vector<HistoryLine>& lines,
+                         const std::vector<std::size_t>& matches,
+                         std::string_view query, int scroll) -> void;
 
 // Порядок инициативы справа сверху для видимых клиенту токенов.
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,

@@ -23,6 +23,7 @@
 #include "core/delete_confirm.h"
 #include "core/game_server.h"
 #include "core/local_transport.h"
+#include "core/log_history.h"
 #include "core/log_scroll.h"
 #include "core/menu_model.h"
 #include "core/session_log.h"
@@ -115,6 +116,12 @@ class App {
   auto ScrollLog(int lines) -> void;
   // Держит прокрученный лог на тех же строках, когда приходят новые.
   auto SyncLogScroll() -> void;
+  // Модальный журнал стола: читает session.log с диска, ищет без учёта
+  // регистра и листает прошлые сессии.
+  auto OpenLogHistory() -> void;
+  auto CloseLogHistory() -> void;
+  auto HandleLogHistoryKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto HandleLogHistoryTextInput(const char* text) -> void;
   // Пишет новые строки лога в session.log рядом с .exe.
   auto OpenSessionLog() -> void;
   auto FlushSessionLog() -> void;
@@ -313,6 +320,12 @@ class App {
 
   bool help_active_ = false;
   LogScroll log_scroll_{kLogVisibleLines};
+  // Журнал стола: строки session.log, отфильтрованные по запросу.
+  bool history_active_ = false;
+  std::vector<HistoryLine> history_lines_;
+  std::vector<std::size_t> history_matches_;
+  std::string history_query_;
+  LogScroll history_scroll_{kLogHistoryVisibleRows};
   // Индекс в kUiScales: 1.0, 1.25, 1.5, 2.0.
   int ui_scale_index_ = 0;
   // Файл сессии и число строк, которые в него уже попали.

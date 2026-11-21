@@ -104,6 +104,7 @@ add_library(dnd_core STATIC
   src/core/image_name.cpp
   src/core/levels.cpp
   src/core/local_transport.cpp
+  src/core/log_history.cpp
   src/core/log_scroll.cpp
   src/core/map_background.cpp
   src/core/menu_model.cpp

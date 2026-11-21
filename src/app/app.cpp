@@ -1131,6 +1131,7 @@ auto App::HandleEvent(SDL_Event event) -> void {
       event.key.key == SDLK_F1 && !event.key.repeat) {
     help_active_ = !help_active_;
     if (help_active_) {
+      history_active_ = false;
       chat_.Close();
     }
     return;
@@ -1138,6 +1139,35 @@ auto App::HandleEvent(SDL_Event event) -> void {
   if (help_active_ && in_game_ && !in_editor_) {
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
       help_active_ = false;
+    }
+    return;
+  }
+
+  // Журнал стола — тоже модальная панель: F3 открывает и закрывает её в любом
+  // режиме стола, а пока она открыта, ввод идёт в поиск.
+  if (in_game_ && !in_editor_ && event.type == SDL_EVENT_KEY_DOWN &&
+      event.key.key == SDLK_F3 && !event.key.repeat) {
+    if (history_active_) {
+      CloseLogHistory();
+    } else {
+      OpenLogHistory();
+    }
+    return;
+  }
+  if (history_active_ && in_game_ && !in_editor_) {
+    switch (event.type) {
+      case SDL_EVENT_TEXT_INPUT:
+        HandleLogHistoryTextInput(event.text.text);
+        break;
+      case SDL_EVENT_KEY_DOWN:
+        HandleLogHistoryKeyDown(event.key);
+        break;
+      case SDL_EVENT_MOUSE_WHEEL:
+        history_scroll_.Scroll(static_cast<int>(event.wheel.y * 3.0F),
+                               history_matches_.size());
+        break;
+      default:
+        break;
     }
     return;
   }
@@ -2809,6 +2839,74 @@ auto App::ScrollLog(int lines) -> void {
 
 auto App::SyncLogScroll() -> void { log_scroll_.OnAppend(view_.Log().size()); }
 
+auto App::OpenLogHistory() -> void {
+  // Сначала сбрасываем буфер: в файле должны быть строки этого кадра.
+  FlushSessionLog();
+  history_lines_ = LoadSessionLog(SessionLogPath().string(), kMaxHistoryLines);
+  history_query_.clear();
+  history_matches_ = SearchSessionLog(history_lines_, history_query_);
+  history_scroll_.ToNewest();
+  history_active_ = true;
+  help_active_ = false;
+  chat_.Close();
+}
+
+auto App::CloseLogHistory() -> void {
+  history_active_ = false;
+  history_query_.clear();
+  history_matches_.clear();
+  history_lines_.clear();
+}
+
+auto App::HandleLogHistoryTextInput(const char* text) -> void {
+  if (text == nullptr) {
+    return;
+  }
+  const std::string before = history_query_;
+  AppendUtf8(history_query_, text, 64);
+  if (history_query_ == before) {
+    return;
+  }
+  history_matches_ = SearchSessionLog(history_lines_, history_query_);
+  history_scroll_.ToNewest();
+}
+
+auto App::HandleLogHistoryKeyDown(const SDL_KeyboardEvent& key) -> void {
+  switch (key.key) {
+    case SDLK_ESCAPE:
+      CloseLogHistory();
+      break;
+    case SDLK_BACKSPACE:
+      if (!history_query_.empty()) {
+        EraseLastCodePoint(history_query_);
+        history_matches_ = SearchSessionLog(history_lines_, history_query_);
+        history_scroll_.ToNewest();
+      }
+      break;
+    case SDLK_UP:
+      history_scroll_.Scroll(1, history_matches_.size());
+      break;
+    case SDLK_DOWN:
+      history_scroll_.Scroll(-1, history_matches_.size());
+      break;
+    case SDLK_PAGEUP:
+      history_scroll_.Scroll(kLogHistoryVisibleRows, history_matches_.size());
+      break;
+    case SDLK_PAGEDOWN:
+      history_scroll_.Scroll(-kLogHistoryVisibleRows, history_matches_.size());
+      break;
+    case SDLK_HOME:
+      history_scroll_.Scroll(static_cast<int>(history_matches_.size()),
+                             history_matches_.size());
+      break;
+    case SDLK_END:
+      history_scroll_.ToNewest();
+      break;
+    default:
+      break;
+  }
+}
+
 auto App::OpenSessionLog() -> void {
   const std::string path = SessionLogPath().string();
   if (!session_log_.Open(path, CurrentTimeSeconds())) {
@@ -3573,6 +3671,11 @@ auto App::Iterate() -> void {
                           conditions_selected_, conditions_dc_edit_,
                           conditions_dc_buffer_);
     }
+  }
+  if (history_active_) {
+    DrawLogHistoryPanel(renderer_, text_.get(), history_lines_,
+                        history_matches_, history_query_,
+                        history_scroll_.Offset());
   }
   // Клиент остаётся на последнем снапшоте, пока идёт переподключение; баннер
   // нужен, чтобы он не принял замороженный стол за настоящий.
