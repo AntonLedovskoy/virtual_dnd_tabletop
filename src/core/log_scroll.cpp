@@ -32,6 +32,11 @@ auto LogScroll::OnAppend(std::size_t total_lines) -> void {
 
 auto LogScroll::ToNewest() -> void { offset_ = 0; }
 
+auto LogScroll::SetVisibleLines(int visible_lines) -> void {
+  visible_lines_ = std::max(0, visible_lines);
+  Clamp(count_);
+}
+
 auto LogScroll::Clamp(std::size_t total_lines) -> void {
   const int total = static_cast<int>(std::min<std::size_t>(
       total_lines, static_cast<std::size_t>(std::numeric_limits<int>::max())));

@@ -17,6 +17,9 @@ class LogScroll {
   auto OnAppend(std::size_t total_lines) -> void;
   // End — вернуться к новым строкам.
   auto ToNewest() -> void;
+  // Меняет высоту страницы, например когда окно уменьшилось: отступ сразу
+  // подрезается под новый размер.
+  auto SetVisibleLines(int visible_lines) -> void;
 
   [[nodiscard]] auto Offset() const -> int { return offset_; }
 

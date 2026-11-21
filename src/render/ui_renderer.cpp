@@ -95,6 +95,48 @@ auto FormatLogTime(std::uint32_t timestamp) -> std::string {
   return buffer.data();
 }
 
+constexpr float kHistoryPadding = 24.0F;
+
+// Раскладка модального журнала: панель ужимается под высоту окна, поэтому
+// на маленьком логическом экране видно меньше строк, а подсказка не обрезана.
+struct HistoryLayout {
+  float width = 0.0F;
+  float height = 0.0F;
+  float line_height = 0.0F;
+  float hint_height = 0.0F;
+  int rows = 0;
+};
+
+auto BuildHistoryLayout(TextRenderer* text, int window_width, int window_height)
+    -> HistoryLayout {
+  constexpr int line_spacing = 3;
+  constexpr float window_margin = 20.0F;
+  const float line_height = text->LineHeight() + line_spacing;
+  const float width =
+      std::clamp(static_cast<float>(window_width) - 80.0F, 560.0F, 1100.0F);
+  const float content_width = width - (2.0F * kHistoryPadding);
+  // Подсказка измеряется: при узком окне она переносится на две строки, и
+  // фиксированный запас в две строки её обрезал.
+  const float hint_height =
+      std::max(line_height,
+               text->Measure(strings::kLogHistoryHint, content_width).height);
+  const float fixed_height =
+      (2.0F * kHistoryPadding) + (3.0F * line_height) + hint_height;
+  const float available =
+      std::max(fixed_height + line_height,
+               static_cast<float>(window_height) - (2.0F * window_margin));
+  const int rows = std::clamp(static_cast<int>((available - fixed_height) /
+                                               std::max(1.0F, line_height)),
+                              1, kLogHistoryVisibleRows);
+  return HistoryLayout{
+      .width = width,
+      .height = fixed_height + (static_cast<float>(rows) * line_height),
+      .line_height = line_height,
+      .hint_height = hint_height,
+      .rows = rows,
+  };
+}
+
 }  // namespace
 
 auto RenderSize(SDL_Renderer* renderer, int& width, int& height) -> bool {
@@ -228,15 +270,11 @@ auto DrawLogHistoryPanel(SDL_Renderer* renderer, TextRenderer* text,
   if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
-  constexpr float padding = 24.0F;
-  constexpr int line_spacing = 3;
-  const float line_height = text->LineHeight() + line_spacing;
-  const float width =
-      std::clamp(static_cast<float>(window_width) - 80.0F, 560.0F, 1100.0F);
-  // Заголовок, строка поиска, счётчик, строки журнала и две строки подсказки.
-  const float height =
-      (2.0F * padding) +
-      (line_height * static_cast<float>(kLogHistoryVisibleRows + 5));
+  const HistoryLayout layout =
+      BuildHistoryLayout(text, window_width, window_height);
+  const float line_height = layout.line_height;
+  const float width = layout.width;
+  const float height = layout.height;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -247,9 +285,9 @@ auto DrawLogHistoryPanel(SDL_Renderer* renderer, TextRenderer* text,
   SDL_RenderRect(renderer, &panel);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-  const float left = x + padding;
-  const float content_width = width - (2.0F * padding);
-  auto cursor_y = y + padding;
+  const float left = x + kHistoryPadding;
+  const float content_width = width - (2.0F * kHistoryPadding);
+  auto cursor_y = y + kHistoryPadding;
   text->Draw(strings::kLogHistoryTitle, left, cursor_y, kInputText,
              content_width);
   cursor_y += line_height;
@@ -272,10 +310,10 @@ auto DrawLogHistoryPanel(SDL_Renderer* renderer, TextRenderer* text,
   cursor_y += line_height;
 
   const int total = static_cast<int>(matches.size());
-  const int max_scroll = std::max(0, total - kLogHistoryVisibleRows);
+  const int max_scroll = std::max(0, total - layout.rows);
   const int offset = std::clamp(scroll, 0, max_scroll);
-  const int first = std::max(0, total - kLogHistoryVisibleRows - offset);
-  const int last = std::min(total, first + kLogHistoryVisibleRows);
+  const int first = std::max(0, total - layout.rows - offset);
+  const int last = std::min(total, first + layout.rows);
   for (int i = first; i < last; ++i) {
     const HistoryLine& line = lines[matches[static_cast<std::size_t>(i)]];
     if (line.header) {
@@ -306,9 +344,22 @@ auto DrawLogHistoryPanel(SDL_Renderer* renderer, TextRenderer* text,
     cursor_y += line_height;
   }
 
-  const float hint_y = y + height - padding - (2.0F * line_height);
+  const float hint_y = y + height - kHistoryPadding - layout.hint_height;
   text->DrawWrapped(strings::kLogHistoryHint, left, hint_y, kHintText,
                     content_width);
+}
+
+auto LogHistoryVisibleRows(SDL_Renderer* renderer, TextRenderer* text) -> int {
+  if (renderer == nullptr || text == nullptr) {
+    return kLogHistoryVisibleRows;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!RenderSize(renderer, window_width, window_height) || window_width <= 0 ||
+      window_height <= 0) {
+    return kLogHistoryVisibleRows;
+  }
+  return BuildHistoryLayout(text, window_width, window_height).rows;
 }
 
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,

@@ -44,6 +44,11 @@ auto DrawLogHistoryPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const std::vector<std::size_t>& matches,
                          std::string_view query, int scroll) -> void;
 
+// Сколько строк журнала реально помещается при текущем размере окна и
+// масштабе: панель ужимается, а не вылезает за экран. Нужно App, чтобы
+// прокрутка считала те же строки, что и отрисовка.
+auto LogHistoryVisibleRows(SDL_Renderer* renderer, TextRenderer* text) -> int;
+
 // Порядок инициативы справа сверху для видимых клиенту токенов.
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
                          const std::vector<Token>& tokens,

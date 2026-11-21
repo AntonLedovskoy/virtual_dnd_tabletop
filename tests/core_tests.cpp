@@ -4464,6 +4464,13 @@ auto TestLogScroll() -> void {
   Expect(scroll.Offset() == 14, "shrinking the log clamps the offset");
   scroll.Scroll(3, 2);
   Expect(scroll.Offset() == 0, "a log shorter than the page cannot scroll");
+
+  dnd::LogScroll window_scroll(3);
+  window_scroll.Scroll(100, 10);
+  Expect(window_scroll.Offset() == 7, "a small page scrolls to the first line");
+  window_scroll.SetVisibleLines(8);
+  Expect(window_scroll.Offset() == 2,
+         "a bigger page clamps the scroll position");
 }
 
 auto TestDeleteConfirm() -> void {

@@ -1163,6 +1163,8 @@ auto App::HandleEvent(SDL_Event event) -> void {
         HandleLogHistoryKeyDown(event.key);
         break;
       case SDL_EVENT_MOUSE_WHEEL:
+        history_scroll_.SetVisibleLines(
+            LogHistoryVisibleRows(renderer_, text_.get()));
         history_scroll_.Scroll(static_cast<int>(event.wheel.y * 3.0F),
                                history_matches_.size());
         break;
@@ -2845,6 +2847,8 @@ auto App::OpenLogHistory() -> void {
   history_lines_ = LoadSessionLog(SessionLogPath().string(), kMaxHistoryLines);
   history_query_.clear();
   history_matches_ = SearchSessionLog(history_lines_, history_query_);
+  history_scroll_.SetVisibleLines(
+      LogHistoryVisibleRows(renderer_, text_.get()));
   history_scroll_.ToNewest();
   history_active_ = true;
   help_active_ = false;
@@ -2872,6 +2876,8 @@ auto App::HandleLogHistoryTextInput(const char* text) -> void {
 }
 
 auto App::HandleLogHistoryKeyDown(const SDL_KeyboardEvent& key) -> void {
+  const int visible = LogHistoryVisibleRows(renderer_, text_.get());
+  history_scroll_.SetVisibleLines(visible);
   switch (key.key) {
     case SDLK_ESCAPE:
       CloseLogHistory();
@@ -2890,10 +2896,10 @@ auto App::HandleLogHistoryKeyDown(const SDL_KeyboardEvent& key) -> void {
       history_scroll_.Scroll(-1, history_matches_.size());
       break;
     case SDLK_PAGEUP:
-      history_scroll_.Scroll(kLogHistoryVisibleRows, history_matches_.size());
+      history_scroll_.Scroll(visible, history_matches_.size());
       break;
     case SDLK_PAGEDOWN:
-      history_scroll_.Scroll(-kLogHistoryVisibleRows, history_matches_.size());
+      history_scroll_.Scroll(-visible, history_matches_.size());
       break;
     case SDLK_HOME:
       history_scroll_.Scroll(static_cast<int>(history_matches_.size()),
@@ -3673,6 +3679,11 @@ auto App::Iterate() -> void {
     }
   }
   if (history_active_) {
+    // Окно могли увеличить или уменьшить, пока журнал открыт: страница
+    // прокрутки должна совпадать с тем, сколько строк рисуется.
+    history_scroll_.SetVisibleLines(
+        LogHistoryVisibleRows(renderer_, text_.get()));
+    history_scroll_.Scroll(0, history_matches_.size());
     DrawLogHistoryPanel(renderer_, text_.get(), history_lines_,
                         history_matches_, history_query_,
                         history_scroll_.Offset());
