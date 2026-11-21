@@ -15,7 +15,7 @@
 
 namespace dnd {
 
-inline constexpr std::uint32_t kProtocolVersion = 30;
+inline constexpr std::uint32_t kProtocolVersion = 31;
 
 enum class MessageType : std::uint8_t {
   kHello = 1,

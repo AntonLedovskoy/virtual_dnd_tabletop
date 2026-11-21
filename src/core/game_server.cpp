@@ -1,11 +1,13 @@
 #include "core/game_server.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <optional>
 #include <sstream>
 #include <type_traits>
 #include <utility>
 
+#include "core/attack.h"
 #include "core/clock.h"
 #include "core/conditions.h"
 #include "core/dice.h"
@@ -125,6 +127,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleEndEncounter(can_control_all);
         } else if constexpr (std::is_same_v<T, SetAoe>) {
           return HandleSetAoe(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, AttackToken>) {
+          return HandleAttack(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, DamageToken>) {
           return HandleDamage(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, HealToken>) {
@@ -451,6 +455,18 @@ auto GameServer::HandleDamage(const DamageToken& command,
   if (command.amount <= 0 || command.amount > kMaxHp) {
     return CommandOutcome{.reject_reason = "некорректный урон"};
   }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  DamageAndLog(command.id, command.amount, actor, outcome.events);
+  return outcome;
+}
+
+auto GameServer::DamageAndLog(TokenId id, int amount, const std::string& actor,
+                              std::vector<Event>& events) -> void {
+  const Token* token = FindToken(id);
+  if (token == nullptr) {
+    return;
+  }
   const std::string name = token->name;
   const int temp_before = token->temp_hp;
   const int hp_before = token->hp;
@@ -459,50 +475,136 @@ auto GameServer::HandleDamage(const DamageToken& command,
       token->conditions, [](const Condition& condition) -> bool {
         return condition.name == kConcentration;
       });
-  const std::optional<Token> updated =
-      state_.DamageToken(command.id, command.amount);
+  const std::optional<Token> updated = state_.DamageToken(id, amount);
   if (!updated.has_value()) {
-    return CommandOutcome{.reject_reason = "не удалось нанести урон"};
+    return;
   }
-  const int absorbed = std::min(temp_before, command.amount);
+  const int absorbed = std::min(temp_before, amount);
   std::ostringstream text;
-  text << name << " получил " << command.amount << " урона";
+  text << name << " получил " << amount << " урона";
   if (absorbed > 0) {
     text << " (" << absorbed << " из временных HP)";
   }
   if (hp_before > 0 && updated->hp == 0) {
     text << "; " << name << " без сознания";
   }
+  events.emplace_back(TokenUpdated{.token = *updated});
+  events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = AuthorName(actor),
+                      .text = text.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
+  if (!concentrating) {
+    return;
+  }
+  // Проверка концентрации: d20 + бонус спасброска против 10 или половины
+  // полученного урона. Провал снимает состояние «концентрация».
+  const int dc = std::max(10, amount / 2);
+  std::uniform_int_distribution<int> d20(1, 20);
+  const int roll = d20(rng_) + save_bonus;
+  std::ostringstream check;
+  check << name << ": проверка концентрации " << roll << " против " << dc;
+  if (roll < dc) {
+    check << " — сорвана";
+    if (std::optional<Token> without =
+            state_.RemoveTokenCondition(id, kConcentration)) {
+      events.emplace_back(TokenUpdated{.token = std::move(*without)});
+    }
+  } else {
+    check << " — удержана";
+  }
+  events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = AuthorName(actor),
+                      .text = check.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
+}
+
+auto GameServer::HandleAttack(const AttackToken& command,
+                              const std::string& actor, bool can_control_all)
+    -> CommandOutcome {
+  const Token* attacker = FindToken(command.attacker);
+  if (attacker == nullptr) {
+    return CommandOutcome{.reject_reason = "атакующий не найден"};
+  }
+  const Token* target = FindToken(command.target);
+  if (target == nullptr) {
+    return CommandOutcome{.reject_reason = "цель не найдена"};
+  }
+  if (attacker->id == target->id) {
+    return CommandOutcome{.reject_reason = "нельзя атаковать себя"};
+  }
+  if (!CanControl(*attacker, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*attacker)};
+  }
+  // Игрок не бьёт то, чего не видит: иначе командой вручную можно нащупать
+  // монстра в тумане. DM видит весь стол.
+  if (!can_control_all && !IsVisibleTo(actor, target->cell)) {
+    return CommandOutcome{.reject_reason = "цель не видна"};
+  }
+  if (command.advantage && command.disadvantage) {
+    return CommandOutcome{.reject_reason =
+                              "нельзя одновременно преимущество и помеху"};
+  }
+  DiceExpression damage;
+  if (attacker->damage.size() > kMaxDamageExpression ||
+      (!attacker->damage.empty() &&
+       !ParseDiceExpression(attacker->damage, damage))) {
+    return CommandOutcome{.reject_reason = "некорректное выражение урона"};
+  }
+
+  const DiceExpression attack{
+      .count = 1,
+      .sides = 20,
+      .modifier = attacker->attack_bonus,
+      .advantage = command.advantage,
+      .disadvantage = command.disadvantage,
+  };
+  const DiceRollResult roll = RollDiceExpression(attack, rng_);
+  const AttackCheck check =
+      CheckAttack(roll.chosen, attacker->attack_bonus, target->ac);
+
+  std::ostringstream text;
+  text << "Атака: " << attacker->name << " по " << target->name;
+  if (command.advantage) {
+    text << " с преимуществом";
+  } else if (command.disadvantage) {
+    text << " с помехой";
+  }
+  text << ": d20" << (attacker->attack_bonus >= 0 ? " + " : " - ")
+       << std::abs(attacker->attack_bonus) << " = " << roll.breakdown;
+  if (roll.breakdown != std::to_string(roll.total)) {
+    text << " = " << roll.total;
+  }
+  text << " против КД " << target->ac;
+
   CommandOutcome outcome;
   outcome.accepted = true;
-  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  int applied_damage = 0;
+  const TokenId target_id = target->id;
+  if (!check.hit) {
+    text << " — промах";
+  } else if (attacker->damage.empty()) {
+    text << " — попадание, урон не задан";
+  } else {
+    const DiceRollResult damage_roll =
+        RollAttackDamage(damage, check.critical, rng_);
+    text << (check.critical ? " — критическое попадание, урон "
+                            : " — попадание, урон ")
+         << damage_roll.breakdown;
+    if (damage_roll.breakdown != std::to_string(damage_roll.total)) {
+      text << " = " << damage_roll.total;
+    }
+    applied_damage = std::max(0, damage_roll.total);
+  }
+
   outcome.events.emplace_back(LogLineAdded{
       .line = LogLine{.author = AuthorName(actor),
                       .text = text.str(),
                       .timestamp = CurrentTimeSeconds()},
   });
-  if (concentrating) {
-    // Проверка концентрации: d20 + бонус спасброска против 10 или половины
-    // полученного урона. Провал снимает состояние «концентрация».
-    const int dc = std::max(10, command.amount / 2);
-    std::uniform_int_distribution<int> d20(1, 20);
-    const int roll = d20(rng_) + save_bonus;
-    std::ostringstream check;
-    check << name << ": проверка концентрации " << roll << " против " << dc;
-    if (roll < dc) {
-      check << " — сорвана";
-      if (std::optional<Token> without =
-              state_.RemoveTokenCondition(command.id, kConcentration)) {
-        outcome.events.emplace_back(TokenUpdated{.token = std::move(*without)});
-      }
-    } else {
-      check << " — удержана";
-    }
-    outcome.events.emplace_back(LogLineAdded{
-        .line = LogLine{.author = AuthorName(actor),
-                        .text = check.str(),
-                        .timestamp = CurrentTimeSeconds()},
-    });
+  if (applied_damage > 0) {
+    DamageAndLog(target_id, applied_damage, actor, outcome.events);
   }
   return outcome;
 }

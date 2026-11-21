@@ -134,9 +134,10 @@ class App {
   auto SaveSheet() -> void;
   auto HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleSheetTextInput(const char* text) -> void;
-  auto RollAttack(bool advantage) -> void;
   auto RollSave() -> void;
   auto RollInitiative() -> void;
+  // Атака выбранным токеном по цели под курсором; сервер применяет урон.
+  auto AttackTarget(bool advantage, bool disadvantage) -> void;
   [[nodiscard]] auto CanEditToken(const Token& token) const -> bool;
   auto OpenBestiary() -> void;
   auto HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void;

@@ -32,14 +32,14 @@ inline constexpr std::string_view kDmCommandHint =
     "/portrait | /reveal | /xp | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
-    "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
-    "B бестиарий | F шаблон | K состояния | L лист | M дальность | "
-    "Alt+ЛКМ линейка | Tab сцены | P персонаж, N монстр, Del дважды удалить, "
-    "+/- HP, [ ] иниц., T бой, G ход, Ctrl+Z отмена";
+    "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака цели под курсором | "
+    "S спасбросок | B бестиарий | F шаблон | K состояния | L лист | "
+    "M дальность | Alt+ЛКМ линейка | Tab сцены | P персонаж, N монстр, "
+    "Del дважды удалить, +/- HP, [ ] иниц., T бой, G ход, Ctrl+Z отмена";
 inline constexpr std::string_view kChatHintPlayer =
-    "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака | S спасбросок | "
-    "C забрать | R освободить | K состояния | L лист | M дальность | "
-    "Alt+ЛКМ линейка | V цвет";
+    "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака цели под курсором | "
+    "S спасбросок | C забрать | R освободить | K состояния | L лист | "
+    "M дальность | Alt+ЛКМ линейка | V цвет";
 inline constexpr std::string_view kAoeHint =
     "F — выйти | ЛКМ/курсор — место | ←/→ поворот | ↑/↓ размер | "
     "1–3 вид | , . ширина | Esc убрать";
@@ -48,6 +48,11 @@ inline constexpr std::string_view kAoeDmOnly =
 inline constexpr std::string_view kRejected = "Отклонено: ";
 inline constexpr std::string_view kCellNotExplored = "Клетка не разведана";
 inline constexpr std::string_view kSelectToken = "Сначала выберите токен";
+inline constexpr std::string_view kAttackNoTarget =
+    "Наведите курсор на цель атаки";
+inline constexpr std::string_view kAttackSelf = "Нельзя атаковать самого себя";
+inline constexpr std::string_view kAttackModes =
+    "Нельзя одновременно преимущество и помеху";
 inline constexpr std::string_view kSelectTokenForCommand =
     "Сначала выберите токен для команды";
 inline constexpr std::string_view kConnectionLost =
@@ -73,7 +78,7 @@ inline constexpr std::array<std::string_view, 15> kHelpCommon = {
     "Alt+ЛКМ — линейка расстояний",
     "PgUp / PgDn — лог, End — к новым",
     "Колесо над логом — прокрутка лога",
-    "A / Shift+A — атака / с преимуществом",
+    "A — атака цели под курсором, Shift+A — преимущество, Ctrl+A — помеха",
     "S — спасбросок, I — инициатива",
     "K — состояния, L — лист",
     "M — дальность хода (5–10–5), V — цвет",

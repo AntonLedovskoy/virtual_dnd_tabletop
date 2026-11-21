@@ -57,6 +57,7 @@ constexpr std::uint8_t kCommandSetTokenPortrait = 28;
 constexpr std::uint8_t kCommandRevealArea = 29;
 constexpr std::uint8_t kCommandClearRevealed = 30;
 constexpr std::uint8_t kCommandAwardXp = 31;
+constexpr std::uint8_t kCommandAttackToken = 32;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -388,6 +389,20 @@ auto DecodeDeathSaveCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{DeathSave{.id = id}};
+}
+
+auto DecodeAttackCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t attacker = 0;
+  std::uint32_t target = 0;
+  std::uint8_t flags = 0;
+  if (!reader.U32(attacker) || !reader.U32(target) || !reader.U8(flags) ||
+      (flags & ~0x3U) != 0 || (flags & 0x3U) == 0x3U || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{AttackToken{.attacker = attacker,
+                             .target = target,
+                             .advantage = (flags & 0x1U) != 0,
+                             .disadvantage = (flags & 0x2U) != 0}};
 }
 
 auto DecodePingCommand(ByteReader& reader) -> std::optional<Command> {
@@ -1118,6 +1133,18 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, DeathSave>) {
           writer.U8(kCommandDeathSave);
           writer.U32(cmd.id);
+        } else if constexpr (std::is_same_v<T, AttackToken>) {
+          writer.U8(kCommandAttackToken);
+          writer.U32(cmd.attacker);
+          writer.U32(cmd.target);
+          std::uint8_t flags = 0;
+          if (cmd.advantage) {
+            flags |= 0x1U;
+          }
+          if (cmd.disadvantage) {
+            flags |= 0x2U;
+          }
+          writer.U8(flags);
         } else if constexpr (std::is_same_v<T, PingAt>) {
           writer.U8(kCommandPing);
           writer.I32(cmd.cell.x);
@@ -1205,6 +1232,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeAoeDamageCommand(reader);
     case kCommandDeathSave:
       return DecodeDeathSaveCommand(reader);
+    case kCommandAttackToken:
+      return DecodeAttackCommand(reader);
     case kCommandPing:
       return DecodePingCommand(reader);
     case kCommandSetMapBackground:

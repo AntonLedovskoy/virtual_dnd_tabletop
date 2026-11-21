@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "core/aoe.h"
+#include "core/attack.h"
 #include "core/autosave.h"
 #include "core/bestiary.h"
 #include "core/camera.h"
@@ -670,6 +671,135 @@ auto TestConcentration() -> void {
       "damage with concentration is accepted");
   Expect(TokenOf(server.State(), 2).conditions.empty(),
          "a failed concentration save removes the condition");
+}
+
+auto TestAttack() -> void {
+  const dnd::AttackCheck critical = dnd::CheckAttack(20, -100, 1000);
+  Expect(critical.hit && critical.critical,
+         "natural 20 hits and crits even against a huge AC");
+  const dnd::AttackCheck fumble = dnd::CheckAttack(1, 100, 1);
+  Expect(!fumble.hit && !fumble.critical, "natural 1 always misses");
+  Expect(dnd::CheckAttack(10, 5, 15).hit, "a total equal to AC hits");
+  Expect(!dnd::CheckAttack(9, 5, 15).hit, "a total below AC misses");
+
+  const dnd::DiceExpression damage{.count = 2, .sides = 6, .modifier = 3};
+  std::mt19937 rng(std::random_device{}());
+  for (int i = 0; i < 50; ++i) {
+    const dnd::DiceRollResult normal =
+        dnd::RollAttackDamage(damage, false, rng);
+    Expect(normal.total >= 5 && normal.total <= 15,
+           "normal damage adds the modifier once");
+    const dnd::DiceRollResult crit = dnd::RollAttackDamage(damage, true, rng);
+    Expect(crit.total >= 7 && crit.total <= 27 && crit.rolls.size() == 4,
+           "a crit doubles the dice and adds the modifier once");
+  }
+
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 30,
+                         .max_hp = 30,
+                         .ac = 10,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .hp = 100000,
+                         .max_hp = 100000,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(1, 2)},
+              dnd::Token{.id = 3,
+                         .name = "hidden",
+                         .owner = "dm",
+                         .hp = 10,
+                         .max_hp = 10,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(6, 6)},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameServer server(snapshot, 1, 23);
+
+  Expect(!server
+              .HandleCommand(dnd::AttackToken{.attacker = 1, .target = 1},
+                             "alice", false)
+              .accepted,
+         "a token cannot attack itself");
+  Expect(!server
+              .HandleCommand(dnd::AttackToken{.attacker = 1, .target = 2},
+                             "bob", false)
+              .accepted,
+         "a stranger does not control the attacker");
+  Expect(!server
+              .HandleCommand(dnd::AttackToken{.attacker = 1, .target = 3},
+                             "alice", false)
+              .accepted,
+         "a target outside the player's sight is rejected");
+  Expect(!server
+              .HandleCommand(dnd::AttackToken{.attacker = 1,
+                                              .target = 2,
+                                              .advantage = true,
+                                              .disadvantage = true},
+                             "alice", false)
+              .accepted,
+         "advantage and disadvantage together are rejected");
+
+  // Проверяем не конкретный бросок, а правило: HP падает ровно тогда, когда
+  // в логе записано попадание. 200 атак делают хотя бы одно попадание
+  // практически неизбежным (бонус 100 против КД 10).
+  const auto run_attack = [&server](bool advantage, bool disadvantage,
+                                    std::string_view mode_word) -> bool {
+    const int hp_before = TokenOf(server.State(), 2).hp;
+    const dnd::CommandOutcome outcome =
+        server.HandleCommand(dnd::AttackToken{.attacker = 1,
+                                              .target = 2,
+                                              .advantage = advantage,
+                                              .disadvantage = disadvantage},
+                             "alice", false);
+    if (!outcome.accepted) {
+      return false;
+    }
+    bool hit = false;
+    bool mode = mode_word.empty();
+    bool ac = false;
+    for (const dnd::Event& event : outcome.events) {
+      const auto* line = std::get_if<dnd::LogLineAdded>(&event);
+      if (line == nullptr) {
+        continue;
+      }
+      const std::string& text = line->line.text;
+      hit = hit || text.find("попадание") != std::string::npos;
+      mode = mode || text.find(mode_word) != std::string::npos;
+      ac = ac || text.find("против КД 10") != std::string::npos;
+    }
+    const bool damaged = TokenOf(server.State(), 2).hp < hp_before;
+    return mode && ac && hit == damaged;
+  };
+
+  Expect(run_attack(false, false, ""),
+         "a plain attack applies damage on a hit");
+  Expect(run_attack(true, false, "с преимуществом"),
+         "an advantaged attack is logged and resolved");
+  Expect(run_attack(false, true, "с помехой"),
+         "a disadvantaged attack is logged and resolved");
+  bool saw_hit = false;
+  for (int i = 0; i < 200; ++i) {
+    const int hp_before = TokenOf(server.State(), 2).hp;
+    Expect(run_attack(false, false, ""),
+           "every attack applies damage only on a hit");
+    saw_hit = saw_hit || TokenOf(server.State(), 2).hp < hp_before;
+  }
+  Expect(saw_hit, "a long series of attacks lands at least once");
 }
 
 auto TestAoeDamage() -> void {
@@ -3083,6 +3213,24 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::AwardXp>(*award_decoded).party,
          "xp command survives serialization");
 
+  const dnd::Command attack_command{
+      dnd::AttackToken{.attacker = 4, .target = 7, .advantage = true}};
+  const std::vector<std::uint8_t> attack_bytes =
+      dnd::EncodeCommand(attack_command);
+  const std::optional<dnd::Command> attack_decoded =
+      dnd::DecodeCommand(attack_bytes.data(), attack_bytes.size());
+  Expect(attack_decoded.has_value() &&
+             std::holds_alternative<dnd::AttackToken>(*attack_decoded) &&
+             std::get<dnd::AttackToken>(*attack_decoded).attacker == 4 &&
+             std::get<dnd::AttackToken>(*attack_decoded).target == 7 &&
+             std::get<dnd::AttackToken>(*attack_decoded).advantage &&
+             !std::get<dnd::AttackToken>(*attack_decoded).disadvantage,
+         "attack command survives serialization");
+
+  const std::vector<std::uint8_t> both_modes{32, 1, 0, 0, 0, 2, 0, 0, 0, 3};
+  Expect(!dnd::DecodeCommand(both_modes.data(), both_modes.size()).has_value(),
+         "advantage and disadvantage together are rejected by the decoder");
+
   const dnd::Event revealed_event{
       dnd::RevealedUpdated{.cells = {CellAt(1, 1), CellAt(2, 2)}}};
   const std::vector<std::uint8_t> revealed_bytes =
@@ -4026,6 +4174,7 @@ auto main() -> int {
     TestClaimAndTokenAdmin();
     TestDamageHealRest();
     TestConcentration();
+    TestAttack();
     TestAoeDamage();
     TestDeathSaves();
     TestConditionDurationAndInitiative();

@@ -129,6 +129,17 @@ struct UpdateTokenSheet {
   int con_modifier = 0;
 };
 
+// Атака одним токеном другого: сервер бросает d20 + бонус атаки против КД
+// цели и при попадании применяет урон из листа. 20 на d20 — критическое
+// попадание с удвоенными костями, 1 — промах. advantage/disadvantage
+// соответствуют броскам с преимуществом и помехой.
+struct AttackToken {
+  TokenId attacker = 0;
+  TokenId target = 0;
+  bool advantage = false;
+  bool disadvantage = false;
+};
+
 // Владелец или DM: нанести урон. Временные HP принимают удар первыми, при
 // нуле HP сервер ставит состояние «без сознания».
 struct DamageToken {
@@ -209,8 +220,8 @@ using Command = std::variant<
     MoveToken, Say, RollDice, RollExpression, AddToken, RemoveToken, SetTokenHp,
     SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner, RenameToken,
     SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
-    StartEncounter, EndEncounter, NextTurn, SetAoe, DamageToken, HealToken,
-    RestParty, AoeDamage, DeathSave, PingAt, SetMapBackground, SetTokenPortrait,
-    RevealArea, ClearRevealed, AwardXp>;
+    StartEncounter, EndEncounter, NextTurn, SetAoe, AttackToken, DamageToken,
+    HealToken, RestParty, AoeDamage, DeathSave, PingAt, SetMapBackground,
+    SetTokenPortrait, RevealArea, ClearRevealed, AwardXp>;
 
 }  // namespace dnd

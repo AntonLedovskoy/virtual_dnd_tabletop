@@ -1386,7 +1386,8 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
       ReleaseSelectedToken();
       break;
     case SDLK_A:
-      RollAttack((key.mod & SDL_KMOD_SHIFT) != 0);
+      AttackTarget((key.mod & SDL_KMOD_SHIFT) != 0,
+                   (key.mod & SDL_KMOD_CTRL) != 0);
       break;
     case SDLK_S:
       RollSave();
@@ -1847,25 +1848,30 @@ auto App::SaveSheet() -> void {
   CloseSheet();
 }
 
-auto App::RollAttack(bool advantage) -> void {
-  const Token* token = FindSelectedToken();
-  if (token == nullptr) {
+auto App::AttackTarget(bool advantage, bool disadvantage) -> void {
+  const Token* attacker = FindSelectedToken();
+  if (attacker == nullptr) {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
-  std::string expression = "d20" + FormatBonus(token->attack_bonus);
-  if (advantage) {
-    expression = "adv " + expression;
+  if (advantage && disadvantage) {
+    view_.AddLocalLine(std::string(strings::kAttackModes));
+    return;
   }
-  SendCommand(RollExpression{
-      .expression = expression,
-      .label =
-          RollLabel(advantage ? "Атака с преимуществом" : "Атака", token->name),
-  });
-  if (!token->damage.empty()) {
-    SendCommand(RollExpression{.expression = token->damage,
-                               .label = RollLabel("Урон", token->name)});
+  const Cell cell = CellFromPixel(mouse_x_, mouse_y_);
+  const TokenId target_id = TokenAt(cell);
+  if (target_id == 0) {
+    view_.AddLocalLine(std::string(strings::kAttackNoTarget));
+    return;
   }
+  if (target_id == attacker->id) {
+    view_.AddLocalLine(std::string(strings::kAttackSelf));
+    return;
+  }
+  SendCommand(AttackToken{.attacker = attacker->id,
+                          .target = target_id,
+                          .advantage = advantage,
+                          .disadvantage = disadvantage});
 }
 
 auto App::RollSave() -> void {

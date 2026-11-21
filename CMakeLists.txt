@@ -84,6 +84,7 @@ FetchContent_MakeAvailable(SDL3 SDL3_image SDL3_ttf)
 
 add_library(dnd_core STATIC
   src/core/aoe.cpp
+  src/core/attack.cpp
   src/core/autosave.cpp
   src/core/bestiary.cpp
   src/core/byte_io.cpp
