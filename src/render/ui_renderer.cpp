@@ -117,7 +117,8 @@ auto RenderSize(SDL_Renderer* renderer, int& width, int& height) -> bool {
 
 auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                   const std::vector<LogLine>& lines, bool typing,
-                  const std::string& input, bool is_dm, int scroll) -> float {
+                  const std::string& input, std::string_view hint, int scroll)
+    -> float {
   int window_width = 0;
   int window_height = 0;
   if (!RenderSize(renderer, window_width, window_height)) {
@@ -131,14 +132,18 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
       static_cast<float>(window_width - (2 * kPadding)) - 160.0F;
   const int line_height =
       text != nullptr ? static_cast<int>(text->LineHeight()) : 16;
-  const std::string hint_text =
-      std::string(is_dm ? strings::kChatHintDm : strings::kChatHintPlayer);
+  // При вводе на месте подсказки стоит строка чата: место под неё всё равно
+  // нужно, поэтому по умолчанию считаем одну строку.
   int hint_line_count = 1;
   if (!typing && text != nullptr) {
-    const float hint_height = text->Measure(hint_text, max_text_width).height;
-    const float row_height = std::max(1.0F, text->LineHeight() + kLineSpacing);
-    hint_line_count =
-        std::max(1, static_cast<int>(std::ceil(hint_height / row_height)));
+    hint_line_count = 0;
+    if (!hint.empty()) {
+      const float hint_height = text->Measure(hint, max_text_width).height;
+      const float row_height =
+          std::max(1.0F, text->LineHeight() + kLineSpacing);
+      hint_line_count =
+          std::max(1, static_cast<int>(std::ceil(hint_height / row_height)));
+    }
   }
   const int content_height = (kLogVisibleLines * (line_height + kLineSpacing)) +
                              (hint_line_count * (line_height + kLineSpacing));
@@ -203,9 +208,9 @@ auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                                    std::string(strings::kLogScrolledSuffix);
       text->Draw(scrolled, static_cast<float>(kPadding), input_y, kHintText,
                  max_text_width);
-    } else {
-      text->DrawWrapped(hint_text, static_cast<float>(kPadding), input_y,
-                        kHintText, max_text_width);
+    } else if (!hint.empty()) {
+      text->DrawWrapped(hint, static_cast<float>(kPadding), input_y, kHintText,
+                        max_text_width);
     }
   }
   return panel_top;

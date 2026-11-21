@@ -216,6 +216,8 @@ class App {
   [[nodiscard]] auto CellFromPixel(float x, float y) const -> Cell;
   [[nodiscard]] auto TokenAt(Cell cell) const -> TokenId;
   [[nodiscard]] auto FindSelectedToken() const -> const Token*;
+  // Текст нижней подсказки: набор клавиш зависит от режима, выделения и роли.
+  [[nodiscard]] auto BottomHintText() const -> std::string;
 
   AppOptions options_;
 

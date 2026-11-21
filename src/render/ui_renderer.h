@@ -25,11 +25,13 @@ inline constexpr int kLogVisibleLines = 7;
 auto RenderSize(SDL_Renderer* renderer, int& width, int& height) -> bool;
 
 // Нижняя панель с общим логом стола и строкой ввода чата. scroll — на
-// сколько строк прокручено вверх от самых свежих. Возвращает верхнюю границу
-// панели или 0, если она не нарисована.
+// сколько строк прокручено вверх от самых свежих. hint — готовая контекстная
+// подсказка под строкой ввода (какие клавиши показать, решает App).
+// Возвращает верхнюю границу панели или 0, если она не нарисована.
 auto DrawLogPanel(SDL_Renderer* renderer, TextRenderer* text,
                   const std::vector<LogLine>& lines, bool typing,
-                  const std::string& input, bool is_dm, int scroll) -> float;
+                  const std::string& input, std::string_view hint, int scroll)
+    -> float;
 
 // Порядок инициативы справа сверху для видимых клиенту токенов.
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,

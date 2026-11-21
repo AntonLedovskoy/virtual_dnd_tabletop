@@ -44,6 +44,7 @@
 #include "core/session_crypto.h"
 #include "core/session_log.h"
 #include "core/sha256.h"
+#include "core/ui_hint.h"
 #include "core/utf8.h"
 #include "core/visibility.h"
 #include "core/x25519.h"
@@ -4155,6 +4156,106 @@ auto TestMenuModel() -> void {
       "an empty host with a port is reported as such");
 }
 
+auto TestBottomHints() -> void {
+  const auto has = [](const std::vector<dnd::Hint>& hints,
+                      dnd::Hint hint) -> bool {
+    return std::ranges::find(hints, hint) != hints.end();
+  };
+
+  // Игрок без выделения: общие клавиши и приглашение выбрать токен, без
+  // клавиш токена и без добавок DM.
+  dnd::HintContext player;
+  const std::vector<dnd::Hint> player_hints = dnd::BottomHints(player);
+  Expect(!player_hints.empty() && player_hints[0] == dnd::Hint::kChat,
+         "the bottom hint starts with chat");
+  Expect(has(player_hints, dnd::Hint::kSelect),
+         "no selection asks to pick a token");
+  Expect(!has(player_hints, dnd::Hint::kAttack) &&
+             !has(player_hints, dnd::Hint::kSheet),
+         "no selection hides token keys");
+  Expect(!has(player_hints, dnd::Hint::kDmSpawn) &&
+             !has(player_hints, dnd::Hint::kScenes),
+         "a player gets no DM hints");
+
+  // Свой персонаж: клавиши токена и освобождение.
+  dnd::HintContext own;
+  own.has_selection = true;
+  own.can_edit = true;
+  own.can_release = true;
+  const std::vector<dnd::Hint> own_hints = dnd::BottomHints(own);
+  Expect(!has(own_hints, dnd::Hint::kSelect),
+         "a selection hides the pick hint");
+  Expect(has(own_hints, dnd::Hint::kAttack) &&
+             has(own_hints, dnd::Hint::kSave) &&
+             has(own_hints, dnd::Hint::kSheet) &&
+             has(own_hints, dnd::Hint::kConditions),
+         "a selection shows token keys");
+  Expect(
+      has(own_hints, dnd::Hint::kRelease) && !has(own_hints, dnd::Hint::kClaim),
+      "an owned character offers release, not claim");
+
+  // Чужой персонаж: смотреть можно, редактировать нельзя.
+  dnd::HintContext foreign;
+  foreign.has_selection = true;
+  const std::vector<dnd::Hint> foreign_hints = dnd::BottomHints(foreign);
+  Expect(has(foreign_hints, dnd::Hint::kAttack) &&
+             has(foreign_hints, dnd::Hint::kMoveRange),
+         "a foreign token still shows attack and reach");
+  Expect(!has(foreign_hints, dnd::Hint::kSheet) &&
+             !has(foreign_hints, dnd::Hint::kConditions),
+         "a foreign token hides editing keys");
+
+  // Свободный персонаж игроку без своего: забрать.
+  dnd::HintContext claimable;
+  claimable.has_selection = true;
+  claimable.can_claim = true;
+  const std::vector<dnd::Hint> claimable_hints = dnd::BottomHints(claimable);
+  Expect(has(claimable_hints, dnd::Hint::kClaim) &&
+             !has(claimable_hints, dnd::Hint::kRelease),
+         "a free character offers claim");
+
+  // DM: добавки роли, а ход — только в бою.
+  dnd::HintContext dm;
+  dm.is_dm = true;
+  dm.has_selection = true;
+  dm.can_edit = true;
+  std::vector<dnd::Hint> dm_hints = dnd::BottomHints(dm);
+  Expect(has(dm_hints, dnd::Hint::kDmSpawn) &&
+             has(dm_hints, dnd::Hint::kBestiary) &&
+             has(dm_hints, dnd::Hint::kScenes) &&
+             has(dm_hints, dnd::Hint::kDmUndo),
+         "the DM gets spawn, bestiary, scenes and undo");
+  Expect(!has(dm_hints, dnd::Hint::kDmTurn),
+         "out of combat the DM has no turn key");
+  dm.in_combat = true;
+  dm_hints = dnd::BottomHints(dm);
+  Expect(has(dm_hints, dnd::Hint::kDmTurn), "in combat the DM advances turns");
+
+  // Прокрученный лог напоминает про End.
+  dnd::HintContext scrolled;
+  scrolled.log_scrolled = true;
+  Expect(has(dnd::BottomHints(scrolled), dnd::Hint::kLogNewest),
+         "a scrolled log hints at End");
+
+  // Открытый режим показывает только свои клавиши.
+  dnd::HintContext aoe;
+  aoe.mode = dnd::HintMode::kAoe;
+  aoe.is_dm = true;
+  const std::vector<dnd::Hint> aoe_hints = dnd::BottomHints(aoe);
+  Expect(aoe_hints.size() == 1 && aoe_hints[0] == dnd::Hint::kAoeKeys,
+         "the area template shows only its own keys");
+  dnd::HintContext sheet;
+  sheet.mode = dnd::HintMode::kSheet;
+  Expect(
+      dnd::BottomHints(sheet) == std::vector<dnd::Hint>{dnd::Hint::kSheetKeys},
+      "the sheet shows only its own keys");
+  dnd::HintContext scenes;
+  scenes.mode = dnd::HintMode::kScenes;
+  Expect(dnd::BottomHints(scenes) ==
+             std::vector<dnd::Hint>{dnd::Hint::kScenesKeys},
+         "the scene list shows only its own keys");
+}
+
 auto TestNavigation() -> void {
   Expect(dnd::WrapIndex(0, -1, 3) == 2, "wrapping left from the first item");
   Expect(dnd::WrapIndex(2, 1, 3) == 0, "wrapping right from the last item");
@@ -4282,6 +4383,7 @@ auto main() -> int {
     TestLogScroll();
     TestDeleteConfirm();
     TestMenuModel();
+    TestBottomHints();
     TestNavigation();
     TestChatInput();
   } catch (const std::exception& error) {

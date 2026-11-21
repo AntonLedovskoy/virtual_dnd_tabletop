@@ -28,6 +28,7 @@
 #include "core/navigation.h"
 #include "core/player_name.h"
 #include "core/scene_io.h"
+#include "core/ui_hint.h"
 #include "core/units.h"
 #include "core/utf8.h"
 #include "net/tcp_socket.h"
@@ -1699,6 +1700,43 @@ auto App::PlayerHasCharacter() const -> bool {
       });
 }
 
+auto App::BottomHintText() const -> std::string {
+  const bool is_client = options_.mode == AppMode::kClient;
+  const Token* selected = FindSelectedToken();
+  HintContext context;
+  context.is_dm = !is_client;
+  context.has_selection = selected != nullptr;
+  context.can_edit = selected != nullptr && CanEditToken(*selected);
+  context.can_claim = is_client && selected != nullptr &&
+                      selected->kind == TokenKind::kPlayer &&
+                      selected->owner.empty() && !PlayerHasCharacter();
+  context.can_release = is_client && selected != nullptr &&
+                        SamePlayerName(selected->owner, options_.player_name);
+  context.in_combat = view_.EncounterState().active;
+  context.log_scrolled = log_scroll_.Offset() > 0;
+  // Открытый режим важнее выделения: пока он включён, остальные клавиши
+  // молчат, поэтому и подсказка показывает только его.
+  if (aoe_mode_) {
+    context.mode = HintMode::kAoe;
+  } else if (sheet_active_) {
+    context.mode = HintMode::kSheet;
+  } else if (bestiary_active_) {
+    context.mode = HintMode::kBestiary;
+  } else if (scenes_active_) {
+    context.mode = HintMode::kScenes;
+  } else if (conditions_active_) {
+    context.mode = HintMode::kConditions;
+  }
+  std::string text;
+  for (const Hint hint : BottomHints(context)) {
+    if (!text.empty()) {
+      text += " | ";
+    }
+    text += strings::HintLabel(hint);
+  }
+  return text;
+}
+
 auto App::ClaimSelectedToken() -> void {
   const Token* token = FindSelectedToken();
   if (token == nullptr) {
@@ -3326,12 +3364,6 @@ auto App::Iterate() -> void {
         120.0F);
   }
   DrawInitiativePanel(renderer_, text_.get(), view_.Tokens(), encounter);
-  if (aoe_mode_) {
-    text_->Draw(
-        std::string(strings::kAoeHint), 16.0F, 16.0F,
-        SDL_Color{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = SDL_ALPHA_OPAQUE},
-        960.0F);
-  }
   const bool is_client = options_.mode == AppMode::kClient;
   const Token* selected = FindSelectedToken();
   const bool can_claim = is_client && selected != nullptr &&
@@ -3356,10 +3388,9 @@ auto App::Iterate() -> void {
     DrawCellHighlight(renderer_, *drag_target_, camera_.cell_size, camera_.x,
                       camera_.y);
   }
-  log_top_ =
-      DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_.Active(),
-                   std::string(chat_.Text()), options_.mode == AppMode::kHost,
-                   log_scroll_.Offset());
+  log_top_ = DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_.Active(),
+                          std::string(chat_.Text()), BottomHintText(),
+                          log_scroll_.Offset());
   if (sheet_active_) {
     const Token* sheet_token = nullptr;
     for (const Token& token : view_.Tokens()) {

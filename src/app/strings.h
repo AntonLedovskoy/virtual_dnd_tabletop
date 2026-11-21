@@ -3,6 +3,8 @@
 #include <array>
 #include <string_view>
 
+#include "core/ui_hint.h"
+
 namespace dnd::strings {
 
 // Строки интерфейса для игрока. Собраны в одном месте, чтобы будущая смена
@@ -31,15 +33,29 @@ inline constexpr std::string_view kDmCommandHint =
     "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /map | "
     "/portrait | /reveal | /unreveal | /xp | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
-inline constexpr std::string_view kChatHintDm =
-    "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака цели под курсором | "
-    "S спасбросок | B бестиарий | F шаблон | K состояния | L лист | "
-    "M дальность | Alt+ЛКМ линейка | Tab сцены | P персонаж, N монстр, "
-    "Del дважды удалить, +/- HP, [ ] иниц., T бой, G ход, Ctrl+Z отмена";
-inline constexpr std::string_view kChatHintPlayer =
-    "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака цели под курсором | "
-    "S спасбросок | C забрать | R освободить | K состояния | L лист | "
-    "M дальность | Alt+ЛКМ линейка | V цвет";
+// Нижняя подсказка собирается из этих кусков по контексту (core/ui_hint):
+// общие клавиши, клавиши выбранного токена и добавки роли.
+inline constexpr std::string_view kHintChat = "Enter — чат (/roll d20+5)";
+inline constexpr std::string_view kHintHelp = "F1 — справка";
+inline constexpr std::string_view kHintLog = "PgUp/PgDn — лог";
+inline constexpr std::string_view kHintLogNewest = "End — к новым";
+inline constexpr std::string_view kHintSelect = "ЛКМ — выбрать токен";
+inline constexpr std::string_view kHintAttack = "A — атака цели под курсором";
+inline constexpr std::string_view kHintSave = "S — спасбросок";
+inline constexpr std::string_view kHintInitiative = "I — бросок инициативы";
+inline constexpr std::string_view kHintSheet = "L — лист";
+inline constexpr std::string_view kHintConditions = "K — состояния";
+inline constexpr std::string_view kHintMoveRange = "M — дальность";
+inline constexpr std::string_view kHintRuler = "Alt+ЛКМ — линейка";
+inline constexpr std::string_view kHintAoe = "F — шаблон области";
+inline constexpr std::string_view kHintBestiary = "B — бестиарий";
+inline constexpr std::string_view kHintScenes = "Tab — сцены";
+inline constexpr std::string_view kHintSpawn = "P — персонаж, N — монстр";
+inline constexpr std::string_view kHintAdjust = "+/- — HP, [ ] — инициатива";
+inline constexpr std::string_view kHintDelete = "Del дважды — удалить";
+inline constexpr std::string_view kHintCombat = "T — бой";
+inline constexpr std::string_view kHintTurn = "G — следующий ход";
+inline constexpr std::string_view kHintUndo = "Ctrl+Z — отмена";
 inline constexpr std::string_view kAoeHint =
     "F — выйти | ЛКМ/курсор — место | ←/→ поворот | ↑/↓ размер | "
     "1–3 вид | , . ширина | Esc убрать";
@@ -247,5 +263,71 @@ inline constexpr std::string_view kRevealDmOnly =
 inline constexpr std::string_view kXpUsage =
     "Использование: /xp 300 или /xp 300 all";
 inline constexpr std::string_view kXpDmOnly = "Опыт начисляет только DM";
+
+// Текст одного действия нижней подсказки. Какие действия показывать и в каком
+// порядке, решает core/ui_hint, поэтому строки остаются здесь.
+[[nodiscard]] constexpr auto HintLabel(Hint hint) -> std::string_view {
+  switch (hint) {
+    case Hint::kChat:
+      return kHintChat;
+    case Hint::kHelp:
+      return kHintHelp;
+    case Hint::kLog:
+      return kHintLog;
+    case Hint::kLogNewest:
+      return kHintLogNewest;
+    case Hint::kSelect:
+      return kHintSelect;
+    case Hint::kClaim:
+      return kClaimHint;
+    case Hint::kRelease:
+      return kReleaseHint;
+    case Hint::kAttack:
+      return kHintAttack;
+    case Hint::kSave:
+      return kHintSave;
+    case Hint::kInitiative:
+      return kHintInitiative;
+    case Hint::kSheet:
+      return kHintSheet;
+    case Hint::kConditions:
+      return kHintConditions;
+    case Hint::kColor:
+      return kColorHint;
+    case Hint::kMoveRange:
+      return kHintMoveRange;
+    case Hint::kRuler:
+      return kHintRuler;
+    case Hint::kAoe:
+      return kHintAoe;
+    case Hint::kBestiary:
+      return kHintBestiary;
+    case Hint::kScenes:
+      return kHintScenes;
+    case Hint::kDmSpawn:
+      return kHintSpawn;
+    case Hint::kDmAdjust:
+      return kHintAdjust;
+    case Hint::kDmDelete:
+      return kHintDelete;
+    case Hint::kDmCombat:
+      return kHintCombat;
+    case Hint::kDmTurn:
+      return kHintTurn;
+    case Hint::kDmUndo:
+      return kHintUndo;
+    case Hint::kAoeKeys:
+      return kAoeHint;
+    case Hint::kSheetKeys:
+      return kSheetHint;
+    case Hint::kBestiaryKeys:
+      return kBestiaryHint;
+    case Hint::kScenesKeys:
+      return kScenesHint;
+    case Hint::kConditionsKeys:
+      return kConditionsHint;
+  }
+  return {};
+}
 
 }  // namespace dnd::strings
