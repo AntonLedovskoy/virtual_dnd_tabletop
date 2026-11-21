@@ -14,7 +14,7 @@ namespace dnd {
 class TextRenderer;
 struct Token;
 
-// Сетка, стены, токены и туман. offset_x/offset_y — позиция камеры в пикселях
+// Сетка, рельеф, токены и туман. offset_x/offset_y — позиция камеры в пикселях
 // окна; cell_size уже учитывает зум.
 // Подложка карты рисуется между фоном и сеткой: картинка из файла рядом
 // с .exe, вписанная в карту и растянутая на scale процентов.
@@ -24,8 +24,9 @@ auto DrawMapBackground(SDL_Renderer* renderer, SDL_Texture* texture,
                        float cell_size, float offset_x, float offset_y) -> void;
 auto DrawGrid(SDL_Renderer* renderer, const GridMap& map, float cell_size,
               float offset_x, float offset_y) -> void;
-auto DrawWalls(SDL_Renderer* renderer, const GridMap& map, float cell_size,
-               float offset_x, float offset_y) -> void;
+// Стены, деревья, вода, пропасти и лава.
+auto DrawTerrain(SDL_Renderer* renderer, const GridMap& map, float cell_size,
+                 float offset_x, float offset_y) -> void;
 auto DrawCellHighlight(SDL_Renderer* renderer, Cell cell, float cell_size,
                        float offset_x, float offset_y) -> void;
 // Картинка токена, уже загруженная приложением; nullptr — цвет и имя.

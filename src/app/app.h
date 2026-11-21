@@ -89,6 +89,8 @@ class App {
   auto CenterCamera() -> void;
   auto ApplyEditorBrush(Cell cell) -> void;
   auto AddEditorToken(Cell cell, TokenKind kind) -> void;
+  // Бестиарий в редакторе: шаблон копируется в токен прямо в сцене.
+  auto SpawnEditorBestiary(int index, bool group) -> void;
   auto HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleEditorMouseDown(const SDL_MouseButtonEvent& button) -> void;
   auto HandleEditorMouseUp(const SDL_MouseButtonEvent& button) -> void;

@@ -2,12 +2,19 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 
 namespace dnd {
 namespace {
 
+// Дерево не перекрывает взгляд полностью, но крона сокращает его: за
+// клеткой дерева видно ещё две клетки (5e 2024: труднопроходимая
+// растительность, сильное затемнение остаётся на усмотрение DM).
+constexpr int kTreeSightReach = 2;
+
 // Линия видимости по Брезенхему. Стены блокируют луч, но сама клетка стены
 // остаётся видимой, чтобы игрок видел границу освещённой комнаты.
+// Деревья сокращают обзор, вода, пропасть и лава взгляд не держат.
 // Диагональный шаг также проверяет двух ортогональных соседей: две стены,
 // соприкасающиеся углом, перекрывают проход и не должны пропускать обзор.
 auto LineOfSightClear(const GridMap& map, Cell from, Cell to) -> bool {
@@ -18,6 +25,8 @@ auto LineOfSightClear(const GridMap& map, Cell from, Cell to) -> bool {
   const int step_x = x < to.x ? 1 : -1;
   const int step_y = y < to.y ? 1 : -1;
   int error = delta_x + delta_y;
+  int steps = 0;
+  int sight_limit = std::numeric_limits<int>::max();
 
   while (x != to.x || y != to.y) {
     const int doubled = 2 * error;
@@ -31,11 +40,15 @@ auto LineOfSightClear(const GridMap& map, Cell from, Cell to) -> bool {
       error += delta_x;
       y += step_y;
     }
+    ++steps;
+    if (steps > sight_limit) {
+      return false;
+    }
 
     if (x != previous_x && y != previous_y) {
       const Cell horizontal{.x = x, .y = previous_y};
       const Cell vertical{.x = previous_x, .y = y};
-      if (map.IsBlocked(horizontal) && map.IsBlocked(vertical)) {
+      if (map.BlocksSight(horizontal) && map.BlocksSight(vertical)) {
         return false;
       }
     }
@@ -43,8 +56,12 @@ auto LineOfSightClear(const GridMap& map, Cell from, Cell to) -> bool {
     if (x == to.x && y == to.y) {
       break;
     }
-    if (map.IsBlocked(Cell{.x = x, .y = y})) {
+    const Cell cell{.x = x, .y = y};
+    if (map.BlocksSight(cell)) {
       return false;
+    }
+    if (map.TerrainAt(cell) == Terrain::kTree) {
+      sight_limit = std::min(sight_limit, steps + kTreeSightReach);
     }
   }
   return true;

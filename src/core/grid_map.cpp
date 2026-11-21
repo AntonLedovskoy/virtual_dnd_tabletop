@@ -36,6 +36,20 @@ auto BuildBlocked(const GridMap& map, std::span<const Cell> blocked)
   return extra;
 }
 
+auto BlocksMovement(Terrain terrain) -> bool {
+  switch (terrain) {
+    case Terrain::kFloor:
+    case Terrain::kTree:
+      return false;
+    case Terrain::kWall:
+    case Terrain::kWater:
+    case Terrain::kPit:
+    case Terrain::kLava:
+      return true;
+  }
+  return true;
+}
+
 struct QueueEntry {
   int cost = 0;
   Cell cell{};
@@ -107,9 +121,13 @@ auto RunPaths(const GridMap& map, Cell origin, int start_parity,
       }
       const int next_parity = diagonal ? 1 - current.parity : current.parity;
       // Опциональное правило 5–10–5: первая диагональ 5 футов, вторая 10.
+      // Клетка дерева — difficult terrain: вход стоит вдвое дороже.
       int step = 1;
       if (diagonal) {
         step = current.parity == 0 ? 1 : 2;
+      }
+      if (map.IsDifficultTerrain(next)) {
+        step *= 2;
       }
       const int next_cost = current.cost + step;
       if (max_cost >= 0 && next_cost > max_cost) {
@@ -132,21 +150,44 @@ auto RunPaths(const GridMap& map, Cell origin, int start_parity,
 GridMap::GridMap(int width, int height)
     : width_(width),
       height_(height),
-      blocked_(static_cast<std::size_t>(width * height), 0) {}
+      terrain_(static_cast<std::size_t>(width * height), 0) {}
 
 auto GridMap::Contains(Cell cell) const -> bool {
   return cell.x >= 0 && cell.y >= 0 && cell.x < width_ && cell.y < height_;
 }
 
-auto GridMap::IsBlocked(Cell cell) const -> bool {
-  return Contains(cell) && blocked_[Index(cell)] != 0;
+auto GridMap::TerrainAt(Cell cell) const -> Terrain {
+  if (!Contains(cell)) {
+    return Terrain::kFloor;
+  }
+  const auto value = terrain_[Index(cell)];
+  if (value > static_cast<std::uint8_t>(Terrain::kLava)) {
+    return Terrain::kFloor;
+  }
+  return static_cast<Terrain>(value);
 }
 
-auto GridMap::SetBlocked(Cell cell, bool blocked) -> void {
+auto GridMap::IsBlocked(Cell cell) const -> bool {
+  return Contains(cell) && BlocksMovement(TerrainAt(cell));
+}
+
+auto GridMap::BlocksSight(Cell cell) const -> bool {
+  return Contains(cell) && TerrainAt(cell) == Terrain::kWall;
+}
+
+auto GridMap::IsDifficultTerrain(Cell cell) const -> bool {
+  return Contains(cell) && TerrainAt(cell) == Terrain::kTree;
+}
+
+auto GridMap::SetTerrain(Cell cell, Terrain terrain) -> void {
   if (!Contains(cell)) {
     return;
   }
-  blocked_[Index(cell)] = blocked ? 1 : 0;
+  terrain_[Index(cell)] = static_cast<std::uint8_t>(terrain);
+}
+
+auto GridMap::SetBlocked(Cell cell, bool blocked) -> void {
+  SetTerrain(cell, blocked ? Terrain::kWall : Terrain::kFloor);
 }
 
 auto GridMap::Index(Cell cell) const -> std::size_t {

@@ -15,6 +15,18 @@ struct Cell {
   friend auto operator==(const Cell&, const Cell&) -> bool = default;
 };
 
+// Рельеф клетки. Стена перекрывает и движение, и обзор; дерево проходимо,
+// но стоит вдвое дороже и сокращает обзор; вода, пропасть и лава
+// непроходимы, но не мешают стрелять и смотреть сквозь них.
+enum class Terrain : std::uint8_t {
+  kFloor = 0,
+  kWall = 1,
+  kTree = 2,
+  kWater = 3,
+  kPit = 4,
+  kLava = 5,
+};
+
 class GridMap {
  public:
   GridMap(int width, int height);
@@ -22,8 +34,17 @@ class GridMap {
   [[nodiscard]] auto Width() const -> int { return width_; }
   [[nodiscard]] auto Height() const -> int { return height_; }
   [[nodiscard]] auto Contains(Cell cell) const -> bool;
+  [[nodiscard]] auto TerrainAt(Cell cell) const -> Terrain;
+  // Непроходимый рельеф: стена, вода, пропасть и лава.
   [[nodiscard]] auto IsBlocked(Cell cell) const -> bool;
+  // Перекрывает ли клетка линию обзора. Стена — да, остальной рельеф — нет;
+  // деревья сокращают обзор отдельным правилом в visibility.cpp.
+  [[nodiscard]] auto BlocksSight(Cell cell) const -> bool;
+  // Клетка стоит двойного движения (2024: difficult terrain).
+  [[nodiscard]] auto IsDifficultTerrain(Cell cell) const -> bool;
 
+  auto SetTerrain(Cell cell, Terrain terrain) -> void;
+  // Совместимость со старым API: true — стена, false — пол.
   auto SetBlocked(Cell cell, bool blocked) -> void;
 
  private:
@@ -31,7 +52,7 @@ class GridMap {
 
   int width_;
   int height_;
-  std::vector<std::uint8_t> blocked_;
+  std::vector<std::uint8_t> terrain_;
 };
 
 // Результат прокладки пути по опциональному правилу 5–10–5: первая

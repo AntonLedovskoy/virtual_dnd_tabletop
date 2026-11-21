@@ -14,9 +14,10 @@ class TextRenderer;
 enum class EditorBrush : std::uint8_t {
   kWall = 0,
   kFloor = 1,
-  kPlayer = 2,
-  kMonster = 3,
-  kErase = 4,
+  kTree = 2,
+  kWater = 3,
+  kPit = 4,
+  kLava = 5,
 };
 
 // Фиксированная панель слева сверху. Клики внутри неё зарезервированы для

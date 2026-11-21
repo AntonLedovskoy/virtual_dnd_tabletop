@@ -23,7 +23,7 @@ constexpr SDL_Color kHint{
 constexpr int kPanelX = 12;
 constexpr int kPanelY = 12;
 constexpr int kPanelWidth = 350;
-constexpr int kPanelHeight = 350;
+constexpr int kPanelHeight = 420;
 constexpr int kPadding = 12;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
@@ -36,12 +36,14 @@ auto BrushLabel(EditorBrush brush) -> std::string_view {
       return strings::kBrushWall;
     case EditorBrush::kFloor:
       return strings::kBrushFloor;
-    case EditorBrush::kPlayer:
-      return strings::kBrushPlayer;
-    case EditorBrush::kMonster:
-      return strings::kBrushMonster;
-    case EditorBrush::kErase:
-      return strings::kBrushErase;
+    case EditorBrush::kTree:
+      return strings::kBrushTree;
+    case EditorBrush::kWater:
+      return strings::kBrushWater;
+    case EditorBrush::kPit:
+      return strings::kBrushPit;
+    case EditorBrush::kLava:
+      return strings::kBrushLava;
   }
   return strings::kBrushWall;
 }

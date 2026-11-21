@@ -938,7 +938,8 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
   writer.U32(static_cast<std::uint32_t>(snapshot.map.Height()));
   for (int y = 0; y < snapshot.map.Height(); ++y) {
     for (int x = 0; x < snapshot.map.Width(); ++x) {
-      writer.U8(snapshot.map.IsBlocked(Cell{.x = x, .y = y}) ? 1 : 0);
+      writer.U8(static_cast<std::uint8_t>(
+          snapshot.map.TerrainAt(Cell{.x = x, .y = y})));
     }
   }
   writer.U32(static_cast<std::uint32_t>(snapshot.tokens.size()));
@@ -974,13 +975,14 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
   GridMap map(static_cast<int>(width), static_cast<int>(height));
   for (int y = 0; y < map.Height(); ++y) {
     for (int x = 0; x < map.Width(); ++x) {
-      std::uint8_t blocked = 0;
-      if (!reader.U8(blocked)) {
+      std::uint8_t terrain = 0;
+      if (!reader.U8(terrain)) {
         return std::nullopt;
       }
-      if (blocked != 0) {
-        map.SetBlocked(Cell{.x = x, .y = y}, true);
+      if (terrain > static_cast<std::uint8_t>(Terrain::kLava)) {
+        return std::nullopt;
       }
+      map.SetTerrain(Cell{.x = x, .y = y}, static_cast<Terrain>(terrain));
     }
   }
 

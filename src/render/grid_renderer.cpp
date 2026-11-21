@@ -23,6 +23,22 @@ constexpr SDL_Color kWallFill{
     .r = 0x52, .g = 0x52, .b = 0x5e, .a = SDL_ALPHA_OPAQUE};
 constexpr SDL_Color kWallEdge{
     .r = 0x6e, .g = 0x6e, .b = 0x7c, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kTreeCanopy{
+    .r = 0x2e, .g = 0x6b, .b = 0x3a, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kTreeTrunk{
+    .r = 0x5a, .g = 0x3c, .b = 0x22, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kWaterFill{
+    .r = 0x1f, .g = 0x4f, .b = 0x7a, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kWaterWave{
+    .r = 0x4f, .g = 0x92, .b = 0xc8, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kPitFill{
+    .r = 0x0a, .g = 0x0a, .b = 0x0e, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kPitEdge{
+    .r = 0x50, .g = 0x50, .b = 0x5e, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kLavaFill{
+    .r = 0xb8, .g = 0x38, .b = 0x14, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kLavaEdge{
+    .r = 0xff, .g = 0x9a, .b = 0x3c, .a = SDL_ALPHA_OPAQUE};
 constexpr SDL_Color kTurnOutline{
     .r = 0x6c, .g = 0xa8, .b = 0xff, .a = SDL_ALPHA_OPAQUE};
 constexpr SDL_Color kSelectedOutline{
@@ -236,27 +252,95 @@ auto DrawGrid(SDL_Renderer* renderer, const GridMap& map, float cell_size,
   }
 }
 
-auto DrawWalls(SDL_Renderer* renderer, const GridMap& map, float cell_size,
-               float offset_x, float offset_y) -> void {
+auto DrawTerrain(SDL_Renderer* renderer, const GridMap& map, float cell_size,
+                 float offset_x, float offset_y) -> void {
   for (int y = 0; y < map.Height(); ++y) {
     for (int x = 0; x < map.Width(); ++x) {
       const Cell cell{.x = x, .y = y};
-      if (!map.IsBlocked(cell)) {
-        continue;
-      }
+      const Terrain terrain = map.TerrainAt(cell);
       const SDL_FRect rect =
           CellRect(cell, cell_size, offset_x, offset_y, kWallInset);
-      SetDrawColor(renderer, kWallFill);
-      SDL_RenderFillRect(renderer, &rect);
-      const SDL_FRect inner{
-          .x = rect.x + kWallEdgeWidth,
-          .y = rect.y + kWallEdgeWidth,
-          .w = rect.w - (2.0F * kWallEdgeWidth),
-          .h = rect.h - (2.0F * kWallEdgeWidth),
-      };
-      SetDrawColor(renderer, kWallEdge);
-      if (inner.w > 0.0F && inner.h > 0.0F) {
-        SDL_RenderRect(renderer, &inner);
+      switch (terrain) {
+        case Terrain::kFloor:
+          break;
+        case Terrain::kWall: {
+          SetDrawColor(renderer, kWallFill);
+          SDL_RenderFillRect(renderer, &rect);
+          const SDL_FRect inner{
+              .x = rect.x + kWallEdgeWidth,
+              .y = rect.y + kWallEdgeWidth,
+              .w = rect.w - (2.0F * kWallEdgeWidth),
+              .h = rect.h - (2.0F * kWallEdgeWidth),
+          };
+          SetDrawColor(renderer, kWallEdge);
+          if (inner.w > 0.0F && inner.h > 0.0F) {
+            SDL_RenderRect(renderer, &inner);
+          }
+          break;
+        }
+        case Terrain::kTree: {
+          // Ствол у нижнего края и крона: клетка проходима, но закрывает
+          // обзор на две клетки за собой.
+          const SDL_FRect trunk{
+              .x = rect.x + (rect.w * 0.44F),
+              .y = rect.y + (rect.h * 0.58F),
+              .w = rect.w * 0.12F,
+              .h = rect.h * 0.36F,
+          };
+          SetDrawColor(renderer, kTreeTrunk);
+          SDL_RenderFillRect(renderer, &trunk);
+          const SDL_FPoint center{
+              .x = rect.x + (rect.w * 0.5F),
+              .y = rect.y + (rect.h * 0.42F),
+          };
+          DrawCircle(renderer, center, rect.w * 0.34F, kTreeCanopy);
+          break;
+        }
+        case Terrain::kWater: {
+          SetDrawColor(renderer, kWaterFill);
+          SDL_RenderFillRect(renderer, &rect);
+          SetDrawColor(renderer, kWaterWave);
+          for (int line = 1; line <= 2; ++line) {
+            const float y_line =
+                rect.y + (rect.h * (static_cast<float>(line) * 0.3F));
+            SDL_RenderLine(renderer, rect.x + (rect.w * 0.15F), y_line,
+                           rect.x + (rect.w * 0.85F), y_line);
+          }
+          break;
+        }
+        case Terrain::kPit: {
+          SetDrawColor(renderer, kPitFill);
+          SDL_RenderFillRect(renderer, &rect);
+          const SDL_FRect edge{
+              .x = rect.x + (rect.w * 0.12F),
+              .y = rect.y + (rect.h * 0.12F),
+              .w = rect.w * 0.76F,
+              .h = rect.h * 0.76F,
+          };
+          SetDrawColor(renderer, kPitEdge);
+          SDL_RenderRect(renderer, &edge);
+          break;
+        }
+        case Terrain::kLava: {
+          SetDrawColor(renderer, kLavaFill);
+          SDL_RenderFillRect(renderer, &rect);
+          SetDrawColor(renderer, kLavaEdge);
+          const SDL_FRect crack{
+              .x = rect.x + (rect.w * 0.28F),
+              .y = rect.y + (rect.h * 0.28F),
+              .w = rect.w * 0.2F,
+              .h = rect.h * 0.12F,
+          };
+          SDL_RenderFillRect(renderer, &crack);
+          const SDL_FRect crack2{
+              .x = rect.x + (rect.w * 0.58F),
+              .y = rect.y + (rect.h * 0.62F),
+              .w = rect.w * 0.18F,
+              .h = rect.h * 0.12F,
+          };
+          SDL_RenderFillRect(renderer, &crack2);
+          break;
+        }
       }
     }
   }

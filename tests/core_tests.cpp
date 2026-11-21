@@ -157,6 +157,38 @@ auto TestGridMap() -> void {
   const auto occupied_target =
       dnd::PathCostCells(open, CellAt(0, 0), CellAt(1, 0), 0, blocked);
   Expect(!occupied_target.has_value(), "an occupied target is unreachable");
+
+  dnd::GridMap terrain_map(4, 4);
+  terrain_map.SetTerrain(CellAt(1, 0), dnd::Terrain::kTree);
+  terrain_map.SetTerrain(CellAt(2, 0), dnd::Terrain::kWater);
+  terrain_map.SetTerrain(CellAt(0, 2), dnd::Terrain::kPit);
+  terrain_map.SetTerrain(CellAt(1, 2), dnd::Terrain::kLava);
+  Expect(terrain_map.TerrainAt(CellAt(1, 0)) == dnd::Terrain::kTree,
+         "terrain is stored per cell");
+  Expect(!terrain_map.IsBlocked(CellAt(1, 0)) &&
+             terrain_map.IsDifficultTerrain(CellAt(1, 0)),
+         "a tree is passable difficult terrain");
+  for (const dnd::Cell cell : {CellAt(2, 0), CellAt(0, 2), CellAt(1, 2)}) {
+    Expect(terrain_map.IsBlocked(cell), "water, pits and lava block movement");
+    Expect(!terrain_map.BlocksSight(cell),
+           "water, pits and lava do not block sight");
+  }
+  Expect(!terrain_map.BlocksSight(CellAt(1, 0)),
+         "a tree does not block sight completely");
+  const auto tree_path =
+      dnd::PathCostCells(terrain_map, CellAt(0, 0), CellAt(1, 0));
+  Expect(tree_path.has_value() && tree_path->cost == 2,
+         "entering a tree costs double movement");
+  Expect(
+      !dnd::PathCostCells(terrain_map, CellAt(0, 0), CellAt(2, 0)).has_value(),
+      "the water cell itself is unreachable");
+
+  dnd::GridMap pit_map(3, 1);
+  pit_map.SetTerrain(CellAt(1, 0), dnd::Terrain::kPit);
+  const auto pit_reach = dnd::ReachableCells(pit_map, CellAt(0, 0), 4);
+  Expect(!HasCell(pit_reach, CellAt(1, 0)), "movement range excludes a pit");
+  Expect(!HasCell(pit_reach, CellAt(2, 0)),
+         "a pit cuts the map without a detour");
 }
 
 auto TestMoveRules() -> void {
@@ -198,6 +230,23 @@ auto TestFogLineOfSight() -> void {
   Expect(!fog.IsVisible(CellAt(4, 0)), "cell behind wall is hidden");
   Expect(fog.IsExplored(CellAt(2, 0)), "visible cell becomes explored");
   Expect(!fog.IsExplored(CellAt(4, 0)), "hidden cell is not explored");
+
+  dnd::GridMap tree_map(6, 1);
+  tree_map.SetTerrain(CellAt(2, 0), dnd::Terrain::kTree);
+  dnd::FogOfWar tree_fog(6, 1);
+  tree_fog.Recompute(tree_map, {CellAt(0, 0)}, 5);
+  Expect(tree_fog.IsVisible(CellAt(2, 0)), "the tree cell itself is visible");
+  Expect(tree_fog.IsVisible(CellAt(4, 0)),
+         "two cells behind a tree stay visible");
+  Expect(!tree_fog.IsVisible(CellAt(5, 0)), "a tree shortens sight beyond it");
+
+  dnd::GridMap water_map(6, 1);
+  water_map.SetTerrain(CellAt(2, 0), dnd::Terrain::kWater);
+  water_map.SetTerrain(CellAt(3, 0), dnd::Terrain::kLava);
+  dnd::FogOfWar water_fog(6, 1);
+  water_fog.Recompute(water_map, {CellAt(0, 0)}, 5);
+  Expect(water_fog.IsVisible(CellAt(5, 0)),
+         "water and lava do not block sight");
 }
 
 auto TestFogDiagonalSeal() -> void {
@@ -866,6 +915,36 @@ auto TestAttack() -> void {
                              "alice", false)
               .accepted,
          "a target outside the player's sight is rejected");
+
+  dnd::GridMap water_map(4, 1);
+  water_map.SetTerrain(CellAt(1, 0), dnd::Terrain::kLava);
+  water_map.SetTerrain(CellAt(2, 0), dnd::Terrain::kWater);
+  const dnd::GameSnapshot water_snapshot{
+      .map = water_map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "archer",
+                            .owner = "alice",
+                            .hp = 10,
+                            .max_hp = 10,
+                            .ac = 12,
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)},
+                 dnd::Token{.id = 2,
+                            .name = "goblin",
+                            .owner = "dm",
+                            .hp = 10,
+                            .max_hp = 10,
+                            .ac = 10,
+                            .kind = dnd::TokenKind::kMonster,
+                            .cell = CellAt(3, 0)}},
+      .next_token_id = 3,
+  };
+  dnd::GameServer water_server(water_snapshot, 6, 29);
+  Expect(water_server
+             .HandleCommand(dnd::AttackToken{.attacker = 1, .target = 2},
+                            "alice", false)
+             .accepted,
+         "lava and water block movement but not attacks across them");
   Expect(!server
               .HandleCommand(dnd::AttackToken{.attacker = 1,
                                               .target = 2,
@@ -2753,6 +2832,8 @@ auto TestAoeCommands() -> void {
 auto TestSaveLoadRoundtrip() -> void {
   dnd::GridMap map(6, 4);
   map.SetBlocked(CellAt(2, 1), true);
+  map.SetTerrain(CellAt(4, 1), dnd::Terrain::kLava);
+  map.SetTerrain(CellAt(5, 2), dnd::Terrain::kTree);
   const std::vector<std::uint8_t> party_fog(24, 0);
   std::vector<std::uint8_t> alice_fog(24, 0);
   alice_fog[13] = 1;
@@ -2828,6 +2909,11 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->map.Width() == 6 && loaded->map.Height() == 4,
            "dimensions survive the roundtrip");
     Expect(loaded->map.IsBlocked(CellAt(2, 1)), "walls survive the roundtrip");
+    Expect(loaded->map.IsBlocked(CellAt(4, 1)) &&
+               loaded->map.TerrainAt(CellAt(4, 1)) == dnd::Terrain::kLava,
+           "lava survives the roundtrip");
+    Expect(loaded->map.IsDifficultTerrain(CellAt(5, 2)),
+           "trees survive the roundtrip");
     Expect(loaded->tokens.size() == 2, "token count survives the roundtrip");
     Expect(loaded->tokens.front().name == "hero", "token name survives");
     Expect(loaded->revealed.size() == 2 &&

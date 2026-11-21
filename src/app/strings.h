@@ -190,21 +190,23 @@ inline constexpr std::string_view kEditorTab = "Карта";
 inline constexpr std::string_view kOpenEditor = "Открыть редактор";
 inline constexpr std::string_view kEditorTitle = "Редактор карты";
 inline constexpr std::string_view kEditorDescription =
-    "Создайте карту, расставьте стены и стартовых персонажей.";
+    "Создайте карту, расставьте стены, рельеф, персонажей и монстров.";
 inline constexpr std::string_view kEditorSize = "Размер";
 inline constexpr std::string_view kEditorBrush = "Кисть";
 inline constexpr std::string_view kBrushWall = "стена";
 inline constexpr std::string_view kBrushFloor = "пол";
-inline constexpr std::string_view kBrushPlayer = "персонаж";
-inline constexpr std::string_view kBrushMonster = "монстр";
-inline constexpr std::string_view kBrushErase = "удалить";
+inline constexpr std::string_view kBrushTree = "дерево";
+inline constexpr std::string_view kBrushWater = "вода";
+inline constexpr std::string_view kBrushPit = "пропасть";
+inline constexpr std::string_view kBrushLava = "лава";
 inline constexpr std::string_view kEditorSizeHint =
     "[ / ] — ширина карты, - / = — высота";
 inline constexpr std::string_view kEditorMouseHint =
     "ЛКМ — рисовать | ПКМ — удалить | СКМ — панорама | колесо — зум";
 inline constexpr std::string_view kEditorKeyHint =
-    "1–5 — кисть | Tab — сцены | F2 — панель | F5 — сохранить | "
-    "F9 — загрузить | Enter — играть | Esc — меню";
+    "1–6 — кисть | P — персонаж | B — бестиарий | Tab — сцены | "
+    "F2 — панель | F5 — сохранить | F9 — загрузить | Enter — играть | "
+    "Esc — меню";
 inline constexpr std::string_view kEditorScenesHint =
     "↑ ↓ — выбрать | Enter — открыть | 1–9 — сцена | N — новая из этой "
     "карты | F5 — сохранить | Esc — закрыть";

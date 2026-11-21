@@ -614,8 +614,8 @@ auto App::ResizeScene(int width, int height) -> void {
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
       const Cell cell{.x = x, .y = y};
-      if (scene_.map.Contains(cell) && scene_.map.IsBlocked(cell)) {
-        map.SetBlocked(cell, true);
+      if (scene_.map.Contains(cell)) {
+        map.SetTerrain(cell, scene_.map.TerrainAt(cell));
       }
     }
   }
@@ -666,36 +666,85 @@ auto App::AddEditorToken(Cell cell, TokenKind kind) -> void {
   });
 }
 
+auto App::SpawnEditorBestiary(int index, bool group) -> void {
+  const auto& bestiary = DefaultBestiary();
+  if (index < 0 || std::cmp_greater_equal(index, bestiary.size())) {
+    return;
+  }
+  const Cell origin = CellFromPixel(mouse_x_, mouse_y_);
+  if (!scene_.map.Contains(origin) || scene_.map.IsBlocked(origin)) {
+    editor_status_ = "Нельзя поставить монстра в эту клетку";
+    return;
+  }
+  const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(index)];
+  const int count = group ? MonsterGroupSize(rng_) : 1;
+  const std::vector<Cell> cells =
+      MonsterGroupCells(scene_.map, origin, count, scene_.tokens);
+  if (cells.empty()) {
+    editor_status_ = "Нельзя поставить монстра в эту клетку";
+    return;
+  }
+  const bool numbered = cells.size() > 1;
+  for (std::size_t i = 0; i < cells.size(); ++i) {
+    Token token;
+    token.id = scene_.next_token_id++;
+    token.name = monster.name;
+    if (numbered) {
+      token.name += " " + std::to_string(i + 1);
+    }
+    token.owner = "dm";
+    token.hp = monster.max_hp;
+    token.max_hp = monster.max_hp;
+    token.ac = monster.ac;
+    token.speed = monster.speed;
+    token.notes = monster.notes;
+    token.attack_bonus = monster.attack_bonus;
+    token.save_bonus = monster.save_bonus;
+    token.damage = monster.damage;
+    token.kind = TokenKind::kMonster;
+    token.cell = cells[i];
+    scene_.tokens.push_back(std::move(token));
+  }
+  scene_.encounter = Encounter{};
+  editor_status_ = "Добавлен монстр: " + monster.name;
+  bestiary_active_ = false;
+}
+
 auto App::ApplyEditorBrush(Cell cell) -> void {
   if (!scene_.map.Contains(cell)) {
     return;
   }
   switch (editor_brush_) {
     case EditorBrush::kWall:
-      scene_.map.SetBlocked(cell, true);
+      scene_.map.SetTerrain(cell, Terrain::kWall);
       std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
         return token.cell == cell;
       });
       break;
     case EditorBrush::kFloor:
-      scene_.map.SetBlocked(cell, false);
+      scene_.map.SetTerrain(cell, Terrain::kFloor);
       break;
-    case EditorBrush::kPlayer:
-      AddEditorToken(cell, TokenKind::kPlayer);
+    case EditorBrush::kTree:
+      scene_.map.SetTerrain(cell, Terrain::kTree);
       break;
-    case EditorBrush::kMonster:
-      AddEditorToken(cell, TokenKind::kMonster);
-      break;
-    case EditorBrush::kErase: {
-      const auto before = scene_.tokens.size();
+    case EditorBrush::kWater:
+      scene_.map.SetTerrain(cell, Terrain::kWater);
       std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
         return token.cell == cell;
       });
-      if (scene_.tokens.size() == before) {
-        scene_.map.SetBlocked(cell, false);
-      }
       break;
-    }
+    case EditorBrush::kPit:
+      scene_.map.SetTerrain(cell, Terrain::kPit);
+      std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
+        return token.cell == cell;
+      });
+      break;
+    case EditorBrush::kLava:
+      scene_.map.SetTerrain(cell, Terrain::kLava);
+      std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
+        return token.cell == cell;
+      });
+      break;
   }
   scene_.encounter = Encounter{};
 }
@@ -743,13 +792,22 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
       editor_brush_ = EditorBrush::kFloor;
       return;
     case SDLK_3:
-      editor_brush_ = EditorBrush::kPlayer;
+      editor_brush_ = EditorBrush::kTree;
       return;
     case SDLK_4:
-      editor_brush_ = EditorBrush::kMonster;
+      editor_brush_ = EditorBrush::kWater;
       return;
     case SDLK_5:
-      editor_brush_ = EditorBrush::kErase;
+      editor_brush_ = EditorBrush::kPit;
+      return;
+    case SDLK_6:
+      editor_brush_ = EditorBrush::kLava;
+      return;
+    case SDLK_P:
+      AddEditorToken(CellFromPixel(mouse_x_, mouse_y_), TokenKind::kPlayer);
+      return;
+    case SDLK_B:
+      OpenBestiary();
       return;
     case SDLK_HOME:
       CenterCamera();
@@ -893,7 +951,7 @@ auto App::HandleEditorMouseDown(const SDL_MouseButtonEvent& button) -> void {
       return token.cell == cell;
     });
     if (scene_.tokens.size() == before) {
-      scene_.map.SetBlocked(cell, false);
+      scene_.map.SetTerrain(cell, Terrain::kFloor);
     }
     scene_.encounter = Encounter{};
   }
@@ -1320,6 +1378,8 @@ auto App::HandleEvent(SDL_Event event) -> void {
         HandleEditorMouseUp(event.button);
         break;
       case SDL_EVENT_MOUSE_MOTION:
+        mouse_x_ = event.motion.x;
+        mouse_y_ = event.motion.y;
         HandlePanMotion(event.motion);
         break;
       case SDL_EVENT_MOUSE_WHEEL:
@@ -2174,7 +2234,7 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
 }
 
 auto App::OpenBestiary() -> void {
-  if (options_.mode != AppMode::kHost) {
+  if (!in_editor_ && options_.mode != AppMode::kHost) {
     view_.AddLocalLine(std::string(strings::kBestiaryDmOnly));
     return;
   }
@@ -2197,6 +2257,10 @@ auto App::HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void {
 }
 
 auto App::SpawnBestiary(int index, bool group) -> void {
+  if (in_editor_) {
+    SpawnEditorBestiary(index, group);
+    return;
+  }
   const auto& bestiary = DefaultBestiary();
   if (index < 0 || std::cmp_greater_equal(index, bestiary.size())) {
     return;
@@ -3581,7 +3645,7 @@ auto App::Iterate() -> void {
     ClearBoard(renderer_);
     DrawBackground(scene_.map, scene_.background);
     DrawGrid(renderer_, scene_.map, camera_.cell_size, camera_.x, camera_.y);
-    DrawWalls(renderer_, scene_.map, camera_.cell_size, camera_.x, camera_.y);
+    DrawTerrain(renderer_, scene_.map, camera_.cell_size, camera_.x, camera_.y);
     std::vector<TokenArt> editor_art;
     editor_art.reserve(scene_.tokens.size());
     for (const Token& token : scene_.tokens) {
@@ -3598,6 +3662,9 @@ auto App::Iterate() -> void {
       DrawScenesPanel(renderer_, text_.get(), campaign_.scenes,
                       campaign_.active, editor_scenes_selected_, "", "",
                       editor_scenes_status_, strings::kEditorScenesHint);
+    }
+    if (bestiary_active_) {
+      DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
     }
     SDL_RenderPresent(renderer_);
     return;
@@ -3647,7 +3714,7 @@ auto App::Iterate() -> void {
   ClearBoard(renderer_);
   DrawBackground(view_.Map(), view_.Background());
   DrawGrid(renderer_, view_.Map(), camera_.cell_size, camera_.x, camera_.y);
-  DrawWalls(renderer_, view_.Map(), camera_.cell_size, camera_.x, camera_.y);
+  DrawTerrain(renderer_, view_.Map(), camera_.cell_size, camera_.x, camera_.y);
   const Encounter& encounter = view_.EncounterState();
   if (show_movement_range_) {
     const Token* range_token = FindSelectedToken();
