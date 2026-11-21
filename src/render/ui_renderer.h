@@ -68,13 +68,16 @@ auto PlayerRowAt(SDL_Renderer* renderer, TextRenderer* text,
 enum class SheetField : std::uint8_t {
   kAc = 0,
   kSpeed = 1,
-  kAttack = 2,
-  kSave = 3,
-  kInitiative = 4,
+  kInitiative = 2,
+  kAttack = 3,
+  kSave = 4,
   kTempHp = 5,
-  kDamage = 6,
-  kNotes = 7,
+  kHitDie = 6,
+  kCon = 7,
+  kDamage = 8,
+  kNotes = 9,
 };
+inline constexpr int kSheetFieldCount = 10;
 
 // Модальный лист персонажа или монстра.
 auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
@@ -82,6 +85,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& ac, const std::string& speed,
                     const std::string& attack, const std::string& save,
                     const std::string& initiative, const std::string& temp_hp,
+                    const std::string& hit_die, const std::string& con,
                     const std::string& damage, const std::string& notes)
     -> void;
 

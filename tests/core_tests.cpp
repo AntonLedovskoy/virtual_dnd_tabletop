@@ -1182,6 +1182,38 @@ auto TestLevels() -> void {
   Expect(dnd::LevelForXp(-10) == 1, "negative experience is treated as zero");
   Expect(dnd::LevelForXp(dnd::kMaxXp) == dnd::kMaxLevel,
          "experience is capped at the last level");
+
+  Expect(dnd::ProficiencyBonus(1) == 2 && dnd::ProficiencyBonus(4) == 2,
+         "levels 1-4 have a +2 proficiency bonus");
+  Expect(dnd::ProficiencyBonus(5) == 3 && dnd::ProficiencyBonus(8) == 3,
+         "levels 5-8 have a +3 proficiency bonus");
+  Expect(dnd::ProficiencyBonus(9) == 4 && dnd::ProficiencyBonus(12) == 4,
+         "levels 9-12 have a +4 proficiency bonus");
+  Expect(dnd::ProficiencyBonus(13) == 5 && dnd::ProficiencyBonus(16) == 5,
+         "levels 13-16 have a +5 proficiency bonus");
+  Expect(dnd::ProficiencyBonus(17) == 6 && dnd::ProficiencyBonus(20) == 6,
+         "levels 17-20 have a +6 proficiency bonus");
+  Expect(dnd::ProficiencyBonus(0) == 2 && dnd::ProficiencyBonus(30) == 6,
+         "the proficiency bonus is clamped to the level range");
+
+  Expect(dnd::IsValidHitDie(6) && dnd::IsValidHitDie(8) &&
+             dnd::IsValidHitDie(10) && dnd::IsValidHitDie(12),
+         "player hit dice are d6, d8, d10 and d12");
+  Expect(!dnd::IsValidHitDie(4) && !dnd::IsValidHitDie(20),
+         "other hit dice are rejected");
+  Expect(dnd::HitDieAverage(6) == 4 && dnd::HitDieAverage(8) == 5 &&
+             dnd::HitDieAverage(10) == 6 && dnd::HitDieAverage(12) == 7,
+         "2024 average hit points per hit die");
+  Expect(dnd::HitPointsPerLevel(8, 3) == 8,
+         "a level adds the hit die average plus Constitution");
+  Expect(dnd::HitPointsPerLevel(6, -10) == 1,
+         "a level always adds at least one hit point");
+  Expect(dnd::IsAbilityScoreLevel(4) && dnd::IsAbilityScoreLevel(8) &&
+             dnd::IsAbilityScoreLevel(12) && dnd::IsAbilityScoreLevel(16),
+         "ability score improvements come at levels 4, 8, 12 and 16");
+  Expect(!dnd::IsAbilityScoreLevel(3) && !dnd::IsAbilityScoreLevel(20),
+         "other levels grant no ability score improvement");
+  Expect(dnd::kEpicBoonLevel == 19, "the epic boon comes at level 19");
 }
 
 auto TestExperience() -> void {
@@ -1233,6 +1265,7 @@ auto TestExperience() -> void {
   Expect(single.accepted, "the DM awards experience");
   bool updated = false;
   bool promotion = false;
+  bool hp_gain = false;
   for (const dnd::Event& event : single.events) {
     if (const auto* token = std::get_if<dnd::TokenUpdated>(&event)) {
       updated = token->token.id == 1 && token->token.xp == 300;
@@ -1240,13 +1273,19 @@ auto TestExperience() -> void {
     if (const auto* line = std::get_if<dnd::LogLineAdded>(&event)) {
       promotion = promotion || line->line.text.find("получает 2 уровень") !=
                                    std::string::npos;
+      hp_gain = hp_gain ||
+                line->line.text.find("+5 к максимуму HP") != std::string::npos;
     }
   }
   Expect(updated, "the award broadcasts the updated character");
   Expect(promotion, "a level-up is written to the log");
+  Expect(hp_gain, "the log tells how many hit points the level gave");
   Expect(TokenOf(server.State(), 1).xp == 300 &&
              dnd::LevelForXp(TokenOf(server.State(), 1).xp) == 2,
          "experience and the derived level are stored");
+  Expect(TokenOf(server.State(), 1).max_hp == 15 &&
+             TokenOf(server.State(), 1).hp == 15,
+         "a d8 character with no Constitution gains 5 hit points");
 
   const dnd::CommandOutcome party =
       server.HandleCommand(dnd::AwardXp{.amount = 50, .party = true}, "", true);
@@ -1266,6 +1305,70 @@ auto TestExperience() -> void {
          "stored experience is capped");
   Expect(dnd::LevelForXp(TokenOf(server.State(), 1).xp) == dnd::kMaxLevel,
          "a capped character is level 20");
+  Expect(TokenOf(server.State(), 1).max_hp == 15 + (18 * 5),
+         "every level from 2 to 20 adds hit points");
+  Expect(TokenOf(server.State(), 1).attack_bonus == 4 &&
+             TokenOf(server.State(), 1).save_bonus == 4,
+         "proficiency tiers from 2 to 20 raise attack and saves by four");
+
+  // Кость хитов и Телосложение: d12 даёт в среднем 7 HP, модификатор +2 —
+  // ещё два. С 1 по 5 уровень это четыре прироста и рубеж мастерства.
+  const dnd::GameSnapshot gaining{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "tank",
+                         .owner = "alice",
+                         .hp = 12,
+                         .max_hp = 20,
+                         .hit_die = 12,
+                         .con_modifier = 2,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "downed",
+                         .owner = "bob",
+                         .hp = 0,
+                         .max_hp = 10,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 0)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer gaining_server(gaining, 8, 3);
+  const dnd::CommandOutcome jump = gaining_server.HandleCommand(
+      dnd::AwardXp{.id = 1, .amount = 6500}, "", true);
+  Expect(jump.accepted, "a jump to level 5 is accepted");
+  bool mastery_line = false;
+  bool ability_line = false;
+  for (const dnd::Event& event : jump.events) {
+    if (const auto* line = std::get_if<dnd::LogLineAdded>(&event)) {
+      mastery_line =
+          mastery_line ||
+          line->line.text.find("бонус мастерства +3") != std::string::npos;
+      ability_line =
+          ability_line ||
+          line->line.text.find("повышение характеристик") != std::string::npos;
+    }
+  }
+  Expect(mastery_line, "the log names the new proficiency bonus");
+  Expect(ability_line, "the log reminds about the ability score improvement");
+  const dnd::Token& tank = TokenOf(gaining_server.State(), 1);
+  Expect(tank.max_hp == 20 + (4 * 9) && tank.hp == 12 + (4 * 9),
+         "hit die average and Constitution raise both hit point pools");
+  Expect(tank.attack_bonus == 1 && tank.save_bonus == 1,
+         "the new proficiency tier raises attack and saves");
+  Expect(TokenOf(gaining_server.State(), 2).hp == 0 &&
+             TokenOf(gaining_server.State(), 2).max_hp == 10,
+         "experience alone does not touch other characters");
+
+  const dnd::CommandOutcome downed = gaining_server.HandleCommand(
+      dnd::AwardXp{.id = 2, .amount = 300}, "", true);
+  Expect(downed.accepted, "a downed character still gains experience");
+  Expect(TokenOf(gaining_server.State(), 2).max_hp == 15 &&
+             TokenOf(gaining_server.State(), 2).hp == 0,
+         "a downed character keeps zero current hit points");
 }
 
 auto TestFogMovement() -> void {
@@ -2016,6 +2119,8 @@ auto TestSaveLoadRoundtrip() -> void {
                          .hp = 7,
                          .max_hp = 12,
                          .temp_hp = 3,
+                         .hit_die = 10,
+                         .con_modifier = 2,
                          .initiative = 15,
                          .ac = 16,
                          .speed = 9,
@@ -2092,6 +2197,9 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().owner == "alice", "token owner survives");
     Expect(loaded->tokens.front().hp == 7, "token hp survives");
     Expect(loaded->tokens.front().xp == 900, "token xp survives");
+    Expect(loaded->tokens.front().hit_die == 10 &&
+               loaded->tokens.front().con_modifier == 2,
+           "hit die and Constitution survive the roundtrip");
     Expect(loaded->tokens.front().diagonal_parity == 1,
            "diagonal parity survives the roundtrip");
     Expect(loaded->tokens.front().max_hp == 12, "token max hp survives");
@@ -3097,7 +3205,9 @@ auto TestCommandEventSerialization() -> void {
                             .save_bonus = 1,
                             .initiative_bonus = 3,
                             .damage = "1d6+2",
-                            .temp_hp = 5}};
+                            .temp_hp = 5,
+                            .hit_die = 10,
+                            .con_modifier = 2}};
   const std::vector<std::uint8_t> sheet_bytes =
       dnd::EncodeCommand(sheet_command);
   const std::optional<dnd::Command> sheet_decoded =
@@ -3114,7 +3224,9 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).initiative_bonus ==
               3 &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).damage == "1d6+2" &&
-          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).temp_hp == 5,
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).temp_hp == 5 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).hit_die == 10 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).con_modifier == 2,
       "sheet command survives serialization");
 
   const dnd::Command combat_command{
@@ -3191,6 +3303,8 @@ auto TestCommandEventSerialization() -> void {
                           .hp = 2,
                           .max_hp = 9,
                           .temp_hp = 3,
+                          .hit_die = 12,
+                          .con_modifier = -1,
                           .initiative = 11,
                           .ac = 14,
                           .speed = 12,
@@ -3199,6 +3313,7 @@ auto TestCommandEventSerialization() -> void {
                           .save_bonus = 1,
                           .damage = "1d8+2",
                           .conditions = {dnd::Condition{"оглушён", 2}},
+                          .xp = 1200,
                           .movement_used = 5,
                           .death_save_successes = 1,
                           .death_save_failures = 2,
@@ -3225,6 +3340,10 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::TokenUpdated>(*updated_decoded).token.damage ==
               "1d8+2" &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.temp_hp == 3 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.xp == 1200 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.hit_die == 12 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.con_modifier ==
+              -1 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)
                   .token.conditions.size() == 1 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)

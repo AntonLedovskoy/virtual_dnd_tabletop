@@ -911,10 +911,18 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   if (command.temp_hp < 0 || command.temp_hp > kMaxTempHp) {
     return CommandOutcome{.reject_reason = "некорректные временные HP"};
   }
+  if (!IsValidHitDie(command.hit_die)) {
+    return CommandOutcome{.reject_reason = "некорректная кость хитов"};
+  }
+  if (command.con_modifier < -kMaxConModifier ||
+      command.con_modifier > kMaxConModifier) {
+    return CommandOutcome{.reject_reason =
+                              "некорректный модификатор Телосложения"};
+  }
   const std::optional<Token> updated = state_.UpdateTokenSheet(
       command.id, command.ac, command.speed, command.notes,
       command.attack_bonus, command.save_bonus, command.initiative_bonus,
-      command.damage, command.temp_hp);
+      command.damage, command.temp_hp, command.hit_die, command.con_modifier);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }
@@ -1165,15 +1173,26 @@ auto GameServer::HandleAwardXp(const AwardXp& command, bool can_control_all)
     const Token* token = FindToken(id);
     const std::string name = token->name;
     const int before = LevelForXp(token->xp);
+    const int hp_per_level =
+        HitPointsPerLevel(token->hit_die, token->con_modifier);
     const std::optional<Token> updated = state_.AddXp(id, command.amount);
     if (!updated.has_value()) {
       continue;
     }
     outcome.events.emplace_back(TokenUpdated{.token = *updated});
     const int after = LevelForXp(updated->xp);
-    if (after > before) {
+    for (int level = before + 1; level <= after; ++level) {
       std::ostringstream line;
-      line << name << " получает " << after << " уровень";
+      line << name << " получает " << level << " уровень: +" << hp_per_level
+           << " к максимуму HP";
+      if (ProficiencyBonus(level) > ProficiencyBonus(level - 1)) {
+        line << ", бонус мастерства +" << ProficiencyBonus(level);
+      }
+      if (IsAbilityScoreLevel(level)) {
+        line << ", повышение характеристик";
+      } else if (level == kEpicBoonLevel) {
+        line << ", эпический дар";
+      }
       outcome.events.emplace_back(LogLineAdded{
           .line = LogLine{.author = "DM",
                           .text = line.str(),

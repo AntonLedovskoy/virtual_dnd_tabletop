@@ -164,6 +164,10 @@ inline constexpr std::string_view kSheetAttack = "Бонус атаки";
 inline constexpr std::string_view kSheetSave = "Бонус спасброска";
 inline constexpr std::string_view kSheetInitiative = "Бонус инициативы";
 inline constexpr std::string_view kSheetTempHp = "Временные HP";
+inline constexpr std::string_view kSheetHitDie = "Кость хитов (d6–d12)";
+inline constexpr std::string_view kSheetCon = "Мод. Телосложения";
+inline constexpr std::string_view kSheetProficiency = "Мастерство";
+inline constexpr std::string_view kSheetPerLevel = "HP за уровень";
 inline constexpr std::string_view kSheetLevel = "Уровень";
 inline constexpr std::string_view kSheetXp = "Опыт";
 inline constexpr std::string_view kConditions = "Состояния";
@@ -177,6 +181,10 @@ inline constexpr std::string_view kSheetDamage = "Урон";
 inline constexpr std::string_view kSheetNotes = "Заметки";
 inline constexpr std::string_view kSheetHint =
     "Tab — поле | Enter — сохранить | Esc — закрыть";
+inline constexpr std::string_view kSheetBadHitDie =
+    "Кость хитов: 6, 8, 10 или 12";
+inline constexpr std::string_view kSheetBadCon =
+    "Модификатор Телосложения: от -20 до 20";
 inline constexpr std::string_view kSheetNoAccess =
     "Нельзя редактировать чужого персонажа";
 inline constexpr std::string_view kBestiaryTitle = "Бестиарий";

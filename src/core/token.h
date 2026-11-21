@@ -43,6 +43,10 @@ struct Token {
   int hp = 10;
   int max_hp = 10;
   int temp_hp = 0;
+  // Кость хитов (d6/d8/d10/d12) и модификатор Телосложения: по ним считается
+  // прирост HP при повышении уровня (core/levels.h).
+  int hit_die = 8;
+  int con_modifier = 0;
   int initiative = 0;
   int ac = 10;
   int speed = 9;

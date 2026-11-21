@@ -262,6 +262,8 @@ class App {
   std::string sheet_save_;
   std::string sheet_initiative_;
   std::string sheet_temp_hp_;
+  std::string sheet_hit_die_;
+  std::string sheet_con_;
   std::string sheet_damage_;
   std::string sheet_notes_;
 

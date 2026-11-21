@@ -100,6 +100,8 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.death_save_failures);
   writer.String(token.portrait);
   writer.I32(token.xp);
+  writer.I32(token.hit_die);
+  writer.I32(token.con_modifier);
 }
 
 auto ReadToken(ByteReader& reader, Token& token) -> bool {
@@ -129,6 +131,8 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   std::int32_t death_failures = 0;
   std::string portrait;
   std::int32_t xp = 0;
+  std::int32_t hit_die = 8;
+  std::int32_t con_modifier = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -153,6 +157,7 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   if (!reader.I32(movement_used) || !reader.I32(diagonal_parity) ||
       !reader.I32(death_successes) || !reader.I32(death_failures) ||
       !reader.String(portrait, kMaxImageNameLength) || !reader.I32(xp) ||
+      !reader.I32(hit_die) || !reader.I32(con_modifier) ||
       diagonal_parity < 0 || diagonal_parity > 1 || death_successes < 0 ||
       death_successes > 3 || death_failures < 0 || death_failures > 3) {
     return false;
@@ -162,7 +167,8 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
       save_bonus < -100 || save_bonus > 100 || initiative_bonus < -100 ||
       initiative_bonus > 100 || movement_used < 0 || movement_used > 1000 ||
-      xp < 0 || xp > kMaxXp ||
+      xp < 0 || xp > kMaxXp || !IsValidHitDie(hit_die) ||
+      con_modifier < -kMaxConModifier || con_modifier > kMaxConModifier ||
       kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0 ||
       (!portrait.empty() && !IsSafeImageName(portrait))) {
@@ -175,6 +181,8 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
       .hp = hp,
       .max_hp = max_hp,
       .temp_hp = temp_hp,
+      .hit_die = hit_die,
+      .con_modifier = con_modifier,
       .initiative = initiative,
       .ac = ac,
       .speed = speed,
@@ -623,11 +631,15 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
   std::int32_t initiative_bonus = 0;
   std::string damage;
   std::int32_t temp_hp = 0;
+  std::int32_t hit_die = 8;
+  std::int32_t con_modifier = 0;
   if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.I32(initiative_bonus) ||
       !reader.String(damage, kMaxNotes) || !reader.I32(temp_hp) ||
-      !reader.Done()) {
+      !reader.I32(hit_die) || !reader.I32(con_modifier) || !reader.Done() ||
+      !IsValidHitDie(hit_die) || con_modifier < -kMaxConModifier ||
+      con_modifier > kMaxConModifier) {
     return std::nullopt;
   }
   return Command{UpdateTokenSheet{.id = id,
@@ -638,7 +650,9 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
                                   .save_bonus = save_bonus,
                                   .initiative_bonus = initiative_bonus,
                                   .damage = std::move(damage),
-                                  .temp_hp = temp_hp}};
+                                  .temp_hp = temp_hp,
+                                  .hit_die = hit_die,
+                                  .con_modifier = con_modifier}};
 }
 
 auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
@@ -1067,6 +1081,8 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.initiative_bonus);
           writer.String(cmd.damage);
           writer.I32(cmd.temp_hp);
+          writer.I32(cmd.hit_die);
+          writer.I32(cmd.con_modifier);
         } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
           writer.U8(kCommandUpdateTokenCombat);
           writer.U32(cmd.id);

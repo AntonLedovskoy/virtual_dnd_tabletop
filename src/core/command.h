@@ -109,6 +109,9 @@ struct SetTokenPortrait {
   std::string portrait;
 };
 
+// Предел модификатора Телосложения в листе персонажа.
+inline constexpr int kMaxConModifier = 20;
+
 // Владелец или DM: редактировать лист персонажа или монстра в интерфейсе.
 struct UpdateTokenSheet {
   TokenId id = 0;
@@ -120,6 +123,10 @@ struct UpdateTokenSheet {
   int initiative_bonus = 0;
   std::string damage;
   int temp_hp = 0;
+  // Кость хитов (d6/d8/d10/d12) и модификатор Телосложения: по ним считается
+  // прирост HP при повышении уровня.
+  int hit_die = 8;
+  int con_modifier = 0;
 };
 
 // Владелец или DM: нанести урон. Временные HP принимают удар первыми, при

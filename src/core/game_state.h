@@ -64,7 +64,9 @@ class GameState {
       -> std::optional<Token>;
   [[nodiscard]] auto SetTokenMaxHp(TokenId id, int max_hp)
       -> std::optional<Token>;
-  // Начисляет опыт, не выше kMaxXp; уровень вычисляется по опыту.
+  // Начисляет опыт, не выше kMaxXp; уровень вычисляется по опыту. При
+  // повышении уровня персонаж получает HP по кости хитов и модификатору
+  // Телосложения, а на смене рубежа растут бонусы атаки и спасброска.
   [[nodiscard]] auto AddXp(TokenId id, int amount) -> std::optional<Token>;
   [[nodiscard]] auto SetTokenColor(TokenId id, std::uint32_t color)
       -> std::optional<Token>;
@@ -74,7 +76,8 @@ class GameState {
   [[nodiscard]] auto UpdateTokenSheet(TokenId id, int ac, int speed,
                                       std::string notes, int attack_bonus,
                                       int save_bonus, int initiative_bonus,
-                                      std::string damage, int temp_hp)
+                                      std::string damage, int temp_hp,
+                                      int hit_die, int con_modifier)
       -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenCombat(TokenId id,
                                        std::vector<Condition> conditions)

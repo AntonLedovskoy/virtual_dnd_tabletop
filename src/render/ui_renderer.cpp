@@ -570,6 +570,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& ac, const std::string& speed,
                     const std::string& attack, const std::string& save,
                     const std::string& initiative, const std::string& temp_hp,
+                    const std::string& hit_die, const std::string& con,
                     const std::string& damage, const std::string& notes)
     -> void {
   if (renderer == nullptr || text == nullptr) {
@@ -607,12 +608,14 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                  std::to_string(token.xp),
              left, cursor_y, kHintText, content_width);
 
-  const SDL_FRect ac_field{left, y + 114.0F, 220.0F, 40.0F};
-  const SDL_FRect speed_field{left + 260.0F, y + 114.0F, 220.0F, 40.0F};
-  const SDL_FRect attack_field{left, y + 194.0F, 220.0F, 40.0F};
-  const SDL_FRect save_field{left + 260.0F, y + 194.0F, 220.0F, 40.0F};
-  const SDL_FRect temp_hp_field{left, y + 274.0F, 220.0F, 40.0F};
-  const SDL_FRect initiative_field{left + 260.0F, y + 274.0F, 220.0F, 40.0F};
+  const SDL_FRect ac_field{left, y + 114.0F, 174.0F, 40.0F};
+  const SDL_FRect speed_field{left + 193.0F, y + 114.0F, 174.0F, 40.0F};
+  const SDL_FRect initiative_field{left + 386.0F, y + 114.0F, 174.0F, 40.0F};
+  const SDL_FRect attack_field{left, y + 194.0F, 174.0F, 40.0F};
+  const SDL_FRect save_field{left + 193.0F, y + 194.0F, 174.0F, 40.0F};
+  const SDL_FRect temp_hp_field{left + 386.0F, y + 194.0F, 174.0F, 40.0F};
+  const SDL_FRect hit_die_field{left, y + 274.0F, 174.0F, 40.0F};
+  const SDL_FRect con_field{left + 193.0F, y + 274.0F, 174.0F, 40.0F};
   const SDL_FRect damage_field{left, y + 354.0F, content_width, 40.0F};
   const SDL_FRect notes_field{left, y + 434.0F, content_width, 40.0F};
 
@@ -620,6 +623,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                  active == SheetField::kAc);
   DrawModalField(renderer, text, speed_field, std::string(strings::kSheetSpeed),
                  speed, active == SheetField::kSpeed);
+  DrawModalField(renderer, text, initiative_field,
+                 std::string(strings::kSheetInitiative), initiative,
+                 active == SheetField::kInitiative);
   DrawModalField(renderer, text, attack_field,
                  std::string(strings::kSheetAttack), attack,
                  active == SheetField::kAttack);
@@ -628,14 +634,33 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   DrawModalField(renderer, text, temp_hp_field,
                  std::string(strings::kSheetTempHp), temp_hp,
                  active == SheetField::kTempHp);
-  DrawModalField(renderer, text, initiative_field,
-                 std::string(strings::kSheetInitiative), initiative,
-                 active == SheetField::kInitiative);
+  DrawModalField(renderer, text, hit_die_field,
+                 std::string(strings::kSheetHitDie), hit_die,
+                 active == SheetField::kHitDie);
+  DrawModalField(renderer, text, con_field, std::string(strings::kSheetCon),
+                 con, active == SheetField::kCon);
   DrawModalField(renderer, text, damage_field,
                  std::string(strings::kSheetDamage), damage,
                  active == SheetField::kDamage);
   DrawModalField(renderer, text, notes_field, std::string(strings::kSheetNotes),
                  notes, active == SheetField::kNotes);
+
+  // Справа от кости хитов видно, что даст следующий уровень: мастерство уже
+  // включено в итоговые бонусы листа, поэтому показан только справочно.
+  // Монстры опыт не получают, поэтому им этот блок не нужен.
+  if (token.kind == TokenKind::kPlayer) {
+    const float derived_x = left + 386.0F;
+    const float derived_y = y + 282.0F;
+    const std::string level_label =
+        std::string(strings::kSheetProficiency) + " +" +
+        std::to_string(ProficiencyBonus(LevelForXp(token.xp)));
+    text->Draw(level_label, derived_x, derived_y, kHintText, 174.0F);
+    const std::string per_level =
+        std::string(strings::kSheetPerLevel) + " +" +
+        std::to_string(HitPointsPerLevel(token.hit_die, token.con_modifier));
+    text->Draw(per_level, derived_x, derived_y + text->LineHeight() + 2.0F,
+               kHintText, 174.0F);
+  }
 
   text->Draw(std::string(strings::kSheetHint), left, y + height - 30.0F,
              kHintText, content_width);

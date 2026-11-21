@@ -32,4 +32,34 @@ auto LevelForXp(int xp) -> int {
   return level;
 }
 
+auto ProficiencyBonus(int level) -> int {
+  return 2 + ((std::clamp(level, 1, kMaxLevel) - 1) / 4);
+}
+
+auto IsValidHitDie(int hit_die) -> bool {
+  switch (hit_die) {
+    case 6:
+    case 8:
+    case 10:
+    case 12:
+      return true;
+    default:
+      return false;
+  }
+}
+
+auto HitDieAverage(int hit_die) -> int {
+  // Неизвестная кость ведёт себя как d8 — безопасный запасной вариант;
+  // допустимые кости проверяет IsValidHitDie.
+  return IsValidHitDie(hit_die) ? (hit_die / 2) + 1 : 5;
+}
+
+auto HitPointsPerLevel(int hit_die, int con_modifier) -> int {
+  return std::max(1, HitDieAverage(hit_die) + con_modifier);
+}
+
+auto IsAbilityScoreLevel(int level) -> bool {
+  return level == 4 || level == 8 || level == 12 || level == 16;
+}
+
 }  // namespace dnd

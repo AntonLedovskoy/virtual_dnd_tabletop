@@ -11,6 +11,9 @@
 namespace dnd {
 namespace {
 
+// Бонусы листа ограничены так же, как в командах сервера.
+constexpr int kMaxSheetBonus = 100;
+
 auto AddConditionIfMissing(Token& token, Condition condition) -> bool {
   const bool exists = std::ranges::any_of(
       token.conditions, [&condition](const Condition& other) -> bool {
@@ -28,6 +31,31 @@ auto RemoveCondition(Token& token, std::string_view name) -> bool {
                        [name](const Condition& condition) -> bool {
                          return condition.name == name;
                        }) > 0;
+}
+
+// Повышение уровня по правилам 2024: за каждый новый уровень максимум HP
+// растёт на среднее кости хитов плюс модификатор Телосложения (не меньше 1),
+// текущие HP — на столько же, если персонаж не лежит без сознания. На
+// рубежах 5/9/13/17 растёт бонус мастерства: он уже включён в итоговые
+// бонусы атаки и спасброска листа, поэтому их значение поднимается на 1.
+auto ApplyLevelGains(Token& token, int from_level, int to_level) -> void {
+  if (token.kind != TokenKind::kPlayer || to_level <= from_level) {
+    return;
+  }
+  const int hp_gain = HitPointsPerLevel(token.hit_die, token.con_modifier) *
+                      (to_level - from_level);
+  token.max_hp += hp_gain;
+  if (token.hp > 0) {
+    token.hp += hp_gain;
+  }
+  const int bonus_gain =
+      ProficiencyBonus(to_level) - ProficiencyBonus(from_level);
+  if (bonus_gain > 0) {
+    token.attack_bonus = std::clamp(token.attack_bonus + bonus_gain,
+                                    -kMaxSheetBonus, kMaxSheetBonus);
+    token.save_bonus = std::clamp(token.save_bonus + bonus_gain,
+                                  -kMaxSheetBonus, kMaxSheetBonus);
+  }
 }
 
 }  // namespace
@@ -290,7 +318,9 @@ auto GameState::AddXp(TokenId id, int amount) -> std::optional<Token> {
   if (token == nullptr) {
     return std::nullopt;
   }
+  const int before = LevelForXp(token->xp);
   token->xp = std::min(kMaxXp, token->xp + amount);
+  ApplyLevelGains(*token, before, LevelForXp(token->xp));
   return *token;
 }
 
@@ -320,8 +350,8 @@ auto GameState::SetTokenPortrait(TokenId id, std::string portrait)
 auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
                                  std::string notes, int attack_bonus,
                                  int save_bonus, int initiative_bonus,
-                                 std::string damage, int temp_hp)
-    -> std::optional<Token> {
+                                 std::string damage, int temp_hp, int hit_die,
+                                 int con_modifier) -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -334,6 +364,8 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
   token->initiative_bonus = initiative_bonus;
   token->damage = std::move(damage);
   token->temp_hp = temp_hp;
+  token->hit_die = hit_die;
+  token->con_modifier = con_modifier;
   return *token;
 }
 

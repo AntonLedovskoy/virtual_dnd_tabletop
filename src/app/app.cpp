@@ -24,6 +24,7 @@
 #include "core/clock.h"
 #include "core/conditions.h"
 #include "core/dice.h"
+#include "core/levels.h"
 #include "core/navigation.h"
 #include "core/player_name.h"
 #include "core/scene_io.h"
@@ -1774,6 +1775,8 @@ auto App::OpenSheet() -> void {
   sheet_save_ = std::to_string(token->save_bonus);
   sheet_initiative_ = std::to_string(token->initiative_bonus);
   sheet_temp_hp_ = std::to_string(token->temp_hp);
+  sheet_hit_die_ = std::to_string(token->hit_die);
+  sheet_con_ = std::to_string(token->con_modifier);
   sheet_damage_ = token->damage;
   sheet_notes_ = token->notes;
 }
@@ -1799,6 +1802,17 @@ auto App::SaveSheet() -> void {
       !ParseSignedNumber(sheet_temp_hp_, temp_hp) || temp_hp < 0 ||
       temp_hp > 1000) {
     view_.AddLocalLine("Некорректные значения полей листа");
+    return;
+  }
+  int hit_die = 0;
+  int con = 0;
+  if (!ParseNumber(sheet_hit_die_, hit_die) || !IsValidHitDie(hit_die)) {
+    view_.AddLocalLine(std::string(strings::kSheetBadHitDie));
+    return;
+  }
+  if (!ParseSignedNumber(sheet_con_, con) || con < -kMaxConModifier ||
+      con > kMaxConModifier) {
+    view_.AddLocalLine(std::string(strings::kSheetBadCon));
     return;
   }
   if (!sheet_damage_.empty()) {
@@ -1827,7 +1841,9 @@ auto App::SaveSheet() -> void {
                                .save_bonus = save,
                                .initiative_bonus = initiative,
                                .damage = sheet_damage_,
-                               .temp_hp = temp_hp});
+                               .temp_hp = temp_hp,
+                               .hit_die = hit_die,
+                               .con_modifier = con});
   CloseSheet();
 }
 
@@ -1882,7 +1898,8 @@ auto App::HandleSheetTextInput(const char* text) -> void {
   if (sheet_field_ == SheetField::kAc || sheet_field_ == SheetField::kSpeed ||
       sheet_field_ == SheetField::kAttack ||
       sheet_field_ == SheetField::kSave ||
-      sheet_field_ == SheetField::kInitiative) {
+      sheet_field_ == SheetField::kInitiative ||
+      sheet_field_ == SheetField::kHitDie || sheet_field_ == SheetField::kCon) {
     switch (sheet_field_) {
       case SheetField::kAc:
         AppendBoundedNumber(sheet_ac_, text, 1, 1000, false);
@@ -1901,6 +1918,13 @@ auto App::HandleSheetTextInput(const char* text) -> void {
         break;
       case SheetField::kTempHp:
         AppendBoundedNumber(sheet_temp_hp_, text, 0, 1000, false);
+        break;
+      case SheetField::kHitDie:
+        AppendBoundedNumber(sheet_hit_die_, text, 1, 20, false);
+        break;
+      case SheetField::kCon:
+        AppendBoundedNumber(sheet_con_, text, -kMaxConModifier, kMaxConModifier,
+                            true);
         break;
       default:
         break;
@@ -1928,7 +1952,7 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
     return;
   }
   if (key.key == SDLK_TAB) {
-    const int next = (static_cast<int>(sheet_field_) + 1) % 8;
+    const int next = (static_cast<int>(sheet_field_) + 1) % kSheetFieldCount;
     sheet_field_ = static_cast<SheetField>(next);
     return;
   }
@@ -1954,6 +1978,12 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SheetField::kTempHp:
       buffer = &sheet_temp_hp_;
+      break;
+    case SheetField::kHitDie:
+      buffer = &sheet_hit_die_;
+      break;
+    case SheetField::kCon:
+      buffer = &sheet_con_;
       break;
     case SheetField::kDamage:
       buffer = &sheet_damage_;
@@ -3331,8 +3361,8 @@ auto App::Iterate() -> void {
     } else {
       DrawSheetPanel(renderer_, text_.get(), *sheet_token, sheet_field_,
                      sheet_ac_, sheet_speed_, sheet_attack_, sheet_save_,
-                     sheet_initiative_, sheet_temp_hp_, sheet_damage_,
-                     sheet_notes_);
+                     sheet_initiative_, sheet_temp_hp_, sheet_hit_die_,
+                     sheet_con_, sheet_damage_, sheet_notes_);
     }
   }
   if (bestiary_active_) {
