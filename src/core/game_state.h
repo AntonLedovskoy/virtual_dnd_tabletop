@@ -110,12 +110,15 @@ class GameState {
   auto SetBackground(MapBackground background) -> bool;
 
   // Клетки, которые DM открыл столу вручную. Circle includes center.
+  // Хранятся отсортированными по (y, x): поиск двоичный, а области
+  // сливаются за один проход.
   [[nodiscard]] auto Revealed() const -> const std::vector<Cell>& {
     return revealed_;
   }
   [[nodiscard]] auto IsRevealed(Cell cell) const -> bool;
   // Возвращает true, если список открытых клеток изменился.
   auto RevealArea(Cell center, int radius) -> bool;
+  auto HideArea(Cell center, int radius) -> bool;
   auto ClearRevealed() -> bool;
 
  private:

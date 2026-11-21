@@ -206,11 +206,15 @@ struct SetMapBackground {
   MapBackground background;
 };
 
-// Только DM: открыть столу круг клеток вокруг cell навсегда или снять все
-// такие открытия. Радиус в клетках.
+// Только DM: открыть столу круг клеток вокруг cell навсегда, закрыть такой
+// же круг или снять все открытия. Радиус в клетках.
 inline constexpr int kRevealRadiusCells = 4;
 inline constexpr int kMaxRevealRadiusCells = 64;
 struct RevealArea {
+  Cell cell{};
+  int radius = 0;
+};
+struct HideArea {
   Cell cell{};
   int radius = 0;
 };
@@ -222,6 +226,6 @@ using Command = std::variant<
     SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
     StartEncounter, EndEncounter, NextTurn, SetAoe, AttackToken, DamageToken,
     HealToken, RestParty, AoeDamage, DeathSave, PingAt, SetMapBackground,
-    SetTokenPortrait, RevealArea, ClearRevealed, AwardXp>;
+    SetTokenPortrait, RevealArea, HideArea, ClearRevealed, AwardXp>;
 
 }  // namespace dnd

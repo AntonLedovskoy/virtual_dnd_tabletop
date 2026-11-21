@@ -1,6 +1,7 @@
 #include "core/game_state.h"
 
 #include <algorithm>
+#include <iterator>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -13,6 +14,37 @@ namespace {
 
 // Бонусы листа ограничены так же, как в командах сервера.
 constexpr int kMaxSheetBonus = 100;
+
+// Порядок открытых клеток: по строкам, затем по столбцам. Тот же порядок
+// дают обходы области в RevealArea/HideArea, поэтому слияния идут за один
+// проход, а IsRevealed обходится двоичным поиском.
+auto CellOrder(const Cell& left, const Cell& right) -> bool {
+  if (left.y != right.y) {
+    return left.y < right.y;
+  }
+  return left.x < right.x;
+}
+
+// Клетки карты внутри круга, по возрастанию CellOrder.
+auto CellsInArea(const GridMap& map, Cell center, int radius)
+    -> std::vector<Cell> {
+  std::vector<Cell> cells;
+  const int radius_squared = radius * radius;
+  for (int y = center.y - radius; y <= center.y + radius; ++y) {
+    for (int x = center.x - radius; x <= center.x + radius; ++x) {
+      const int delta_x = x - center.x;
+      const int delta_y = y - center.y;
+      if ((delta_x * delta_x) + (delta_y * delta_y) > radius_squared) {
+        continue;
+      }
+      const Cell cell{.x = x, .y = y};
+      if (map.Contains(cell)) {
+        cells.push_back(cell);
+      }
+    }
+  }
+  return cells;
+}
 
 auto AddConditionIfMissing(Token& token, Condition condition) -> bool {
   const bool exists = std::ranges::any_of(
@@ -69,7 +101,13 @@ GameState::GameState(GameSnapshot snapshot)
       encounter_(std::move(snapshot.encounter)),
       aoe_(snapshot.aoe),
       background_(std::move(snapshot.background)),
-      revealed_(std::move(snapshot.revealed)) {}
+      revealed_(std::move(snapshot.revealed)) {
+  // Старые сохранения и события могли прийти в порядке открытия: приводим
+  // срез к порядку CellOrder и убираем повторы.
+  std::ranges::sort(revealed_, CellOrder);
+  const auto duplicates = std::ranges::unique(revealed_);
+  revealed_.erase(duplicates.begin(), duplicates.end());
+}
 
 auto GameState::Snapshot() const -> GameSnapshot {
   return GameSnapshot{
@@ -448,30 +486,39 @@ auto GameState::SetBackground(MapBackground background) -> bool {
 }
 
 auto GameState::IsRevealed(Cell cell) const -> bool {
-  return std::ranges::find(revealed_, cell) != revealed_.end();
+  return std::ranges::binary_search(revealed_, cell, CellOrder);
 }
+
 auto GameState::RevealArea(Cell center, int radius) -> bool {
   if (radius <= 0 || !map_.Contains(center)) {
     return false;
   }
-  bool changed = false;
-  const int radius_squared = radius * radius;
-  for (int y = center.y - radius; y <= center.y + radius; ++y) {
-    for (int x = center.x - radius; x <= center.x + radius; ++x) {
-      const int delta_x = x - center.x;
-      const int delta_y = y - center.y;
-      if ((delta_x * delta_x) + (delta_y * delta_y) > radius_squared) {
-        continue;
-      }
-      const Cell cell{.x = x, .y = y};
-      if (!map_.Contains(cell) || IsRevealed(cell)) {
-        continue;
-      }
-      revealed_.push_back(cell);
-      changed = true;
-    }
+  const std::vector<Cell> area = CellsInArea(map_, center, radius);
+  std::vector<Cell> merged;
+  merged.reserve(revealed_.size() + area.size());
+  std::ranges::set_union(revealed_, area, std::back_inserter(merged),
+                         CellOrder);
+  if (merged.size() == revealed_.size()) {
+    return false;
   }
-  return changed;
+  revealed_ = std::move(merged);
+  return true;
+}
+
+auto GameState::HideArea(Cell center, int radius) -> bool {
+  if (radius <= 0 || !map_.Contains(center)) {
+    return false;
+  }
+  const std::vector<Cell> area = CellsInArea(map_, center, radius);
+  std::vector<Cell> kept;
+  kept.reserve(revealed_.size());
+  std::ranges::set_difference(revealed_, area, std::back_inserter(kept),
+                              CellOrder);
+  if (kept.size() == revealed_.size()) {
+    return false;
+  }
+  revealed_ = std::move(kept);
+  return true;
 }
 
 auto GameState::ClearRevealed() -> bool {

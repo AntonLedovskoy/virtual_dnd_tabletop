@@ -58,6 +58,7 @@ constexpr std::uint8_t kCommandRevealArea = 29;
 constexpr std::uint8_t kCommandClearRevealed = 30;
 constexpr std::uint8_t kCommandAwardXp = 31;
 constexpr std::uint8_t kCommandAttackToken = 32;
+constexpr std::uint8_t kCommandHideArea = 33;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -624,6 +625,16 @@ auto DecodeClearRevealedCommand(ByteReader& reader) -> std::optional<Command> {
   return Command{ClearRevealed{}};
 }
 
+auto DecodeHideAreaCommand(ByteReader& reader) -> std::optional<Command> {
+  Cell cell;
+  std::uint32_t radius = 0;
+  if (!ReadPosition(reader, cell) || !reader.U32(radius) || !reader.Done() ||
+      radius == 0 || radius > kMaxRevealRadiusCells) {
+    return std::nullopt;
+  }
+  return Command{HideArea{.cell = cell, .radius = static_cast<int>(radius)}};
+}
+
 auto DecodeAwardXpCommand(ByteReader& reader) -> std::optional<Command> {
   std::uint32_t id = 0;
   std::int32_t amount = 0;
@@ -1161,6 +1172,11 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.cell.x);
           writer.I32(cmd.cell.y);
           writer.U32(static_cast<std::uint32_t>(cmd.radius));
+        } else if constexpr (std::is_same_v<T, HideArea>) {
+          writer.U8(kCommandHideArea);
+          writer.I32(cmd.cell.x);
+          writer.I32(cmd.cell.y);
+          writer.U32(static_cast<std::uint32_t>(cmd.radius));
         } else if constexpr (std::is_same_v<T, ClearRevealed>) {
           writer.U8(kCommandClearRevealed);
         } else if constexpr (std::is_same_v<T, AwardXp>) {
@@ -1242,6 +1258,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeSetTokenPortraitCommand(reader);
     case kCommandRevealArea:
       return DecodeRevealAreaCommand(reader);
+    case kCommandHideArea:
+      return DecodeHideAreaCommand(reader);
     case kCommandClearRevealed:
       return DecodeClearRevealedCommand(reader);
     case kCommandAwardXp:

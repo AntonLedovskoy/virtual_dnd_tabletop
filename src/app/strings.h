@@ -29,7 +29,7 @@ inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, N — монстр, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
     "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /map | "
-    "/portrait | /reveal | /xp | /kick";
+    "/portrait | /reveal | /unreveal | /xp | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 inline constexpr std::string_view kChatHintDm =
     "Enter — чат | PgUp/PgDn — лог | /roll d20+5 | A атака цели под курсором | "
@@ -105,7 +105,7 @@ inline constexpr std::array<std::string_view, 16> kHelpDm = {
     "Ctrl+Z — отменить последнее действие DM",
     "/map карта.png — подложка, /map off — убрать",
     "/portrait файл.png — портрет выбранного токена",
-    "/reveal — открыть область под курсором, /reveal off — скрыть",
+    "/reveal и /unreveal — область под курсором, /reveal off — всё",
     "/xp 300 — опыт выбранному, /xp 300 all — всей партии",
 };
 
@@ -240,7 +240,8 @@ inline constexpr std::string_view kDamageUsage =
 inline constexpr std::string_view kAoeUsage =
     "Использование: /aoe 2d6 15 (урон и сложность спасброска)";
 inline constexpr std::string_view kRevealUsage =
-    "Использование: /reveal (область под курсором) или /reveal off";
+    "Использование: /reveal или /unreveal (область под курсором), "
+    "/reveal off — скрыть всё";
 inline constexpr std::string_view kRevealDmOnly =
     "Области столу открывает только DM";
 inline constexpr std::string_view kXpUsage =

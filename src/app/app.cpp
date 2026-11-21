@@ -2374,6 +2374,7 @@ auto App::SubmitChat() -> void {
       SendCommand(RestParty{.long_rest = command.long_rest});
       return;
     case ChatCommandKind::kReveal:
+    case ChatCommandKind::kUnreveal:
     case ChatCommandKind::kRevealOff: {
       if (options_.mode != AppMode::kHost) {
         view_.AddLocalLine(std::string(strings::kRevealDmOnly));
@@ -2385,7 +2386,12 @@ auto App::SubmitChat() -> void {
       }
       const Cell reveal_cell = CellFromPixel(mouse_x_, mouse_y_);
       if (!view_.Map().Contains(reveal_cell)) {
-        view_.AddLocalLine("Открывать можно только клетки карты");
+        view_.AddLocalLine("Менять видимость можно только на клетках карты");
+        return;
+      }
+      if (command.kind == ChatCommandKind::kUnreveal) {
+        SendCommand(
+            HideArea{.cell = reveal_cell, .radius = kRevealRadiusCells});
         return;
       }
       SendCommand(

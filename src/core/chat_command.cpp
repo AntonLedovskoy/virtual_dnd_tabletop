@@ -231,9 +231,18 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
     return command;
   }
 
+  if (text == "/unreveal") {
+    command.kind = ChatCommandKind::kUnreveal;
+    return command;
+  }
+
   if (text == "/reveal off") {
     command.kind = ChatCommandKind::kRevealOff;
     return command;
+  }
+
+  if (MatchesCommand(text, "/unreveal")) {
+    return reject(ChatCommandError::kBadReveal);
   }
 
   if (MatchesCommand(text, "/reveal")) {

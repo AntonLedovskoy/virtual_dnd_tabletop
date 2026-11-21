@@ -1291,6 +1291,22 @@ auto TestSeparateVisibility() -> void {
   Expect(!server.IsVisibleTo("alice", CellAt(0, 0)),
          "the old owner loses that vision");
 
+  const dnd::CommandOutcome hidden = server.HandleCommand(
+      dnd::HideArea{.cell = CellAt(18, 0), .radius = 1}, "", true);
+  Expect(
+      hidden.accepted && hidden.events.size() == 1 &&
+          std::holds_alternative<dnd::RevealedUpdated>(hidden.events.front()),
+      "the DM hides a part of the revealed area");
+  Expect(server.IsVisibleTo("alice", CellAt(15, 0)),
+         "revealed cells outside the hidden area stay visible");
+  Expect(!server.IsVisibleTo("alice", CellAt(18, 0)),
+         "a targeted hide closes only its own circle");
+  Expect(!server
+              .HandleCommand(dnd::HideArea{.cell = CellAt(18, 0), .radius = 1},
+                             "alice", false)
+              .accepted,
+         "only the DM hides areas");
+
   const dnd::CommandOutcome cleared =
       server.HandleCommand(dnd::ClearRevealed{}, "", true);
   Expect(cleared.accepted && !server.IsVisibleTo("alice", CellAt(15, 0)),
@@ -1298,6 +1314,39 @@ auto TestSeparateVisibility() -> void {
   Expect(FogExploredAt(server.FogState("alice"), 15, 0),
          "cells seen through a reveal stay explored");
   Expect(!snapshot_has("alice", 3), "the goblin is hidden again");
+}
+
+auto TestRevealedAreas() -> void {
+  dnd::GameState state{dnd::GridMap(10, 10)};
+  Expect(state.RevealArea(CellAt(2, 2), 1), "an area reveal changes the list");
+  Expect(state.IsRevealed(CellAt(2, 2)) && state.IsRevealed(CellAt(1, 2)) &&
+             state.IsRevealed(CellAt(3, 2)),
+         "the whole circle becomes revealed");
+  Expect(!state.RevealArea(CellAt(2, 2), 1),
+         "revealing the same circle twice changes nothing");
+
+  Expect(state.RevealArea(CellAt(7, 7), 1) && state.IsRevealed(CellAt(7, 7)),
+         "a second area joins the list");
+  Expect(state.HideArea(CellAt(2, 2), 1),
+         "a targeted hide removes its own circle");
+  Expect(!state.IsRevealed(CellAt(2, 2)) && !state.IsRevealed(CellAt(3, 2)),
+         "hidden cells leave the list");
+  Expect(state.IsRevealed(CellAt(7, 7)),
+         "revealed cells outside the hidden circle survive");
+  Expect(!state.HideArea(CellAt(2, 2), 1),
+         "hiding already hidden cells changes nothing");
+
+  const std::vector<dnd::Cell>& revealed = state.Revealed();
+  const bool sorted = std::ranges::is_sorted(
+      revealed, [](dnd::Cell left, dnd::Cell right) -> bool {
+        return left.y != right.y ? left.y < right.y : left.x < right.x;
+      });
+  Expect(sorted && std::ranges::adjacent_find(revealed) == revealed.end(),
+         "revealed cells stay sorted and unique");
+
+  Expect(state.ClearRevealed() && state.Revealed().empty(),
+         "clearing removes every revealed cell");
+  Expect(!state.ClearRevealed(), "clearing an empty list changes nothing");
 }
 
 auto TestLevels() -> void {
@@ -2811,6 +2860,10 @@ auto TestChatCommandParsing() -> void {
          "/reveal opens the area under the cursor");
   Expect(parse("/reveal off").kind == ChatCommandKind::kRevealOff,
          "/reveal off clears manual reveals");
+  Expect(parse("/unreveal").kind == ChatCommandKind::kUnreveal,
+         "/unreveal closes the area under the cursor");
+  Expect(parse("/unreveal всё").error == ChatCommandError::kBadReveal,
+         "/unreveal rejects unknown arguments");
   Expect(parse("/reveal всё").error == ChatCommandError::kBadReveal,
          "/reveal rejects unknown arguments");
 
@@ -3199,6 +3252,17 @@ auto TestCommandEventSerialization() -> void {
   Expect(clear_reveal_decoded.has_value() &&
              std::holds_alternative<dnd::ClearRevealed>(*clear_reveal_decoded),
          "clear reveal command survives serialization");
+
+  const dnd::Command hide_command{
+      dnd::HideArea{.cell = CellAt(4, 1), .radius = 2}};
+  const std::vector<std::uint8_t> hide_bytes = dnd::EncodeCommand(hide_command);
+  const std::optional<dnd::Command> hide_decoded =
+      dnd::DecodeCommand(hide_bytes.data(), hide_bytes.size());
+  Expect(hide_decoded.has_value() &&
+             std::holds_alternative<dnd::HideArea>(*hide_decoded) &&
+             std::get<dnd::HideArea>(*hide_decoded).cell == CellAt(4, 1) &&
+             std::get<dnd::HideArea>(*hide_decoded).radius == 2,
+         "hide area command survives serialization");
 
   const dnd::Command award_command{
       dnd::AwardXp{.id = 4, .amount = 300, .party = true}};
@@ -4183,6 +4247,7 @@ auto main() -> int {
     TestDynamicFogObservers();
     TestFogSurvivesReset();
     TestSeparateVisibility();
+    TestRevealedAreas();
     TestFogMovement();
     TestLevels();
     TestExperience();

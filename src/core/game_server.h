@@ -160,6 +160,8 @@ class GameServer {
   // Открытие областей столу: ручной инструмент DM.
   [[nodiscard]] auto HandleReveal(const RevealArea& command,
                                   bool can_control_all) -> CommandOutcome;
+  [[nodiscard]] auto HandleHide(const HideArea& command, bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleClearRevealed(bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleAwardXp(const AwardXp& command, bool can_control_all)

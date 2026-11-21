@@ -145,6 +145,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleSetMapBackground(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, RevealArea>) {
           return HandleReveal(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, HideArea>) {
+          return HandleHide(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, ClearRevealed>) {
           return HandleClearRevealed(can_control_all);
         } else if constexpr (std::is_same_v<T, AwardXp>) {
@@ -1203,6 +1205,27 @@ auto GameServer::HandleReveal(const RevealArea& command, bool can_control_all)
     return CommandOutcome{.reject_reason = "клетка за пределами карты"};
   }
   if (!state_.RevealArea(command.cell, command.radius)) {
+    return CommandOutcome{.accepted = true};
+  }
+  RecomputeFog();
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(RevealedUpdated{.cells = state_.Revealed()});
+  return outcome;
+}
+
+auto GameServer::HandleHide(const HideArea& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "области закрывает только DM"};
+  }
+  if (command.radius <= 0 || command.radius > kMaxRevealRadiusCells) {
+    return CommandOutcome{.reject_reason = "некорректный радиус закрытия"};
+  }
+  if (!state_.Map().Contains(command.cell)) {
+    return CommandOutcome{.reject_reason = "клетка за пределами карты"};
+  }
+  if (!state_.HideArea(command.cell, command.radius)) {
     return CommandOutcome{.accepted = true};
   }
   RecomputeFog();
