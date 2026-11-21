@@ -7,6 +7,10 @@ roadmap and weak spots in `PLAN.md`.
 Language: code, comments, docs in Russian; identifiers and terms in English.
 Local rules win where stricter than global (language, live UI checks).
 
+Rules: always the latest D&D edition (2024, 5e revised). Where legacy 2014
+rules differ, follow 2024 — level-up, AC, conditions, rests, movement.
+Old rules appear only as a deliberate note in `PLAN.md`.
+
 ## Build and tests
 
 - Windows: `.\build.bat` (debug default). `-p debug|release|relwithdebinfo|minsize`, `-c` reconfigure, `-j N` jobs, `-t`/`--tidy` runs `clang-tidy` on our `.cpp`, fails on any finding.
