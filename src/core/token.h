@@ -21,17 +21,17 @@ enum class TokenKind : std::uint8_t {
   kMonster = 2,
 };
 
-// Состояние токена. rounds > 0 — сколько ходов токена ещё действует,
+// Состояние токена. seconds > 0 — сколько игровых секунд ещё действует,
 // 0 — до ручного снятия (например, «без сознания»).
 struct Condition {
   std::string name;
-  int rounds = 0;
+  int seconds = 0;
 
   Condition() = default;
   explicit Condition(std::string condition_name, int remaining = 0)
-      : name(std::move(condition_name)), rounds(remaining) {}
+      : name(std::move(condition_name)), seconds(remaining) {}
   explicit Condition(const char* condition_name, int remaining = 0)
-      : name(condition_name), rounds(remaining) {}
+      : name(condition_name), seconds(remaining) {}
 };
 
 struct Token {

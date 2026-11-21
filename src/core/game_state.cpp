@@ -65,6 +65,29 @@ auto RemoveCondition(Token& token, std::string_view name) -> bool {
                        }) > 0;
 }
 
+// Прокручивает игровое время для состояний одного токена: срочные
+// уменьшаются на seconds, нулевые держатся до ручного снятия. Возвращает
+// true, если набор состояний изменился.
+auto TickConditions(Token& token, int seconds) -> bool {
+  if (seconds <= 0) {
+    return false;
+  }
+  const std::size_t before = token.conditions.size();
+  for (auto it = token.conditions.begin(); it != token.conditions.end();) {
+    if (it->seconds <= 0) {
+      ++it;
+      continue;
+    }
+    it->seconds -= seconds;
+    it = it->seconds <= 0 ? token.conditions.erase(it) : it + 1;
+  }
+  return token.conditions.size() != before;
+}
+
+// Отдых по правилам 2024 тоже двигает игровое время.
+constexpr int kShortRestSeconds = 1 * kSecondsPerHour;
+constexpr int kLongRestSeconds = 8 * kSecondsPerHour;
+
 // Повышение уровня по правилам 2024: за каждый новый уровень максимум HP
 // растёт на среднее кости хитов плюс модификатор Телосложения (не меньше 1),
 // текущие HP — на столько же, если персонаж не лежит без сознания. На
@@ -272,15 +295,21 @@ auto GameState::DeathSave(TokenId id, int roll) -> std::optional<Token> {
 
 auto GameState::RestParty(bool long_rest) -> std::vector<Token> {
   std::vector<Token> changed;
+  const int rest_seconds = long_rest ? kLongRestSeconds : kShortRestSeconds;
   for (Token& token : tokens_) {
-    if (token.kind != TokenKind::kPlayer) {
-      continue;
-    }
     const int old_hp = token.hp;
     const int old_temp = token.temp_hp;
     const int old_successes = token.death_save_successes;
     const int old_failures = token.death_save_failures;
     const std::size_t old_conditions = token.conditions.size();
+    // Время отдыха идёт для всех: срочные состояния истекают и у монстров.
+    TickConditions(token, rest_seconds);
+    if (token.kind != TokenKind::kPlayer) {
+      if (token.conditions.size() != old_conditions) {
+        changed.push_back(token);
+      }
+      continue;
+    }
     if (long_rest) {
       token.hp = token.max_hp;
       token.temp_hp = 0;
@@ -538,22 +567,25 @@ auto GameState::NextTurn() -> bool {
     encounter_.turn_index = 0;
     ++encounter_.round;
   }
-  // Новый активный токен начинает ход с полным запасом движения. Состояния
-  // с длительностью отсчитываются в начале хода своего токена; состояния
-  // с rounds == 0 держатся до ручного снятия.
+  // Новый активный токен начинает ход с полным запасом движения. Время в
+  // бою идёт по 6 секунд за ход: срочные состояния этого токена уменьшаются
+  // в начале его хода; состояния с seconds == 0 держатся до ручного снятия.
   if (Token* token = FindToken(ActiveTokenId())) {
     token->movement_used = 0;
     token->diagonal_parity = 0;
-    for (auto it = token->conditions.begin(); it != token->conditions.end();) {
-      if (it->rounds <= 0) {
-        ++it;
-        continue;
-      }
-      --it->rounds;
-      it = it->rounds == 0 ? token->conditions.erase(it) : it + 1;
-    }
+    TickConditions(*token, kSecondsPerRound);
   }
   return true;
+}
+
+auto GameState::AdvanceTime(int seconds) -> std::vector<Token> {
+  std::vector<Token> changed;
+  for (Token& token : tokens_) {
+    if (TickConditions(token, seconds)) {
+      changed.push_back(token);
+    }
+  }
+  return changed;
 }
 
 auto GameState::RebuildOrder(TokenId keep) -> void {

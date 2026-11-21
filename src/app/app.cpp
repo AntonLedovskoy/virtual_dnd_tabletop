@@ -190,6 +190,8 @@ auto ChatUsageText(ChatCommandError error) -> std::string_view {
       return strings::kRevealUsage;
     case ChatCommandError::kBadXp:
       return strings::kXpUsage;
+    case ChatCommandError::kBadTime:
+      return strings::kTimeUsage;
     case ChatCommandError::kNone:
       break;
   }
@@ -1793,18 +1795,25 @@ auto App::CanEditToken(const Token& token) const -> bool {
          SamePlayerName(token.owner, options_.player_name);
 }
 
+auto App::IsDm() const -> bool {
+  return options_.mode == AppMode::kHost || client_is_dm_;
+}
+
 auto App::OpenSheet() -> void {
   const Token* token = FindSelectedToken();
   if (token == nullptr) {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
+  // Игрок может открыть лист, но только для просмотра: правит лист DM.
   if (!CanEditToken(*token)) {
     view_.AddLocalLine(std::string(strings::kSheetNoAccess));
     return;
   }
   sheet_active_ = true;
+  sheet_read_only_ = !IsDm();
   conditions_active_ = false;
+  conditions_read_only_ = false;
   bestiary_active_ = false;
   sheet_token_id_ = token->id;
   sheet_field_ = SheetField::kAc;
@@ -1822,10 +1831,15 @@ auto App::OpenSheet() -> void {
 
 auto App::CloseSheet() -> void {
   sheet_active_ = false;
+  sheet_read_only_ = false;
   sheet_token_id_ = 0;
 }
 
 auto App::SaveSheet() -> void {
+  if (sheet_read_only_) {
+    CloseSheet();
+    return;
+  }
   int ac = 0;
   int speed = 0;
   int attack = 0;
@@ -1936,7 +1950,7 @@ auto App::RollInitiative() -> void {
 }
 
 auto App::HandleSheetTextInput(const char* text) -> void {
-  if (text == nullptr) {
+  if (text == nullptr || sheet_read_only_) {
     return;
   }
   if (sheet_field_ == SheetField::kAc || sheet_field_ == SheetField::kSpeed ||
@@ -1989,6 +2003,9 @@ auto App::HandleSheetTextInput(const char* text) -> void {
 auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
   if (key.key == SDLK_ESCAPE) {
     CloseSheet();
+    return;
+  }
+  if (sheet_read_only_) {
     return;
   }
   if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
@@ -2048,7 +2065,9 @@ auto App::OpenBestiary() -> void {
   }
   bestiary_active_ = true;
   sheet_active_ = false;
+  sheet_read_only_ = false;
   conditions_active_ = false;
+  conditions_read_only_ = false;
 }
 
 auto App::HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void {
@@ -2109,24 +2128,26 @@ auto App::OpenConditions() -> void {
     view_.AddLocalLine(std::string(strings::kSelectToken));
     return;
   }
-  if (!CanEditToken(*token)) {
-    view_.AddLocalLine(std::string(strings::kSheetNoAccess));
-    return;
-  }
   conditions_active_ = true;
+  conditions_read_only_ = !IsDm();
   conditions_token_id_ = token->id;
   conditions_draft_ = token->conditions;
   sheet_active_ = false;
+  sheet_read_only_ = false;
   bestiary_active_ = false;
 }
 
 auto App::CloseConditions() -> void {
   conditions_active_ = false;
+  conditions_read_only_ = false;
   conditions_token_id_ = 0;
   conditions_draft_.clear();
 }
 
-auto App::ToggleCondition(int index) -> void {
+auto App::ToggleCondition(int index, bool until_removed) -> void {
+  if (conditions_read_only_) {
+    return;
+  }
   const auto& standard = DefaultConditions();
   if (std::cmp_greater_equal(index, standard.size())) {
     return;
@@ -2137,7 +2158,8 @@ auto App::ToggleCondition(int index) -> void {
         return item.name == condition;
       });
   if (it == conditions_draft_.end()) {
-    conditions_draft_.emplace_back(condition, kDefaultConditionRounds);
+    conditions_draft_.emplace_back(
+        condition, until_removed ? 0 : kDefaultConditionSeconds);
   } else {
     conditions_draft_.erase(it);
   }
@@ -2150,6 +2172,9 @@ auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
     CloseConditions();
     return;
   }
+  if (conditions_read_only_) {
+    return;
+  }
   if (key.key == SDLK_0) {
     conditions_draft_.clear();
     SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
@@ -2157,7 +2182,8 @@ auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
     return;
   }
   if (key.key >= SDLK_1 && key.key <= SDLK_8) {
-    ToggleCondition(static_cast<int>(key.key - SDLK_1));
+    ToggleCondition(static_cast<int>(key.key - SDLK_1),
+                    (key.mod & SDL_KMOD_SHIFT) != 0);
   }
 }
 
@@ -2410,6 +2436,13 @@ auto App::SubmitChat() -> void {
         return;
       }
       SendCommand(RestParty{.long_rest = command.long_rest});
+      return;
+    case ChatCommandKind::kTime:
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine(std::string(strings::kTimeDmOnly));
+        return;
+      }
+      SendCommand(AdvanceTime{.seconds = command.value});
       return;
     case ChatCommandKind::kReveal:
     case ChatCommandKind::kUnreveal:
@@ -2878,7 +2911,9 @@ auto App::ApplyWorld(GameSnapshot snapshot, bool reset_encounter) -> void {
   aoe_mode_ = false;
   chat_.Close();
   sheet_active_ = false;
+  sheet_read_only_ = false;
   conditions_active_ = false;
+  conditions_read_only_ = false;
   bestiary_active_ = false;
   delete_token_.Clear();
   delete_scene_.Clear();
@@ -3036,7 +3071,9 @@ auto App::OpenScenes() -> void {
   scenes_status_.clear();
   bestiary_active_ = false;
   sheet_active_ = false;
+  sheet_read_only_ = false;
   conditions_active_ = false;
+  conditions_read_only_ = false;
   chat_.Close();
 }
 
@@ -3290,7 +3327,7 @@ auto App::Iterate() -> void {
     }
   }
 
-  const bool is_dm = options_.mode == AppMode::kHost || client_is_dm_;
+  const bool is_dm = IsDm();
   ClearBoard(renderer_);
   DrawBackground(view_.Map(), view_.Background());
   DrawGrid(renderer_, view_.Map(), camera_.cell_size, camera_.x, camera_.y);
@@ -3405,7 +3442,7 @@ auto App::Iterate() -> void {
       DrawSheetPanel(renderer_, text_.get(), *sheet_token, sheet_field_,
                      sheet_ac_, sheet_speed_, sheet_attack_, sheet_save_,
                      sheet_initiative_, sheet_temp_hp_, sheet_hit_die_,
-                     sheet_con_, sheet_damage_, sheet_notes_);
+                     sheet_con_, sheet_damage_, sheet_notes_, sheet_read_only_);
     }
   }
   if (bestiary_active_) {
@@ -3434,7 +3471,7 @@ auto App::Iterate() -> void {
       CloseConditions();
     } else {
       DrawConditionsPanel(renderer_, text_.get(), *condition_token,
-                          conditions_draft_);
+                          conditions_draft_, conditions_read_only_);
     }
   }
   // Клиент остаётся на последнем снапшоте, пока идёт переподключение; баннер

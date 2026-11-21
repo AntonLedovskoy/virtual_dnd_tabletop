@@ -98,6 +98,9 @@ class GameState {
   [[nodiscard]] auto StartEncounter() -> bool;
   auto EndEncounter() -> void;
   [[nodiscard]] auto NextTurn() -> bool;
+  // Прокручивает игровое время вне боя: срочные состояния всех токенов
+  // уменьшаются, истёкшие снимаются. Возвращает изменённые токены.
+  [[nodiscard]] auto AdvanceTime(int seconds) -> std::vector<Token>;
 
   // Шаблон области, который DM показывает столу.
   [[nodiscard]] auto Aoe() const -> const AoeTemplate& { return aoe_; }

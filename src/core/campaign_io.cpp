@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/byte_io.h"
+#include "core/conditions.h"
 #include "core/serialization.h"
 
 namespace dnd {
@@ -16,6 +17,8 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x43444E44;  // "DNDC" в little-endian
 constexpr std::uint32_t kMaxPayload = 256U * 1024U * 1024U;
+// До версии 12 длительность состояний хранилась в ходах.
+constexpr std::uint32_t kLegacyCampaignVersion = 11;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -125,7 +128,8 @@ auto ReadCampaign(const std::filesystem::path& path)
   if (!ReadU32(in, magic) || magic != kMagic) {
     return std::nullopt;
   }
-  if (!ReadU32(in, version) || version != kCampaignVersion) {
+  if (!ReadU32(in, version) ||
+      (version != kCampaignVersion && version != kLegacyCampaignVersion)) {
     return std::nullopt;
   }
   if (!ReadU32(in, payload_size) || payload_size == 0 ||
@@ -139,7 +143,16 @@ auto ReadCampaign(const std::filesystem::path& path)
   if (!in) {
     return std::nullopt;
   }
-  return DecodeCampaign(payload.data(), payload.size());
+  std::optional<Campaign> campaign =
+      DecodeCampaign(payload.data(), payload.size());
+  if (campaign.has_value() && version == kLegacyCampaignVersion) {
+    for (Scene& scene : campaign->scenes) {
+      for (Token& token : scene.snapshot.tokens) {
+        ConvertLegacyConditionRounds(token.conditions);
+      }
+    }
+  }
+  return campaign;
 }
 
 auto ListCampaignFiles(const std::filesystem::path& directory)

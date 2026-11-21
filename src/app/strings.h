@@ -31,7 +31,7 @@ inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, N — монстр, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
     "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /map | "
-    "/portrait | /reveal | /unreveal | /xp | /kick";
+    "/portrait | /reveal | /unreveal | /xp | /time | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 // Нижняя подсказка собирается из этих кусков по контексту (core/ui_hint):
 // общие клавиши, клавиши выбранного токена и добавки роли.
@@ -96,7 +96,7 @@ inline constexpr std::array<std::string_view, 15> kHelpCommon = {
     "Колесо над логом — прокрутка лога",
     "A — атака цели под курсором, Shift+A — преимущество, Ctrl+A — помеха",
     "S — спасбросок, I — инициатива",
-    "K — состояния, L — лист",
+    "K — состояния, L — лист (правит DM)",
     "M — дальность хода (5–10–5), V — цвет",
     "Команды: /damage N, /heal N",
     "/deathsave — при 0 HP",
@@ -106,7 +106,7 @@ inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "R — освободить своего персонажа",
     "/portrait файл.png — портрет своего персонажа",
 };
-inline constexpr std::array<std::string_view, 16> kHelpDm = {
+inline constexpr std::array<std::string_view, 17> kHelpDm = {
     "P / N — персонаж / монстр под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -123,6 +123,7 @@ inline constexpr std::array<std::string_view, 16> kHelpDm = {
     "/portrait файл.png — портрет выбранного токена",
     "/reveal и /unreveal — область под курсором, /reveal off — всё",
     "/xp 300 — опыт выбранному, /xp 300 all — всей партии",
+    "/time 10 — прокрутить 10 минут вне боя (s/m/h)",
 };
 
 inline constexpr std::string_view kMenuTitle = "DND";
@@ -195,7 +196,9 @@ inline constexpr std::string_view kSheetLevel = "Уровень";
 inline constexpr std::string_view kSheetXp = "Опыт";
 inline constexpr std::string_view kConditions = "Состояния";
 inline constexpr std::string_view kConditionsHint =
-    "1–8 — переключить (10 ходов) | 0 — очистить | Esc — закрыть";
+    "1–8 — 1 минута | Shift+1–8 — до снятия | 0 — очистить | Esc — закрыть";
+inline constexpr std::string_view kConditionsViewHint =
+    "Только просмотр, состояния меняет DM | Esc — закрыть";
 inline constexpr std::string_view kMovementLeft = "Осталось хода";
 inline constexpr std::string_view kMovementOf = "из";
 inline constexpr std::string_view kMovementFree =
@@ -204,6 +207,8 @@ inline constexpr std::string_view kSheetDamage = "Урон";
 inline constexpr std::string_view kSheetNotes = "Заметки";
 inline constexpr std::string_view kSheetHint =
     "Tab — поле | Enter — сохранить | Esc — закрыть";
+inline constexpr std::string_view kSheetViewHint =
+    "Только просмотр, лист правит DM | Esc — закрыть";
 inline constexpr std::string_view kSheetBadHitDie =
     "Кость хитов: 6, 8, 10 или 12";
 inline constexpr std::string_view kSheetBadCon =
@@ -263,6 +268,10 @@ inline constexpr std::string_view kRevealDmOnly =
 inline constexpr std::string_view kXpUsage =
     "Использование: /xp 300 или /xp 300 all";
 inline constexpr std::string_view kXpDmOnly = "Опыт начисляет только DM";
+inline constexpr std::string_view kTimeUsage =
+    "Использование: /time 10 (минуты), /time 30s или /time 2h";
+inline constexpr std::string_view kTimeDmOnly =
+    "Время вне боя двигает только DM";
 
 // Текст одного действия нижней подсказки. Какие действия показывать и в каком
 // порядке, решает core/ui_hint, поэтому строки остаются здесь.
@@ -320,12 +329,16 @@ inline constexpr std::string_view kXpDmOnly = "Опыт начисляет то�
       return kAoeHint;
     case Hint::kSheetKeys:
       return kSheetHint;
+    case Hint::kSheetViewKeys:
+      return kSheetViewHint;
     case Hint::kBestiaryKeys:
       return kBestiaryHint;
     case Hint::kScenesKeys:
       return kScenesHint;
     case Hint::kConditionsKeys:
       return kConditionsHint;
+    case Hint::kConditionsViewKeys:
+      return kConditionsViewHint;
   }
   return {};
 }

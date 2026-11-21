@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <system_error>
 
+#include "core/conditions.h"
 #include "core/dice.h"
 #include "core/image_name.h"
 #include "core/map_background.h"
@@ -53,6 +54,34 @@ auto ParseSignedNumber(std::string_view text, int& value) -> bool {
     return false;
   }
   value = parsed;
+  return true;
+}
+
+// /time: число с необязательным суффиксом s/m/h, по умолчанию минуты.
+auto ParseTimeSeconds(std::string_view text, int& seconds) -> bool {
+  if (text.empty()) {
+    return false;
+  }
+  int multiplier = kSecondsPerMinute;
+  const char suffix = text.back();
+  if (suffix == 's' || suffix == 'S') {
+    multiplier = 1;
+    text.remove_suffix(1);
+  } else if (suffix == 'm' || suffix == 'M') {
+    text.remove_suffix(1);
+  } else if (suffix == 'h' || suffix == 'H') {
+    multiplier = kSecondsPerHour;
+    text.remove_suffix(1);
+  }
+  int amount = 0;
+  if (!ParsePositiveNumber(text, amount)) {
+    return false;
+  }
+  const std::int64_t total = static_cast<std::int64_t>(amount) * multiplier;
+  if (total > kMaxConditionSeconds) {
+    return false;
+  }
+  seconds = static_cast<int>(total);
   return true;
 }
 
@@ -223,6 +252,14 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
   if (text == "/rest" || text == "/longrest") {
     command.kind = ChatCommandKind::kRest;
     command.long_rest = text == "/longrest";
+    return command;
+  }
+
+  if (MatchesCommand(text, "/time")) {
+    command.kind = ChatCommandKind::kTime;
+    if (!ParseTimeSeconds(CommandArgs(text, "/time"), command.value)) {
+      return reject(ChatCommandError::kBadTime);
+    }
     return command;
   }
 

@@ -33,10 +33,29 @@ constexpr int kMaxBonus = 100;
 constexpr int kMaxTempHp = 1000;
 constexpr std::size_t kMaxConditions = 16;
 constexpr std::size_t kMaxConditionLength = 32;
-constexpr int kMaxConditionRounds = 100;
 
 auto AuthorName(const std::string& actor) -> std::string {
   return actor.empty() ? "DM" : actor;
+}
+
+auto AppendIntChange(std::vector<std::string>& parts, const char* label,
+                     int before, int after) -> void {
+  if (before == after) {
+    return;
+  }
+  parts.emplace_back(std::string(label) + " " + std::to_string(before) + "→" +
+                     std::to_string(after));
+}
+
+auto JoinChanges(const std::vector<std::string>& parts) -> std::string {
+  std::string text;
+  for (const std::string& part : parts) {
+    if (!text.empty()) {
+      text += ", ";
+    }
+    text += part;
+  }
+  return text;
 }
 
 auto IsValidKind(TokenKind kind) -> bool {
@@ -118,9 +137,9 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
         } else if constexpr (std::is_same_v<T, SetTokenPortrait>) {
           return HandleSetTokenPortrait(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, UpdateTokenSheet>) {
-          return HandleUpdateTokenSheet(cmd, actor, can_control_all);
+          return HandleUpdateTokenSheet(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
-          return HandleUpdateTokenCombat(cmd, actor, can_control_all);
+          return HandleUpdateTokenCombat(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           return HandleStartEncounter(can_control_all);
         } else if constexpr (std::is_same_v<T, EndEncounter>) {
@@ -135,6 +154,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleHeal(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, RestParty>) {
           return HandleRest(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, AdvanceTime>) {
+          return HandleAdvanceTime(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, AoeDamage>) {
           return HandleAoeDamage(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, DeathSave>) {
@@ -664,9 +685,37 @@ auto GameServer::HandleRest(const RestParty& command, bool can_control_all)
       .line =
           LogLine{.author = "DM",
                   .text = command.long_rest
-                              ? "Длинный отдых: HP и состояния восстановлены"
-                              : "Короткий отдых: партия восстановила силы",
+                              ? "Длинный отдых (8 часов): HP и состояния "
+                                "восстановлены"
+                              : "Короткий отдых (1 час): партия восстановила "
+                                "силы",
                   .timestamp = CurrentTimeSeconds()},
+  });
+  return outcome;
+}
+
+auto GameServer::HandleAdvanceTime(const AdvanceTime& command,
+                                   bool can_control_all) -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "время двигает только DM"};
+  }
+  if (command.seconds <= 0 || command.seconds > kMaxConditionSeconds) {
+    return CommandOutcome{.reject_reason = "некорректный интервал времени"};
+  }
+  if (state_.EncounterState().active) {
+    return CommandOutcome{.reject_reason = "в бою время идёт ходами"};
+  }
+  const std::vector<Token> changed = state_.AdvanceTime(command.seconds);
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  for (const Token& token : changed) {
+    outcome.events.emplace_back(TokenUpdated{.token = token});
+  }
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = "DM",
+                      .text = "Прошло времени: " +
+                              FormatConditionDuration(command.seconds),
+                      .timestamp = CurrentTimeSeconds()},
   });
   return outcome;
 }
@@ -980,15 +1029,14 @@ auto GameServer::HandleSetTokenPortrait(const SetTokenPortrait& command,
 }
 
 auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
-                                        const std::string& actor,
                                         bool can_control_all)
     -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "лист редактирует только DM"};
+  }
   const Token* token = FindToken(command.id);
   if (token == nullptr) {
     return CommandOutcome{.reject_reason = "токен не найден"};
-  }
-  if (!CanControl(*token, actor, can_control_all)) {
-    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
   }
   if (command.ac <= 0 || command.ac > kMaxAc || command.speed < 0 ||
       command.speed > kMaxSpeed) {
@@ -1023,6 +1071,7 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
     return CommandOutcome{.reject_reason =
                               "некорректный модификатор Телосложения"};
   }
+  const Token before = *token;
   const std::optional<Token> updated = state_.UpdateTokenSheet(
       command.id, command.ac, command.speed, command.notes,
       command.attack_bonus, command.save_bonus, command.initiative_bonus,
@@ -1033,29 +1082,59 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  std::vector<std::string> changes;
+  AppendIntChange(changes, "КД", before.ac, command.ac);
+  AppendIntChange(changes, "скорость", before.speed, command.speed);
+  AppendIntChange(changes, "бонус атаки", before.attack_bonus,
+                  command.attack_bonus);
+  AppendIntChange(changes, "бонус спасброска", before.save_bonus,
+                  command.save_bonus);
+  AppendIntChange(changes, "бонус инициативы", before.initiative_bonus,
+                  command.initiative_bonus);
+  AppendIntChange(changes, "временные HP", before.temp_hp, command.temp_hp);
+  AppendIntChange(changes, "мод. Телосложения", before.con_modifier,
+                  command.con_modifier);
+  if (before.hit_die != command.hit_die) {
+    changes.emplace_back("кость хитов d" + std::to_string(command.hit_die));
+  }
+  if (before.damage != command.damage) {
+    changes.emplace_back("урон " +
+                         (command.damage.empty() ? "нет" : command.damage));
+  }
+  if (before.notes != command.notes) {
+    changes.emplace_back("заметки");
+  }
+  if (!changes.empty()) {
+    outcome.events.emplace_back(LogLineAdded{
+        .line =
+            LogLine{.author = "DM",
+                    .text = "Лист " + before.name + ": " + JoinChanges(changes),
+                    .timestamp = CurrentTimeSeconds()},
+    });
+  }
   return outcome;
 }
 
 auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
-                                         const std::string& actor,
                                          bool can_control_all)
     -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "состояния меняет только DM"};
+  }
   const Token* token = FindToken(command.id);
   if (token == nullptr) {
     return CommandOutcome{.reject_reason = "токен не найден"};
-  }
-  if (!CanControl(*token, actor, can_control_all)) {
-    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
   }
   if (command.conditions.size() > kMaxConditions) {
     return CommandOutcome{.reject_reason = "слишком много состояний"};
   }
   for (const Condition& condition : command.conditions) {
     if (condition.name.empty() || condition.name.size() > kMaxConditionLength ||
-        condition.rounds < 0 || condition.rounds > kMaxConditionRounds) {
+        condition.seconds < 0 || condition.seconds > kMaxConditionSeconds) {
       return CommandOutcome{.reject_reason = "некорректное состояние"};
     }
   }
+  const Token before = *token;
   const std::optional<Token> updated =
       state_.UpdateTokenCombat(command.id, command.conditions);
   if (!updated.has_value()) {
@@ -1064,6 +1143,34 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  std::vector<std::string> changes;
+  const auto has_condition = [](const std::vector<Condition>& list,
+                                const std::string& name) -> bool {
+    return std::ranges::any_of(list, [&name](const Condition& item) -> bool {
+      return item.name == name;
+    });
+  };
+  for (const Condition& condition : command.conditions) {
+    if (has_condition(before.conditions, condition.name)) {
+      continue;
+    }
+    std::string entry = "+" + condition.name;
+    entry += " (" + FormatConditionDuration(condition.seconds) + ")";
+    changes.push_back(std::move(entry));
+  }
+  for (const Condition& condition : before.conditions) {
+    if (!has_condition(command.conditions, condition.name)) {
+      changes.emplace_back("−" + condition.name);
+    }
+  }
+  if (!changes.empty()) {
+    outcome.events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = "DM",
+                        .text = "Состояния " + before.name + ": " +
+                                JoinChanges(changes),
+                        .timestamp = CurrentTimeSeconds()},
+    });
+  }
   return outcome;
 }
 

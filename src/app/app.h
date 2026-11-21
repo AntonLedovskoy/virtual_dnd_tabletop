@@ -139,13 +139,15 @@ class App {
   // Атака выбранным токеном по цели под курсором; сервер применяет урон.
   auto AttackTarget(bool advantage, bool disadvantage) -> void;
   [[nodiscard]] auto CanEditToken(const Token& token) const -> bool;
+  // DM ведёт стол: правит листы, состояния и прочие данные токенов.
+  [[nodiscard]] auto IsDm() const -> bool;
   auto OpenBestiary() -> void;
   auto HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void;
   // Ставит одного монстра или группу из 3–5 под курсором.
   auto SpawnBestiary(int index, bool group) -> void;
   auto OpenConditions() -> void;
   auto CloseConditions() -> void;
-  auto ToggleCondition(int index) -> void;
+  auto ToggleCondition(int index, bool until_removed) -> void;
   auto HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto ToggleAoeMode() -> void;
   auto ClearAoe() -> void;
@@ -257,6 +259,7 @@ class App {
   bool editor_panel_visible_ = true;
 
   bool sheet_active_ = false;
+  bool sheet_read_only_ = false;
   TokenId sheet_token_id_ = 0;
   SheetField sheet_field_ = SheetField::kAc;
   std::string sheet_ac_;
@@ -272,6 +275,7 @@ class App {
 
   bool bestiary_active_ = false;
   bool conditions_active_ = false;
+  bool conditions_read_only_ = false;
   TokenId conditions_token_id_ = 0;
   std::vector<Condition> conditions_draft_;
 

@@ -45,9 +45,11 @@ enum class Hint : std::uint8_t {
   kDmUndo,
   kAoeKeys,
   kSheetKeys,
+  kSheetViewKeys,
   kBestiaryKeys,
   kScenesKeys,
   kConditionsKeys,
+  kConditionsViewKeys,
 };
 
 // Что сейчас происходит за столом. Остальное подсказка не учитывает: ей

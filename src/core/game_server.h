@@ -104,6 +104,8 @@ class GameServer {
       -> CommandOutcome;
   [[nodiscard]] auto HandleRest(const RestParty& command, bool can_control_all)
       -> CommandOutcome;
+  [[nodiscard]] auto HandleAdvanceTime(const AdvanceTime& command,
+                                       bool can_control_all) -> CommandOutcome;
   [[nodiscard]] auto HandleAoeDamage(const AoeDamage& command,
                                      bool can_control_all) -> CommandOutcome;
   [[nodiscard]] auto HandleDeathSave(const DeathSave& command,
@@ -138,11 +140,9 @@ class GameServer {
                                             bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleUpdateTokenSheet(const UpdateTokenSheet& command,
-                                            const std::string& actor,
                                             bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleUpdateTokenCombat(const UpdateTokenCombat& command,
-                                             const std::string& actor,
                                              bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleStartEncounter(bool can_control_all)

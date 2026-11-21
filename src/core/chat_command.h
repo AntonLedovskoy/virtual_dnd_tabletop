@@ -31,6 +31,7 @@ enum class ChatCommandKind : std::uint8_t {
   kHeal,
   kDeathSave,
   kRest,
+  kTime,
   kReveal,
   kUnreveal,
   kRevealOff,
@@ -51,6 +52,7 @@ enum class ChatCommandError : std::uint8_t {
   kBadMap,
   kBadReveal,
   kBadXp,
+  kBadTime,
 };
 
 // Разобранная строка чата. При error != kNone команду отправлять нельзя,
@@ -61,7 +63,7 @@ struct ChatCommand {
   // kSay — текст сообщения, kRoll — выражение, kKick/kRename/kOwner — имя,
   // kSceneSwitch/kSceneRename — имя или «СТАРОЕ НОВОЕ», kMapImage — файл.
   std::string text;
-  // /maxhp N, /damage N, /heal N, /map opacity N, /map scale N.
+  // /maxhp N, /damage N, /heal N, /map opacity N, /map scale N, /time N.
   int value = 0;
   // Сложность спасброска из /aoe.
   int save_dc = 0;

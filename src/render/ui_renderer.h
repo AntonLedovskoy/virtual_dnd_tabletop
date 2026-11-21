@@ -81,24 +81,27 @@ enum class SheetField : std::uint8_t {
 };
 inline constexpr int kSheetFieldCount = 10;
 
-// Модальный лист персонажа или монстра.
+// Модальный лист персонажа или монстра. read_only — игрок только смотрит,
+// поля не подсвечиваются и не редактируются.
 auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token& token, SheetField active,
                     const std::string& ac, const std::string& speed,
                     const std::string& attack, const std::string& save,
                     const std::string& initiative, const std::string& temp_hp,
                     const std::string& hit_die, const std::string& con,
-                    const std::string& damage, const std::string& notes)
-    -> void;
+                    const std::string& damage, const std::string& notes,
+                    bool read_only) -> void;
 
 // Модальный список встроенного бестиария.
 auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
                        const std::vector<MonsterTemplate>& bestiary) -> void;
 
-// Модальный список состояний выбранного токена.
+// Модальный список состояний выбранного токена. read_only — игрок только
+// смотрит, состояния назначает и снимает DM.
 auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
-                         const std::vector<Condition>& conditions) -> void;
+                         const std::vector<Condition>& conditions,
+                         bool read_only) -> void;
 
 // Модальный список сцен кампании для DM: имя, заметка, активная и выбранная.
 // edit_label непустой, когда DM правит имя или заметку; status — сообщение

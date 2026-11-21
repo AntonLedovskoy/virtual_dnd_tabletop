@@ -153,10 +153,17 @@ struct HealToken {
   int amount = 1;
 };
 
-// Только DM: отдых партии. Короткий восстанавливает половину максимума,
-// длинный — все HP и снимает состояния и временные HP.
+// Только DM: отдых партии. Короткий (1 час) восстанавливает половину
+// максимума, длинный (8 часов) — все HP и снимает состояния и временные HP.
+// Отдых двигает игровое время, поэтому срочные состояния истекают.
 struct RestParty {
   bool long_rest = false;
+};
+
+// Только DM и только вне боя: прокрутить игровое время. Срочные состояния
+// всех токенов уменьшаются на seconds, истёкшие снимаются.
+struct AdvanceTime {
+  int seconds = 0;
 };
 
 // Только DM: урон по токенам под текущим шаблоном области. Спасбросок
@@ -220,12 +227,14 @@ struct HideArea {
 };
 struct ClearRevealed {};
 
-using Command = std::variant<
-    MoveToken, Say, RollDice, RollExpression, AddToken, RemoveToken, SetTokenHp,
-    SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner, RenameToken,
-    SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
-    StartEncounter, EndEncounter, NextTurn, SetAoe, AttackToken, DamageToken,
-    HealToken, RestParty, AoeDamage, DeathSave, PingAt, SetMapBackground,
-    SetTokenPortrait, RevealArea, HideArea, ClearRevealed, AwardXp>;
+using Command =
+    std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
+                 RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
+                 ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
+                 SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
+                 StartEncounter, EndEncounter, NextTurn, SetAoe, AttackToken,
+                 DamageToken, HealToken, RestParty, AdvanceTime, AoeDamage,
+                 DeathSave, PingAt, SetMapBackground, SetTokenPortrait,
+                 RevealArea, HideArea, ClearRevealed, AwardXp>;
 
 }  // namespace dnd

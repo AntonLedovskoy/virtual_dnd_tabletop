@@ -7,13 +7,14 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
     case HintMode::kAoe:
       return {Hint::kAoeKeys};
     case HintMode::kSheet:
-      return {Hint::kSheetKeys};
+      return {context.is_dm ? Hint::kSheetKeys : Hint::kSheetViewKeys};
     case HintMode::kBestiary:
       return {Hint::kBestiaryKeys};
     case HintMode::kScenes:
       return {Hint::kScenesKeys};
     case HintMode::kConditions:
-      return {Hint::kConditionsKeys};
+      return {context.is_dm ? Hint::kConditionsKeys
+                            : Hint::kConditionsViewKeys};
     case HintMode::kTable:
       break;
   }
@@ -32,11 +33,10 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
   if (!context.has_selection) {
     hints.push_back(Hint::kSelect);
   } else {
-    hints.insert(hints.end(),
-                 {Hint::kAttack, Hint::kSave, Hint::kMoveRange, Hint::kRuler});
+    hints.insert(hints.end(), {Hint::kAttack, Hint::kSave, Hint::kMoveRange,
+                               Hint::kRuler, Hint::kConditions});
     if (context.can_edit) {
-      hints.insert(hints.end(),
-                   {Hint::kSheet, Hint::kConditions, Hint::kColor});
+      hints.insert(hints.end(), {Hint::kSheet, Hint::kColor});
     }
     if (context.is_dm) {
       hints.insert(hints.end(), {Hint::kInitiative, Hint::kDmAdjust,

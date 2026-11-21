@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "core/byte_io.h"
+#include "core/conditions.h"
 #include "core/levels.h"
 #include "core/map_background.h"
 
@@ -24,7 +25,6 @@ constexpr std::uint32_t kMaxLogAuthor = 64;
 constexpr std::uint32_t kMaxNotes = 512;
 constexpr std::uint32_t kMaxConditions = 16;
 constexpr std::uint32_t kMaxConditionLength = 32;
-constexpr std::int32_t kMaxConditionRounds = 100;
 
 constexpr std::uint8_t kCommandMoveToken = 1;
 constexpr std::uint8_t kCommandSay = 2;
@@ -59,6 +59,7 @@ constexpr std::uint8_t kCommandClearRevealed = 30;
 constexpr std::uint8_t kCommandAwardXp = 31;
 constexpr std::uint8_t kCommandAttackToken = 32;
 constexpr std::uint8_t kCommandHideArea = 33;
+constexpr std::uint8_t kCommandAdvanceTime = 34;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -94,7 +95,7 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.U32(static_cast<std::uint32_t>(token.conditions.size()));
   for (const Condition& condition : token.conditions) {
     writer.String(condition.name);
-    writer.I32(condition.rounds);
+    writer.I32(condition.seconds);
   }
   writer.I32(token.movement_used);
   writer.I32(token.diagonal_parity);
@@ -149,12 +150,12 @@ auto ReadToken(ByteReader& reader, Token& token) -> bool {
   conditions.reserve(condition_count);
   for (std::uint32_t i = 0; i < condition_count; ++i) {
     std::string condition_name;
-    std::int32_t rounds = 0;
+    std::int32_t seconds = 0;
     if (!reader.String(condition_name, kMaxConditionLength) ||
-        !reader.I32(rounds) || rounds < 0 || rounds > kMaxConditionRounds) {
+        !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds) {
       return false;
     }
-    conditions.emplace_back(std::move(condition_name), rounds);
+    conditions.emplace_back(std::move(condition_name), seconds);
   }
   if (!reader.I32(movement_used) || !reader.I32(diagonal_parity) ||
       !reader.I32(death_successes) || !reader.I32(death_failures) ||
@@ -371,6 +372,15 @@ auto DecodeRestCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{RestParty{.long_rest = long_rest != 0}};
+}
+
+auto DecodeAdvanceTimeCommand(ByteReader& reader) -> std::optional<Command> {
+  std::int32_t seconds = 0;
+  if (!reader.I32(seconds) || !reader.Done() || seconds <= 0 ||
+      seconds > kMaxConditionSeconds) {
+    return std::nullopt;
+  }
+  return Command{AdvanceTime{.seconds = seconds}};
 }
 
 auto DecodeAoeDamageCommand(ByteReader& reader) -> std::optional<Command> {
@@ -692,12 +702,12 @@ auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
   conditions.reserve(count);
   for (std::uint32_t i = 0; i < count; ++i) {
     std::string condition_name;
-    std::int32_t rounds = 0;
+    std::int32_t seconds = 0;
     if (!reader.String(condition_name, kMaxConditionLength) ||
-        !reader.I32(rounds) || rounds < 0 || rounds > kMaxConditionRounds) {
+        !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds) {
       return std::nullopt;
     }
-    conditions.emplace_back(std::move(condition_name), rounds);
+    conditions.emplace_back(std::move(condition_name), seconds);
   }
   if (!reader.Done()) {
     return std::nullopt;
@@ -1115,7 +1125,7 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U32(static_cast<std::uint32_t>(cmd.conditions.size()));
           for (const Condition& condition : cmd.conditions) {
             writer.String(condition.name);
-            writer.I32(condition.rounds);
+            writer.I32(condition.seconds);
           }
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           writer.U8(kCommandStartEncounter);
@@ -1137,6 +1147,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, RestParty>) {
           writer.U8(kCommandRestParty);
           writer.U8(cmd.long_rest ? 1 : 0);
+        } else if constexpr (std::is_same_v<T, AdvanceTime>) {
+          writer.U8(kCommandAdvanceTime);
+          writer.I32(cmd.seconds);
         } else if constexpr (std::is_same_v<T, AoeDamage>) {
           writer.U8(kCommandAoeDamage);
           writer.String(cmd.expression);
@@ -1244,6 +1257,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeHealCommand(reader);
     case kCommandRestParty:
       return DecodeRestCommand(reader);
+    case kCommandAdvanceTime:
+      return DecodeAdvanceTimeCommand(reader);
     case kCommandAoeDamage:
       return DecodeAoeDamageCommand(reader);
     case kCommandDeathSave:

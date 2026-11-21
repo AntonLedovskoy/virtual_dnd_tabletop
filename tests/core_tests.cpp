@@ -476,6 +476,19 @@ auto TestClaimAndTokenAdmin() -> void {
   Expect(color.accepted, "the owner can set the colour");
   Expect(TokenOf(server.State(), 1).color == 0xC85046U, "the colour is stored");
 
+  // Лист и состояния правит только DM: игрок их лишь смотрит.
+  Expect(!server
+              .HandleCommand(dnd::UpdateTokenSheet{.id = 1,
+                                                   .ac = 16,
+                                                   .speed = 9,
+                                                   .notes = "Атака: +5, 1d8+3",
+                                                   .attack_bonus = 5,
+                                                   .save_bonus = 2,
+                                                   .damage = "1d8+3",
+                                                   .temp_hp = 4},
+                             "alice", false)
+              .accepted,
+         "players cannot edit the character sheet");
   const dnd::CommandOutcome sheet =
       server.HandleCommand(dnd::UpdateTokenSheet{.id = 1,
                                                  .ac = 16,
@@ -485,8 +498,8 @@ auto TestClaimAndTokenAdmin() -> void {
                                                  .save_bonus = 2,
                                                  .damage = "1d8+3",
                                                  .temp_hp = 4},
-                           "alice", false);
-  Expect(sheet.accepted, "the owner can edit the character sheet");
+                           "", true);
+  Expect(sheet.accepted, "the DM can edit the character sheet");
   Expect(TokenOf(server.State(), 1).ac == 16, "КД сохраняется");
   Expect(TokenOf(server.State(), 1).speed == 9, "speed is stored");
   Expect(TokenOf(server.State(), 1).notes == "Атака: +5, 1d8+3",
@@ -496,6 +509,12 @@ auto TestClaimAndTokenAdmin() -> void {
   Expect(TokenOf(server.State(), 1).save_bonus == 2, "save bonus is stored");
   Expect(TokenOf(server.State(), 1).damage == "1d8+3", "damage is stored");
   Expect(TokenOf(server.State(), 1).temp_hp == 4, "temporary HP are stored");
+  Expect(std::ranges::any_of(sheet.events,
+                             [](const dnd::Event& event) -> bool {
+                               return std::holds_alternative<dnd::LogLineAdded>(
+                                   event);
+                             }),
+         "sheet changes are written to the log");
   Expect(!server
               .HandleCommand(
                   dnd::UpdateTokenSheet{
@@ -507,25 +526,40 @@ auto TestClaimAndTokenAdmin() -> void {
       !server
            .HandleCommand(
                dnd::UpdateTokenSheet{.id = 1, .ac = 0, .speed = 9, .notes = ""},
-               "alice", false)
+               "", true)
            .accepted,
       "некорректный КД отвергается");
   Expect(!server
               .HandleCommand(
                   dnd::UpdateTokenSheet{
                       .id = 1, .ac = 12, .speed = 9, .temp_hp = 1001},
-                  "alice", false)
+                  "", true)
               .accepted,
          "too much temporary HP is rejected");
 
+  Expect(!server
+              .HandleCommand(
+                  dnd::UpdateTokenCombat{
+                      .id = 1,
+                      .conditions = {dnd::Condition{"сбит с ног"},
+                                     dnd::Condition{"отравлен"}}},
+                  "alice", false)
+              .accepted,
+         "players cannot update conditions");
   const dnd::CommandOutcome conditions = server.HandleCommand(
       dnd::UpdateTokenCombat{.id = 1,
                              .conditions = {dnd::Condition{"сбит с ног"},
                                             dnd::Condition{"отравлен"}}},
-      "alice", false);
-  Expect(conditions.accepted, "the owner can update conditions");
+      "", true);
+  Expect(conditions.accepted, "the DM can update conditions");
   Expect(TokenOf(server.State(), 1).conditions.size() == 2,
          "conditions are stored");
+  Expect(std::ranges::any_of(conditions.events,
+                             [](const dnd::Event& event) -> bool {
+                               return std::holds_alternative<dnd::LogLineAdded>(
+                                   event);
+                             }),
+         "condition changes are written to the log");
   Expect(!server
               .HandleCommand(
                   dnd::UpdateTokenCombat{
@@ -537,7 +571,7 @@ auto TestClaimAndTokenAdmin() -> void {
               .HandleCommand(
                   dnd::UpdateTokenCombat{.id = 1,
                                          .conditions = {dnd::Condition{""}}},
-                  "alice", false)
+                  "", true)
               .accepted,
          "empty condition is rejected");
 
@@ -574,7 +608,9 @@ auto TestDamageHealRest() -> void {
                          .hp = 0,
                          .max_hp = 10,
                          .conditions = {dnd::Condition{"без сознания"},
-                                        dnd::Condition{"отравлен"}},
+                                        dnd::Condition{"отравлен"},
+                                        dnd::Condition{"испуган",
+                                                       dnd::kSecondsPerHour}},
                          .kind = dnd::TokenKind::kPlayer,
                          .cell = CellAt(2, 2)},
           },
@@ -622,7 +658,8 @@ auto TestDamageHealRest() -> void {
   Expect(rested.hp == 5, "short rest restores half of max hp");
   Expect(rested.conditions.size() == 1 &&
              rested.conditions.front().name == "отравлен",
-         "short rest wakes the character but keeps other conditions");
+         "short rest wakes the character, expires timed conditions and keeps "
+         "permanent ones");
 
   Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
              .accepted,
@@ -969,11 +1006,12 @@ auto TestConditionDurationAndInitiative() -> void {
          "initiative rolls are written to the log");
 
   const dnd::CommandOutcome timed = server.HandleCommand(
-      dnd::UpdateTokenCombat{.id = 1,
-                             .conditions = {dnd::Condition{"отравлен", 1},
-                                            dnd::Condition{"без сознания"}}},
-      "alice", false);
-  Expect(timed.accepted, "the owner sets a timed condition");
+      dnd::UpdateTokenCombat{
+          .id = 1,
+          .conditions = {dnd::Condition{"отравлен", dnd::kSecondsPerRound},
+                         dnd::Condition{"без сознания"}}},
+      "", true);
+  Expect(timed.accepted, "the DM sets a timed condition");
   Expect(TokenOf(server.State(), 1).conditions.size() == 2,
          "timed and permanent conditions coexist");
 
@@ -987,6 +1025,64 @@ auto TestConditionDurationAndInitiative() -> void {
   Expect(ticked.conditions.size() == 1 &&
              ticked.conditions.front().name == "без сознания",
          "timed condition expires at the start of the token turn");
+
+  // Вне боя время двигает только DM, и только когда бой не идёт.
+  Expect(!server.HandleCommand(dnd::AdvanceTime{.seconds = 60}, "alice", false)
+              .accepted,
+         "players cannot advance time");
+  Expect(
+      !server.HandleCommand(dnd::AdvanceTime{.seconds = 60}, "", true).accepted,
+      "time does not advance by hand during combat");
+  Expect(server.HandleCommand(dnd::EndEncounter{}, "", true).accepted,
+         "the DM ends the encounter");
+  Expect(server
+             .HandleCommand(
+                 dnd::UpdateTokenCombat{
+                     .id = 1,
+                     .conditions = {dnd::Condition{"отравлен", 120},
+                                    dnd::Condition{"без сознания"}}},
+                 "", true)
+             .accepted,
+         "the DM sets long and permanent conditions");
+  const dnd::CommandOutcome step =
+      server.HandleCommand(dnd::AdvanceTime{.seconds = 60}, "", true);
+  Expect(step.accepted, "the DM advances time out of combat");
+  const dnd::Token walked = TokenOf(server.State(), 1);
+  Expect(
+      walked.conditions.size() == 2 && walked.conditions.front().seconds == 60,
+      "time advances timed conditions outside combat");
+  Expect(std::ranges::any_of(step.events,
+                             [](const dnd::Event& event) -> bool {
+                               return std::holds_alternative<dnd::LogLineAdded>(
+                                   event);
+                             }),
+         "advancing time is written to the log");
+  Expect(
+      !server.HandleCommand(dnd::AdvanceTime{.seconds = 0}, "", true).accepted,
+      "zero time is rejected");
+  Expect(
+      server.HandleCommand(dnd::AdvanceTime{.seconds = 60}, "", true).accepted,
+      "the DM advances time again");
+  const dnd::Token expired = TokenOf(server.State(), 1);
+  Expect(expired.conditions.size() == 1 &&
+             expired.conditions.front().name == "без сознания",
+         "expired conditions are removed after enough time");
+
+  Expect(dnd::FormatConditionDuration(0) == "до снятия",
+         "zero duration means until removed");
+  Expect(dnd::FormatConditionDuration(6) == "1 ход", "one round is one turn");
+  Expect(dnd::FormatConditionDuration(60) == "1 минута",
+         "a minute is formatted as a minute");
+  Expect(dnd::FormatConditionDuration(600) == "10 минут",
+         "long durations use minutes");
+  Expect(dnd::FormatConditionDuration(7200) == "2 часа",
+         "hours are used for long durations");
+
+  std::vector<dnd::Condition> legacy{dnd::Condition{"отравлен", 10},
+                                     dnd::Condition{"без сознания"}};
+  dnd::ConvertLegacyConditionRounds(legacy);
+  Expect(legacy[0].seconds == 60 && legacy[1].seconds == 0,
+         "legacy rounds migrate to seconds");
 }
 
 auto TestDiceExpression() -> void {
@@ -2895,6 +2991,19 @@ auto TestChatCommandParsing() -> void {
   const dnd::ChatCommand long_rest = parse("/longrest");
   Expect(long_rest.kind == ChatCommandKind::kRest && long_rest.long_rest,
          "/longrest is a long rest");
+
+  // /time: по умолчанию минуты, суффиксы s/m/h.
+  const dnd::ChatCommand minutes = parse("/time 10");
+  Expect(minutes.kind == ChatCommandKind::kTime && minutes.value == 600,
+         "/time defaults to minutes");
+  Expect(parse("/time 30s").value == 30, "/time accepts seconds");
+  Expect(parse("/time 2h").value == 7200, "/time accepts hours");
+  Expect(parse("/time").error == ChatCommandError::kBadTime,
+         "/time without an interval is an error");
+  Expect(parse("/time 10x").error == ChatCommandError::kBadTime,
+         "/time rejects unknown suffixes");
+  Expect(parse("/time 0").error == ChatCommandError::kBadTime,
+         "/time rejects zero");
 }
 
 auto TestSessionLog() -> void {
@@ -3509,6 +3618,15 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::RestParty>(*rest_decoded).long_rest,
          "rest command survives serialization");
 
+  const dnd::Command time{dnd::AdvanceTime{.seconds = 600}};
+  const std::vector<std::uint8_t> time_bytes = dnd::EncodeCommand(time);
+  const std::optional<dnd::Command> time_decoded =
+      dnd::DecodeCommand(time_bytes.data(), time_bytes.size());
+  Expect(time_decoded.has_value() &&
+             std::holds_alternative<dnd::AdvanceTime>(*time_decoded) &&
+             std::get<dnd::AdvanceTime>(*time_decoded).seconds == 600,
+         "advance time command survives serialization");
+
   const dnd::Event updated{dnd::TokenUpdated{
       .token = dnd::Token{.id = 3,
                           .name = "orc",
@@ -3561,7 +3679,7 @@ auto TestCommandEventSerialization() -> void {
                   .token.conditions.size() == 1 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)
                   .token.conditions.front()
-                  .rounds == 2 &&
+                  .seconds == 2 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.movement_used ==
               5 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)
@@ -4164,7 +4282,7 @@ auto TestBottomHints() -> void {
 
   // Игрок без выделения: общие клавиши и приглашение выбрать токен, без
   // клавиш токена и без добавок DM.
-  dnd::HintContext player;
+  const dnd::HintContext player;
   const std::vector<dnd::Hint> player_hints = dnd::BottomHints(player);
   Expect(!player_hints.empty() && player_hints[0] == dnd::Hint::kChat,
          "the bottom hint starts with chat");
@@ -4194,16 +4312,17 @@ auto TestBottomHints() -> void {
       has(own_hints, dnd::Hint::kRelease) && !has(own_hints, dnd::Hint::kClaim),
       "an owned character offers release, not claim");
 
-  // Чужой персонаж: смотреть можно, редактировать нельзя.
+  // Чужой персонаж: состояния видно, лист и правку — нет.
   dnd::HintContext foreign;
   foreign.has_selection = true;
   const std::vector<dnd::Hint> foreign_hints = dnd::BottomHints(foreign);
   Expect(has(foreign_hints, dnd::Hint::kAttack) &&
              has(foreign_hints, dnd::Hint::kMoveRange),
          "a foreign token still shows attack and reach");
-  Expect(!has(foreign_hints, dnd::Hint::kSheet) &&
-             !has(foreign_hints, dnd::Hint::kConditions),
-         "a foreign token hides editing keys");
+  Expect(has(foreign_hints, dnd::Hint::kConditions),
+         "a foreign token still shows conditions");
+  Expect(!has(foreign_hints, dnd::Hint::kSheet),
+         "a foreign token hides the sheet key");
 
   // Свободный персонаж игроку без своего: забрать.
   dnd::HintContext claimable;
@@ -4246,9 +4365,22 @@ auto TestBottomHints() -> void {
          "the area template shows only its own keys");
   dnd::HintContext sheet;
   sheet.mode = dnd::HintMode::kSheet;
+  Expect(dnd::BottomHints(sheet) ==
+             std::vector<dnd::Hint>{dnd::Hint::kSheetViewKeys},
+         "a player's sheet shows only view keys");
+  sheet.is_dm = true;
   Expect(
       dnd::BottomHints(sheet) == std::vector<dnd::Hint>{dnd::Hint::kSheetKeys},
-      "the sheet shows only its own keys");
+      "the DM's sheet shows editing keys");
+  dnd::HintContext conditions;
+  conditions.mode = dnd::HintMode::kConditions;
+  Expect(dnd::BottomHints(conditions) ==
+             std::vector<dnd::Hint>{dnd::Hint::kConditionsViewKeys},
+         "a player's conditions show only view keys");
+  conditions.is_dm = true;
+  Expect(dnd::BottomHints(conditions) ==
+             std::vector<dnd::Hint>{dnd::Hint::kConditionsKeys},
+         "the DM's conditions show editing keys");
   dnd::HintContext scenes;
   scenes.mode = dnd::HintMode::kScenes;
   Expect(dnd::BottomHints(scenes) ==

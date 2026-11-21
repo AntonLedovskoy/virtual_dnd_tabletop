@@ -346,9 +346,9 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
         condition_line += ", ";
       }
       condition_line += token->conditions[i].name;
-      if (token->conditions[i].rounds > 0) {
+      if (token->conditions[i].seconds > 0) {
         condition_line +=
-            " (" + std::to_string(token->conditions[i].rounds) + ")";
+            " (" + FormatConditionDuration(token->conditions[i].seconds) + ")";
       }
     }
     lines.push_back(std::move(condition_line));
@@ -583,8 +583,8 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& attack, const std::string& save,
                     const std::string& initiative, const std::string& temp_hp,
                     const std::string& hit_die, const std::string& con,
-                    const std::string& damage, const std::string& notes)
-    -> void {
+                    const std::string& damage, const std::string& notes,
+                    bool read_only) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -631,31 +631,32 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   const SDL_FRect damage_field{left, y + 354.0F, content_width, 40.0F};
   const SDL_FRect notes_field{left, y + 434.0F, content_width, 40.0F};
 
+  const bool editing = !read_only;
   DrawModalField(renderer, text, ac_field, std::string(strings::kSheetAc), ac,
-                 active == SheetField::kAc);
+                 editing && active == SheetField::kAc);
   DrawModalField(renderer, text, speed_field, std::string(strings::kSheetSpeed),
-                 speed, active == SheetField::kSpeed);
+                 speed, editing && active == SheetField::kSpeed);
   DrawModalField(renderer, text, initiative_field,
                  std::string(strings::kSheetInitiative), initiative,
-                 active == SheetField::kInitiative);
+                 editing && active == SheetField::kInitiative);
   DrawModalField(renderer, text, attack_field,
                  std::string(strings::kSheetAttack), attack,
-                 active == SheetField::kAttack);
+                 editing && active == SheetField::kAttack);
   DrawModalField(renderer, text, save_field, std::string(strings::kSheetSave),
-                 save, active == SheetField::kSave);
+                 save, editing && active == SheetField::kSave);
   DrawModalField(renderer, text, temp_hp_field,
                  std::string(strings::kSheetTempHp), temp_hp,
-                 active == SheetField::kTempHp);
+                 editing && active == SheetField::kTempHp);
   DrawModalField(renderer, text, hit_die_field,
                  std::string(strings::kSheetHitDie), hit_die,
-                 active == SheetField::kHitDie);
+                 editing && active == SheetField::kHitDie);
   DrawModalField(renderer, text, con_field, std::string(strings::kSheetCon),
-                 con, active == SheetField::kCon);
+                 con, editing && active == SheetField::kCon);
   DrawModalField(renderer, text, damage_field,
                  std::string(strings::kSheetDamage), damage,
-                 active == SheetField::kDamage);
+                 editing && active == SheetField::kDamage);
   DrawModalField(renderer, text, notes_field, std::string(strings::kSheetNotes),
-                 notes, active == SheetField::kNotes);
+                 notes, editing && active == SheetField::kNotes);
 
   // Справа от кости хитов видно, что даст следующий уровень: мастерство уже
   // включено в итоговые бонусы листа, поэтому показан только справочно.
@@ -674,8 +675,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                kHintText, 174.0F);
   }
 
-  text->Draw(std::string(strings::kSheetHint), left, y + height - 30.0F,
-             kHintText, content_width);
+  text->Draw(
+      std::string(read_only ? strings::kSheetViewHint : strings::kSheetHint),
+      left, y + height - 30.0F, kHintText, content_width);
 }
 
 auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
@@ -721,7 +723,8 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
 
 auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
-                         const std::vector<Condition>& conditions) -> void {
+                         const std::vector<Condition>& conditions,
+                         bool read_only) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -756,17 +759,21 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
           return item.name == standard[i];
         });
     const bool active = found != conditions.end();
-    std::string line =
-        std::to_string(i + 1) + ". " + (active ? "[x] " : "[ ] ") + standard[i];
-    if (active && found->rounds > 0) {
-      line += " (" + std::to_string(found->rounds) + ")";
+    std::string line;
+    if (!read_only) {
+      line = std::to_string(i + 1) + ". ";
+    }
+    line += (active ? "[x] " : "[ ] ") + standard[i];
+    if (active) {
+      line += " (" + FormatConditionDuration(found->seconds) + ")";
     }
     text->Draw(line, left, cursor_y, active ? kAuthorText : kLogText,
                content_width);
     cursor_y += text->LineHeight() + 2.0F;
   }
-  text->Draw(std::string(strings::kConditionsHint), left, y + height - 30.0F,
-             kHintText, content_width);
+  text->Draw(std::string(read_only ? strings::kConditionsViewHint
+                                   : strings::kConditionsHint),
+             left, y + height - 30.0F, kHintText, content_width);
 }
 
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,

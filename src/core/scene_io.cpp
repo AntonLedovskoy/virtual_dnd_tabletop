@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/byte_io.h"
+#include "core/conditions.h"
 #include "core/serialization.h"
 
 namespace dnd {
@@ -13,6 +14,8 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x53444E44;  // "DNDS" в little-endian
 constexpr std::uint32_t kMaxPayload = 64U * 1024U * 1024U;
+// До версии 24 длительность состояний хранилась в ходах.
+constexpr std::uint32_t kLegacySaveVersion = 23;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -65,7 +68,8 @@ auto ReadSnapshot(const std::filesystem::path& path)
   if (!ReadU32(in, magic) || magic != kMagic) {
     return std::nullopt;
   }
-  if (!ReadU32(in, version) || version != kSaveVersion) {
+  if (!ReadU32(in, version) ||
+      (version != kSaveVersion && version != kLegacySaveVersion)) {
     return std::nullopt;
   }
   if (!ReadU32(in, payload_size) || payload_size == 0 ||
@@ -79,7 +83,14 @@ auto ReadSnapshot(const std::filesystem::path& path)
   if (!in) {
     return std::nullopt;
   }
-  return DecodeSnapshot(payload.data(), payload.size());
+  std::optional<GameSnapshot> snapshot =
+      DecodeSnapshot(payload.data(), payload.size());
+  if (snapshot.has_value() && version == kLegacySaveVersion) {
+    for (Token& token : snapshot->tokens) {
+      ConvertLegacyConditionRounds(token.conditions);
+    }
+  }
+  return snapshot;
 }
 
 }  // namespace dnd
