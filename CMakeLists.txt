@@ -143,12 +143,18 @@ endif()
 add_executable(${PROJECT_NAME}
   src/main.cpp
   src/app/app.cpp
+  src/app/file_log.cpp
   src/render/editor_renderer.cpp
   src/render/grid_renderer.cpp
   src/render/menu_renderer.cpp
   src/render/text_renderer.cpp
   src/render/ui_renderer.cpp
 )
+
+# GUI-сборка без окна консоли: диагностика идёт в dnd.log рядом с .exe.
+if(WIN32)
+  set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE SDL_MAIN_USE_CALLBACKS)
 target_compile_options(${PROJECT_NAME} PRIVATE ${DND_WARNINGS})

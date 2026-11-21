@@ -16,6 +16,7 @@ Old rules appear only as a deliberate note in `PLAN.md`.
 - Windows: `.\build.bat` (debug default). `-p debug|release|relwithdebinfo|minsize`, `-c` reconfigure, `-j N` jobs, `-t`/`--tidy` runs `clang-tidy` on our `.cpp`, fails on any finding.
 - `build.bat` runs `build.sh` in MSYS2 UCRT64 (`C:\msys64` or `%MSYS2_ROOT%`); never run `build.sh` from PowerShell.
 - Binaries in `.build/<profile>/`, e.g. `.build/debug/dnd.exe`.
+- `dnd.exe` — GUI-подсистема без окна консоли: `SDL_Log` дописывается в `dnd.log` рядом с `.exe` (`src/app/file_log.h`), а `--help` и ошибка запуска показываются диалогом. Тесты остаются консольными.
 - First configure fetches SDL3, SDL3_ttf, SDL3_image via FetchContent (network, minutes); `.build/<profile>` reused unless `-c`.
 - Our targets: `-Wall -Wextra -Wpedantic`; deps use own flags; new warnings in our code = error.
 - All tests: `ctest --test-dir .build/debug --output-on-failure`; one suite: `-R core_tests` or `.build/debug/dnd_core_tests.exe`.
