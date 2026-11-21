@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <type_traits>
@@ -97,6 +98,8 @@ auto GameServer::Reset(GameSnapshot snapshot) -> void {
   const std::vector<FogRecord> records = std::move(snapshot.fog);
   snapshot.fog.clear();
   state_ = GameState(std::move(snapshot));
+  // Мир заменён: старые слепки вида описывают другую карту и токены.
+  sent_views_.clear();
   RestoreFog(records);
   RecomputeFog();
 }
@@ -1571,6 +1574,83 @@ auto GameServer::EventVisibleTo(const Event& event,
         return true;
       },
       event);
+}
+
+auto GameServer::TakeViewDelta(std::string_view actor) -> std::vector<Event> {
+  std::vector<Event> events;
+
+  std::vector<TokenId> visible;
+  visible.reserve(state_.Tokens().size());
+  for (const Token& token : state_.Tokens()) {
+    if (IsVisibleTo(actor, token.cell)) {
+      visible.push_back(token.id);
+    }
+  }
+  std::ranges::sort(visible);
+
+  // Слепка может не быть (пир только подключился и ещё не получал полный
+  // вид): тогда дельта — это весь видимый мир, а не потеря токенов.
+  SentView& sent = sent_views_[PlayerNameKey(actor)];
+  std::vector<TokenId> appeared;
+  std::ranges::set_difference(visible, sent.tokens,
+                              std::back_inserter(appeared));
+  for (const TokenId id : appeared) {
+    if (const Token* token = FindToken(id); token != nullptr) {
+      events.emplace_back(TokenAdded{.token = *token});
+    }
+  }
+  std::vector<TokenId> vanished;
+  std::ranges::set_difference(sent.tokens, visible,
+                              std::back_inserter(vanished));
+  for (const TokenId id : vanished) {
+    events.emplace_back(TokenRemoved{.id = id});
+  }
+  sent.tokens = std::move(visible);
+
+  FogSnapshot fog = FogState(actor);
+  const std::size_t cells = fog.visible.size();
+  const bool same_map =
+      sent.fog.width == fog.width && sent.fog.height == fog.height &&
+      sent.fog.visible.size() == cells && sent.fog.explored.size() == cells &&
+      fog.explored.size() == cells;
+  const int width = std::max(fog.width, 1);
+  const auto fog_cell = [&fog, width](std::size_t index) -> FogCell {
+    return FogCell{
+        .cell =
+            Cell{
+                .x = static_cast<int>(index % static_cast<std::size_t>(width)),
+                .y = static_cast<int>(index / static_cast<std::size_t>(width))},
+        .visible = fog.visible[index] != 0,
+        .explored = fog.explored[index] != 0,
+    };
+  };
+  FogChanged changed;
+  for (std::size_t i = 0; i < cells; ++i) {
+    // Другая карта: точечная правка невозможна, отдаём туман целиком.
+    if (same_map && sent.fog.visible[i] == fog.visible[i] &&
+        sent.fog.explored[i] == fog.explored[i]) {
+      continue;
+    }
+    changed.cells.push_back(fog_cell(i));
+  }
+  if (!changed.cells.empty()) {
+    events.emplace_back(std::move(changed));
+  }
+  sent.fog = std::move(fog);
+  return events;
+}
+
+auto GameServer::MarkViewSent(std::string_view actor) -> void {
+  SentView view;
+  view.fog = FogState(actor);
+  view.tokens.reserve(state_.Tokens().size());
+  for (const Token& token : state_.Tokens()) {
+    if (IsVisibleTo(actor, token.cell)) {
+      view.tokens.push_back(token.id);
+    }
+  }
+  std::ranges::sort(view.tokens);
+  sent_views_.insert_or_assign(PlayerNameKey(actor), std::move(view));
 }
 
 auto GameServer::FindToken(TokenId id) const -> const Token* {

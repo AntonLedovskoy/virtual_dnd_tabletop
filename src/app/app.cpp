@@ -2641,13 +2641,14 @@ auto App::ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void {
       }
     }
   }
-  // После изменения мира каждому игроку нужен свой срез: туман у всех разный,
-  // поэтому один общий ViewUpdated больше не подходит.
+  // После изменения мира каждому игроку уходит только его дельта: токены,
+  // вошедшие в туман или ушедшие из него, и изменённые клетки тумана.
+  // Полный снимок остаётся для входа и смены сцены.
   if (world_changed) {
     for (const PeerInfo& peer : peers) {
-      net_server_.SendEvent(
-          peer.id, ViewUpdated{.snapshot = server_.ClientSnapshot(peer.name),
-                               .fog = server_.FogState(peer.name)});
+      for (const Event& event : server_.TakeViewDelta(peer.name)) {
+        net_server_.SendEvent(peer.id, event);
+      }
     }
   }
 }
@@ -2682,6 +2683,8 @@ auto App::PumpHost() -> void {
         peer.peer, Welcome{.snapshot = server_.ClientSnapshot(peer.name),
                            .fog = server_.FogState(peer.name),
                            .is_dm = false});
+    // Полный вид уже отправлен: дальше игрок получает только изменения.
+    server_.MarkViewSent(peer.name);
   }
   for (const PeerCommand& peer_command : commands) {
     ApplyOutcome(peer_command.peer,
@@ -2961,6 +2964,7 @@ auto App::BroadcastWorld() -> void {
     net_server_.SendEvent(
         peer.id, ViewUpdated{.snapshot = server_.ClientSnapshot(peer.name),
                              .fog = server_.FogState(peer.name)});
+    server_.MarkViewSent(peer.name);
   }
 }
 

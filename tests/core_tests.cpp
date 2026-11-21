@@ -230,6 +230,16 @@ auto TestFogExploredMemory() -> void {
 
   fog.Recompute(map, {CellAt(99, 99)}, 5);
   Expect(!fog.IsVisible(CellAt(5, 0)), "out-of-map observers reveal nothing");
+
+  // Точечная правка после FogChanged: ровно полученное состояние.
+  fog.SetCell(CellAt(5, 0), true, true);
+  Expect(fog.IsVisible(CellAt(5, 0)) && fog.IsExplored(CellAt(5, 0)),
+         "a cell patch makes a cell visible and explored");
+  fog.SetCell(CellAt(5, 0), false, true);
+  Expect(!fog.IsVisible(CellAt(5, 0)) && fog.IsExplored(CellAt(5, 0)),
+         "a cell patch can hide an explored cell");
+  fog.SetCell(CellAt(99, 99), true, true);
+  Expect(!fog.IsVisible(CellAt(99, 99)), "patches outside the map are ignored");
 }
 
 auto TestServerVisibility() -> void {
@@ -1507,6 +1517,141 @@ auto TestSeparateVisibility() -> void {
   Expect(FogExploredAt(server.FogState("alice"), 15, 0),
          "cells seen through a reveal stay explored");
   Expect(!snapshot_has("alice", 3), "the goblin is hidden again");
+}
+
+auto TestIncrementalView() -> void {
+  const dnd::GridMap map(20, 5);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 2)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(19, 4)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 3, 5);
+  dnd::ClientView view;
+  view.Reset(server.ClientSnapshot("alice"), server.FogState("alice"));
+  // Так хост отмечает только что отправленный Welcome.
+  server.MarkViewSent("alice");
+
+  const auto apply_delta =
+      [&server, &view](std::string_view actor) -> std::vector<dnd::Event> {
+    std::vector<dnd::Event> events = server.TakeViewDelta(actor);
+    for (const dnd::Event& event : events) {
+      view.Apply(event);
+    }
+    return events;
+  };
+  const auto same_fog = [](const dnd::FogSnapshot& left,
+                           const dnd::FogSnapshot& right) -> bool {
+    return left.width == right.width && left.height == right.height &&
+           left.visible == right.visible && left.explored == right.explored;
+  };
+
+  // Мир не менялся: дельта пустая, полный снимок зря не ходит.
+  Expect(apply_delta("alice").empty(), "a quiet world sends no view delta");
+
+  // Монстр входит в поле зрения — приходит только его токен.
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 2, .target = CellAt(2, 2)}, "",
+                            true)
+             .accepted,
+         "the DM moves the goblin into sight");
+  const std::vector<dnd::Event> appeared = apply_delta("alice");
+  Expect(appeared.size() == 1 &&
+             std::holds_alternative<dnd::TokenAdded>(appeared.front()) &&
+             std::get<dnd::TokenAdded>(appeared.front()).token.id == 2,
+         "a token entering sight arrives as TokenAdded");
+  Expect(!std::ranges::any_of(appeared,
+                              [](const dnd::Event& event) -> bool {
+                                return std::holds_alternative<dnd::ViewUpdated>(
+                                    event);
+                              }),
+         "the delta never carries the full world");
+  Expect(view.Tokens().size() == 2 && view.Fog().IsVisible(CellAt(2, 2)),
+         "the client shows the token and its cell");
+
+  // Уход из поля зрения — только удаление, туман не менялся.
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 2, .target = CellAt(19, 4)},
+                            "", true)
+             .accepted,
+         "the DM moves the goblin away");
+  const std::vector<dnd::Event> left = apply_delta("alice");
+  Expect(left.size() == 1 &&
+             std::holds_alternative<dnd::TokenRemoved>(left.front()) &&
+             std::get<dnd::TokenRemoved>(left.front()).id == 2,
+         "a hidden token leaves as TokenRemoved");
+  Expect(view.Tokens().size() == 1, "the client hides the token again");
+
+  // Ход персонажа: приходят только клетки, где туман реально изменился.
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 2)}, "",
+                            true)
+             .accepted,
+         "the character steps aside");
+  const std::vector<dnd::Event> walked = apply_delta("alice");
+  std::size_t changed_cells = 0;
+  for (const dnd::Event& event : walked) {
+    if (const auto* fog = std::get_if<dnd::FogChanged>(&event);
+        fog != nullptr) {
+      changed_cells += fog->cells.size();
+    }
+  }
+  Expect(changed_cells > 0, "movement delivers changed fog cells");
+  // Карта 20x5 — сто клеток; сдвиг на одну клетку трогает её край.
+  Expect(changed_cells < 20, "only the edge of the fog is resent");
+  Expect(same_fog(view.Fog().Snapshot(), server.FogState("alice")),
+         "the client fog matches the server after the delta");
+
+  // Ручное открытие DM-а тоже приходит дельтой: туман плюс токен в нём.
+  Expect(server
+             .HandleCommand(dnd::RevealArea{.cell = CellAt(19, 4), .radius = 1},
+                            "", true)
+             .accepted,
+         "the DM reveals the far corner");
+  const std::vector<dnd::Event> revealed = apply_delta("alice");
+  Expect(std::ranges::any_of(revealed,
+                             [](const dnd::Event& event) -> bool {
+                               return std::holds_alternative<dnd::TokenAdded>(
+                                   event);
+                             }),
+         "the revealed token is sent as TokenAdded");
+  Expect(std::ranges::any_of(revealed,
+                             [](const dnd::Event& event) -> bool {
+                               return std::holds_alternative<dnd::FogChanged>(
+                                   event);
+                             }),
+         "the reveal is sent as fog cells");
+  Expect(view.Tokens().size() == 2 && view.Fog().IsVisible(CellAt(19, 4)),
+         "the client sees the revealed corner");
+  Expect(same_fog(view.Fog().Snapshot(), server.FogState("alice")),
+         "the reveal keeps both fog copies in sync");
+
+  // Снятие открытий: токен снова скрыт, клетка остаётся разведанной.
+  Expect(server.HandleCommand(dnd::ClearRevealed{}, "", true).accepted,
+         "the DM clears the reveals");
+  apply_delta("alice");
+  Expect(view.Tokens().size() == 1, "the token is hidden again");
+  Expect(!view.Fog().IsVisible(CellAt(19, 4)) &&
+             view.Fog().IsExplored(CellAt(19, 4)),
+         "a cell seen through a reveal stays explored on the client");
+  Expect(same_fog(view.Fog().Snapshot(), server.FogState("alice")),
+         "the cleared reveal keeps both fog copies in sync");
+
+  // Слепок после полной пересылки: следующая дельта снова пустая.
+  server.MarkViewSent("alice");
+  Expect(apply_delta("alice").empty(),
+         "marking the full view resets the delta");
 }
 
 auto TestRevealedAreas() -> void {
@@ -4590,6 +4735,7 @@ auto main() -> int {
     TestDynamicFogObservers();
     TestFogSurvivesReset();
     TestSeparateVisibility();
+    TestIncrementalView();
     TestRevealedAreas();
     TestFogMovement();
     TestLevels();

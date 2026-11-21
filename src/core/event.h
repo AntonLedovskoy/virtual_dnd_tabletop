@@ -72,9 +72,22 @@ struct RevealedUpdated {
   std::vector<Cell> cells;
 };
 
+// Одна клетка тумана, которая изменилась для игрока.
+struct FogCell {
+  Cell cell{};
+  bool visible = false;
+  bool explored = false;
+};
+
+// Точечное обновление тумана: только клетки, у которых поменялись видимость
+// или разведанность. Полный ViewUpdated остаётся для входа и смены мира.
+struct FogChanged {
+  std::vector<FogCell> cells;
+};
+
 using Event =
     std::variant<TokenMoved, ViewUpdated, LogLineAdded, TokenAdded,
                  TokenRemoved, TokenUpdated, EncounterUpdated, AoeUpdated,
-                 PingMarker, MapBackgroundUpdated, RevealedUpdated>;
+                 PingMarker, MapBackgroundUpdated, RevealedUpdated, FogChanged>;
 
 }  // namespace dnd

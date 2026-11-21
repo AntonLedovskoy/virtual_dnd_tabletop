@@ -58,6 +58,14 @@ class GameServer {
   // Можно ли отправлять это событие конкретному игроку.
   [[nodiscard]] auto EventVisibleTo(const Event& event,
                                     std::string_view actor) const -> bool;
+
+  // Инкрементальная синхронизация вида: токены, которые вошли в поле зрения
+  // или ушли из него, и изменившиеся клетки тумана. Слепок «уже отправлено»
+  // обновляется здесь же, поэтому вызывать нужно один раз на отправку.
+  [[nodiscard]] auto TakeViewDelta(std::string_view actor)
+      -> std::vector<Event>;
+  // Игроку отправлен полный вид (вход, смена мира): дельта снова от нуля.
+  auto MarkViewSent(std::string_view actor) -> void;
   // Видит ли игрок клетку: собственный туман или ручное открытие DM.
   [[nodiscard]] auto IsVisibleTo(std::string_view actor, Cell cell) const
       -> bool;
@@ -179,6 +187,14 @@ class GameServer {
   // Туман на каждого владельца персонажа; ключ — PlayerNameKey игрока,
   // поэтому регистр в /owner и в имени подключившегося не важен.
   std::map<std::string, FogOfWar, std::less<>> fogs_;
+  // Что хост уже отправил игроку: видимые токены и его туман. По этому
+  // слепку считается дельта, поэтому полный снимок ходит только при входе
+  // и смене мира.
+  struct SentView {
+    std::vector<TokenId> tokens;
+    FogSnapshot fog;
+  };
+  std::map<std::string, SentView, std::less<>> sent_views_;
   // Обзор партии: его получает игрок, пока не выбрал персонажа.
   FogOfWar party_fog_;
   int sight_radius_;

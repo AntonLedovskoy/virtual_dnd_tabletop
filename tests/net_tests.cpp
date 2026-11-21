@@ -250,6 +250,32 @@ auto TestViewUpdateRoundtrip() -> void {
   }
 }
 
+auto TestFogChangedRoundtrip() -> void {
+  const dnd::Event event = dnd::FogChanged{
+      .cells =
+          {
+              dnd::FogCell{
+                  .cell = CellAt(1, 2), .visible = true, .explored = true},
+              dnd::FogCell{
+                  .cell = CellAt(4, 0), .visible = false, .explored = true},
+          },
+  };
+  const std::vector<std::uint8_t> frame = dnd::EncodeEventMessage(event);
+  const std::optional<dnd::Event> decoded =
+      dnd::DecodeEventMessage(frame.data(), frame.size());
+  Expect(decoded.has_value(), "fog delta decodes");
+  if (decoded.has_value()) {
+    Expect(std::holds_alternative<dnd::FogChanged>(*decoded),
+           "fog delta keeps its type");
+    const auto& fog = std::get<dnd::FogChanged>(*decoded);
+    Expect(fog.cells.size() == 2, "fog delta carries both cells");
+    Expect(fog.cells.front().cell == CellAt(1, 2) &&
+               fog.cells.front().visible && fog.cells.front().explored &&
+               !fog.cells.back().visible && fog.cells.back().explored,
+           "fog delta keeps cell flags");
+  }
+}
+
 auto TestPasswordAndRoster() -> void {
   dnd::NetServer server;
   Expect(server.Start(0, "secret"), "password server listens");
@@ -940,6 +966,7 @@ auto main() -> int {
   try {
     TestPing();
     TestViewUpdateRoundtrip();
+    TestFogChangedRoundtrip();
     TestPasswordAndRoster();
     TestPlayerNameValidation();
     TestVersionMismatchReject();

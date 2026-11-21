@@ -31,6 +31,10 @@ auto ClientView::Apply(const Event& event) -> void {
           }
         } else if constexpr (std::is_same_v<T, ViewUpdated>) {
           Reset(ev.snapshot, ev.fog);
+        } else if constexpr (std::is_same_v<T, FogChanged>) {
+          for (const FogCell& cell : ev.cells) {
+            fog_.SetCell(cell.cell, cell.visible, cell.explored);
+          }
         } else if constexpr (std::is_same_v<T, TokenAdded>) {
           if (FindToken(ev.token.id) == nullptr) {
             tokens_.push_back(ev.token);

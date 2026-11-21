@@ -110,6 +110,14 @@ auto FogOfWar::Reveal(const std::vector<Cell>& cells) -> void {
   }
 }
 
+auto FogOfWar::SetCell(Cell cell, bool visible, bool explored) -> void {
+  if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) {
+    return;
+  }
+  visible_[Index(cell)] = visible ? 1 : 0;
+  explored_[Index(cell)] = explored ? 1 : 0;
+}
+
 auto FogOfWar::Snapshot() const -> FogSnapshot {
   return FogSnapshot{
       .width = width_,

@@ -36,6 +36,11 @@ class FogOfWar {
   // от наблюдателей. Вызывается после Recompute, который чистит visible.
   auto Reveal(const std::vector<Cell>& cells) -> void;
 
+  // Точечная правка после FogChanged: клетка становится видимой/разведанной
+  // ровно в том состоянии, что пришло от сервера. Клетки вне карты
+  // игнорируются.
+  auto SetCell(Cell cell, bool visible, bool explored) -> void;
+
   [[nodiscard]] auto Snapshot() const -> FogSnapshot;
   auto Restore(const FogSnapshot& snapshot) -> void;
 

@@ -72,6 +72,7 @@ constexpr std::uint8_t kEventAoeUpdated = 8;
 constexpr std::uint8_t kEventPingMarker = 9;
 constexpr std::uint8_t kEventMapBackgroundUpdated = 10;
 constexpr std::uint8_t kEventRevealedUpdated = 11;
+constexpr std::uint8_t kEventFogChanged = 12;
 
 auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.U32(token.id);
@@ -777,6 +778,34 @@ auto DecodeRevealedUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   return Event{RevealedUpdated{.cells = std::move(cells)}};
 }
 
+auto DecodeFogChangedEvent(ByteReader& reader) -> std::optional<Event> {
+  std::uint32_t count = 0;
+  if (!reader.U32(count) || count > kMaxRevealedCells) {
+    return std::nullopt;
+  }
+  std::vector<FogCell> cells;
+  cells.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    Cell cell;
+    std::uint8_t flags = 0;
+    if (!ReadPosition(reader, cell) || cell.x < 0 || cell.y < 0 ||
+        std::cmp_greater_equal(cell.x, kMaxDimension) ||
+        std::cmp_greater_equal(cell.y, kMaxDimension) || !reader.U8(flags) ||
+        flags > 3) {
+      return std::nullopt;
+    }
+    cells.push_back(FogCell{
+        .cell = cell,
+        .visible = (flags & 1) != 0,
+        .explored = (flags & 2) != 0,
+    });
+  }
+  if (!reader.Done()) {
+    return std::nullopt;
+  }
+  return Event{FogChanged{.cells = std::move(cells)}};
+}
+
 auto DecodeEncounterUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   Encounter encounter;
   if (!ReadEncounter(reader, encounter) || !reader.Done()) {
@@ -1352,6 +1381,15 @@ auto EncodeEvent(const Event& event) -> std::vector<std::uint8_t> {
             writer.I32(cell.x);
             writer.I32(cell.y);
           }
+        } else if constexpr (std::is_same_v<T, FogChanged>) {
+          writer.U8(kEventFogChanged);
+          writer.U32(static_cast<std::uint32_t>(ev.cells.size()));
+          for (const FogCell& cell : ev.cells) {
+            writer.I32(cell.cell.x);
+            writer.I32(cell.cell.y);
+            writer.U8(static_cast<std::uint8_t>((cell.visible ? 1 : 0) |
+                                                (cell.explored ? 2 : 0)));
+          }
         }
       },
       event);
@@ -1388,6 +1426,8 @@ auto DecodeEvent(const std::uint8_t* data, std::size_t size)
       return DecodeMapBackgroundUpdatedEvent(reader);
     case kEventRevealedUpdated:
       return DecodeRevealedUpdatedEvent(reader);
+    case kEventFogChanged:
+      return DecodeFogChangedEvent(reader);
     default:
       return std::nullopt;
   }
