@@ -298,6 +298,7 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
 
   const std::string owner =
       token->owner.empty() ? std::string(strings::kFree) : token->owner;
+  const int level = LevelForXp(token->xp);
   std::vector<std::string> lines;
   lines.emplace_back(std::string(strings::kName) + ": " + token->name);
   lines.emplace_back(std::string(strings::kKind) + ": " +
@@ -311,9 +312,15 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   hp_line += "   " + std::string(strings::kInitiativeShort) + " " +
              std::to_string(token->initiative) + "   " +
-             std::string(strings::kLevelShort) + " " +
-             std::to_string(LevelForXp(token->xp));
+             std::string(strings::kLevelShort) + " " + std::to_string(level);
   lines.push_back(std::move(hp_line));
+  if (token->kind == TokenKind::kPlayer) {
+    std::string xp_line =
+        std::string(strings::kXpShort) + ": " + std::to_string(token->xp) + "/";
+    xp_line += level < kMaxLevel ? std::to_string(XpForLevel(level + 1))
+                                 : std::string(strings::kXpMax);
+    lines.push_back(std::move(xp_line));
+  }
   lines.emplace_back(std::string(strings::kSheetAc) + ": " +
                      std::to_string(token->ac) + "   " +
                      std::string(strings::kSheetSpeed) + ": " +
