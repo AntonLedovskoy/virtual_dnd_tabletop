@@ -132,3 +132,8 @@ virtual_dnd_tabletop [--menu] [--host] [--editor] [--port N]
 `dist/` exe, zip, `latest.json` и `notes.txt`. Релиз — аннотированный тег
 `vX.Y.Z` на чистом `master`, клиент читает манифест по стабильной ссылке
 `releases/latest/download/latest.json`.
+
+Сборка портативная: SDL3 и runtime MinGW слинкованы статически, в zip лежат
+только `virtual_dnd_tabletop.exe` и `assets/fonts/`, внешние DLL не нужны.
+`package.bat` проверяет это через `objdump` и не соберёт архив с зависимостью
+от `libstdc++-6.dll`, `libgcc_s_seh-1.dll` или `libwinpthread-1.dll`.

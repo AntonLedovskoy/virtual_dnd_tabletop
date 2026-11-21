@@ -444,8 +444,8 @@ DM-ом, лог читается как протокол боя.
 автообновление полное (скачивание exe, проверка sha256, подмена, перезапуск).
 
 Исходные условия: SDL3, SDL3_ttf и SDL3_image слинкованы статически
-(`SDL_STATIC ON`), `WIN32_EXECUTABLE TRUE` — на выходе один
-`virtual_dnd_tabletop.exe` без DLL и без консоли, установщик не нужен. Данные
+(`SDL_STATIC ON`), runtime MinGW — тоже, `WIN32_EXECUTABLE TRUE` — на выходе
+один `virtual_dnd_tabletop.exe` без DLL и без консоли, установщик не нужен. Данные
 стола лежат рядом с `.exe` (`SDL_GetBasePath()`): `savegame.bin`, `*.dndcamp`,
 `session.log`, подложки, портреты, `assets/fonts/DejaVuSans.ttf`. Значит
 обновление — подмена только `.exe`, папку игры трогать нельзя. Протокол
@@ -493,6 +493,11 @@ DM-ом, лог читается как протокол боя.
       `tools/package.sh`: release-сборка с `-c` → `dist/virtual_dnd_tabletop-<ver>/`
       → sha256 → `latest.json` → zip; собирает только с чистого тега,
       `--allow-dev` — проверка пайплайна.
+- [x] Runtime MinGW слинкован статически
+      (`-static-libgcc -static-libstdc++ -static`): иначе exe требует
+      `libstdc++-6.dll`, `libgcc_s_seh-1.dll` и `libwinpthread-1.dll` из
+      MSYS2 и не стартует у игрока. `package.sh` проверяет импорт через
+      `objdump` и падает, если осталась внешняя DLL.
 - [x] Загрузка: `gh release create vX.Y.Z …` или веб-форма Releases (CLI не
       установлен); команда печатается в конце `package.bat`.
 - [x] Флоу в `AGENTS.md` (раздел «Релизы»): тег → `package.bat` → загрузка, и

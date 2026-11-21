@@ -29,7 +29,7 @@ Old rules appear only as a deliberate note in `PLAN.md`.
 ## Релизы
 
 - Релиз — аннотированный тег `vX.Y.Z` на чистом `master`; тело тега становится заметками в `latest.json`: `git tag -a vX.Y.Z -m "что нового"`, затем `git push origin master --tags`.
-- `.\package.bat` собирает release (с `-c`, чтобы версия попала в бинарник) и кладёт в `dist/`: `virtual_dnd_tabletop.exe`, `virtual_dnd_tabletop-X.Y.Z-win64.zip`, `latest.json` и `notes.txt`. В zip — exe, `assets/fonts/DejaVuSans.ttf` и `LICENSE-DejaVu.txt`. Скрипт проверяет, что exe несёт версию тега, и хеширует его в манифест. `--allow-dev` — прогон пайплайна без тега, такой архив не выкладывать.
+- `.\package.bat` собирает release (с `-c`, чтобы версия попала в бинарник) и кладёт в `dist/`: `virtual_dnd_tabletop.exe`, `virtual_dnd_tabletop-X.Y.Z-win64.zip`, `latest.json` и `notes.txt`. В zip — exe, `assets/fonts/DejaVuSans.ttf` и `LICENSE-DejaVu.txt`. Скрипт проверяет, что exe несёт версию тега и не импортирует внешних DLL (`objdump`: runtime MinGW и SDL статические, в архиве только exe и шрифт), и хеширует его в манифест. `--allow-dev` — прогон пайплайна без тега, такой архив не выкладывать.
 - Загрузка: `gh release create vX.Y.Z dist/virtual_dnd_tabletop.exe dist/virtual_dnd_tabletop-X.Y.Z-win64.zip dist/latest.json --title "virtual_dnd_tabletop X.Y.Z" --notes-file dist/notes.txt`; если `gh` нет — те же три файла через веб-форму Releases.
 - Клиент читает манифест по стабильной ссылке `https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases/latest/download/latest.json`.
 - Бамп `kProtocolVersion` — новый релиз в тот же день: клиент со старой версией получает отказ при подключении.

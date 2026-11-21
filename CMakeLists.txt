@@ -206,6 +206,17 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   SDL3_ttf::SDL3_ttf
 )
 
+# MinGW по умолчанию тянет libstdc++-6.dll, libgcc_s_seh-1.dll и
+# libwinpthread-1.dll из MSYS2: на машине игрока их нет, и exe не стартует.
+# Runtime линкуется статически, иначе архив релиза — не один файл.
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  target_link_options(${PROJECT_NAME} PRIVATE
+    -static-libgcc
+    -static-libstdc++
+    -static
+  )
+endif()
+
 enable_testing()
 
 add_executable(dnd_core_tests

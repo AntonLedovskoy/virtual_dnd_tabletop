@@ -107,6 +107,58 @@ fi
   exit 1
 }
 
+# objdump проверяет, что exe не тянет DLL из MSYS2: игроку уходит один файл.
+OBJDUMP_BIN=$(command -v objdump 2>/dev/null || true)
+if [[ -z "$OBJDUMP_BIN" ]]; then
+  for candidate in /ucrt64/bin/objdump.exe /mingw64/bin/objdump.exe; do
+    if [[ -x "$candidate" ]]; then
+      OBJDUMP_BIN=$candidate
+      break
+    fi
+  done
+fi
+[[ -n "$OBJDUMP_BIN" ]] || {
+  echo "error: objdump не найден; без него нельзя проверить зависимости exe" >&2
+  exit 1
+}
+
+# Внешние DLL ломают запуск у игрока: в архиве только exe, шрифт и лицензия.
+# Разрешены системные библиотеки Windows (они есть в любой системе) и
+# api-ms-win-* из UCRT. Новая строка в списке — повод разобраться, откуда она.
+SYSTEM_DLLS=(
+  advapi32 bcrypt cfgmgr32 dwmapi gdi32 hid imm32 kernel32 ole32 oleaut32
+  powrprof rpcrt4 setupapi shcore shell32 user32 userenv usp10 version winmm
+  ws2_32 ucrtbase
+)
+
+check_dependencies() {
+  local exe=$1
+  local import entry bad=()
+  while IFS= read -r import; do
+    entry=$(printf '%s' "$import" | tr '[:upper:]' '[:lower:]')
+    case "$entry" in
+      api-ms-win-*|ext-ms-*) continue ;;
+    esac
+    local known=0
+    local system
+    for system in "${SYSTEM_DLLS[@]}"; do
+      if [[ "$entry" == "$system.dll" ]]; then
+        known=1
+        break
+      fi
+    done
+    (( known )) || bad+=("$import")
+  done < <("$OBJDUMP_BIN" -p "$exe" | sed -n 's/^[[:space:]]*DLL Name: //p')
+
+  if (( ${#bad[@]} > 0 )); then
+    echo "error: $exe зависит от внешних DLL: ${bad[*]}" >&2
+    echo "       соберите exe со статическим runtime (-static-libgcc" \
+      "-static-libstdc++ -static) или положите эти DLL в архив" >&2
+    exit 1
+  fi
+  echo "==> Зависимости: только системные DLL Windows"
+}
+
 # Версия — только с тега: номер в манифесте и в бинарнике должен совпадать с
 # тем, что видят игроки. --allow-dev нужен для проверки всего цикла до релиза.
 if ! DESCRIBE=$("$GIT_BIN" describe --tags --always --dirty 2>/dev/null); then
@@ -169,6 +221,8 @@ else
     "$ROOT_DIR/tools/build.sh" -p release -c
   fi
 fi
+
+check_dependencies "$EXE"
 
 # Бинарник должен нести версию того тега, с которого собираем манифест.
 EXPECTED=$DESCRIBE
