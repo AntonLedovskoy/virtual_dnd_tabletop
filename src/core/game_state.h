@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +14,14 @@
 #include "core/token.h"
 
 namespace dnd {
+
+// Итог отдыха одного токена: новый вид токена и сколько он потратил и
+// восстановил, чтобы сервер записал подробную строку в лог.
+struct RestChange {
+  Token token;
+  int dice_spent = 0;
+  int hp_restored = 0;
+};
 
 // Авторитетное состояние мира. В локальной игре работает в том же процессе
 // рядом с клиентом; по сети живёт только на хосте.
@@ -54,8 +63,14 @@ class GameState {
   [[nodiscard]] auto HealToken(TokenId id, int amount) -> std::optional<Token>;
   // Бросок спасброска от смерти при hp == 0; roll — уже выпавший d20.
   [[nodiscard]] auto DeathSave(TokenId id, int roll) -> std::optional<Token>;
-  // Возвращает персонажей, чьи HP или состояния изменились.
-  [[nodiscard]] auto RestParty(bool long_rest) -> std::vector<Token>;
+  // Отдых по правилам 2024. Короткий (1 час) тратит кости хитов на HP:
+  // каждая даёт бросок d{hit_die} плюс модификатор Телосложения (не меньше
+  // нуля), пока не восстановлен максимум или не кончился запас. Длинный
+  // (8 часов) возвращает все HP, кости хитов и снимает состояния. Отдых
+  // двигает игровое время, поэтому срочные состояния истекают. Возвращает
+  // изменившихся персонажей с подробностями для лога.
+  [[nodiscard]] auto RestParty(bool long_rest, std::mt19937& rng)
+      -> std::vector<RestChange>;
   [[nodiscard]] auto SetInitiative(TokenId id, int value)
       -> std::optional<Token>;
   [[nodiscard]] auto SetTokenOwner(TokenId id, std::string owner)

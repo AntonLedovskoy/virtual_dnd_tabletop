@@ -58,6 +58,18 @@ auto HitPointsPerLevel(int hit_die, int con_modifier) -> int {
   return std::max(1, HitDieAverage(hit_die) + con_modifier);
 }
 
+auto HitDiceMaximum(int level) -> int {
+  return std::clamp(level, 1, kMaxLevel);
+}
+
+auto HitDiceAvailable(int level, int spent) -> int {
+  return std::max(0, HitDiceMaximum(level) - std::max(0, spent));
+}
+
+auto HitDieHeal(int roll, int con_modifier) -> int {
+  return std::max(0, roll + con_modifier);
+}
+
 auto IsAbilityScoreLevel(int level) -> bool {
   return level == 4 || level == 8 || level == 12 || level == 16;
 }

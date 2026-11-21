@@ -107,6 +107,7 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.xp);
   writer.I32(token.hit_die);
   writer.I32(token.con_modifier);
+  writer.I32(token.hit_dice_spent);
 }
 
 auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
@@ -139,6 +140,7 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
   std::int32_t xp = 0;
   std::int32_t hit_die = 8;
   std::int32_t con_modifier = 0;
+  std::int32_t hit_dice_spent = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -170,8 +172,9 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
       !reader.I32(death_successes) || !reader.I32(death_failures) ||
       !reader.String(portrait, kMaxImageNameLength) || !reader.I32(xp) ||
       !reader.I32(hit_die) || !reader.I32(con_modifier) ||
-      diagonal_parity < 0 || diagonal_parity > 1 || death_successes < 0 ||
-      death_successes > 3 || death_failures < 0 || death_failures > 3) {
+      !reader.I32(hit_dice_spent) || diagonal_parity < 0 ||
+      diagonal_parity > 1 || death_successes < 0 || death_successes > 3 ||
+      death_failures < 0 || death_failures > 3) {
     return false;
   }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
@@ -181,6 +184,7 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
       initiative_bonus > 100 || movement_used < 0 || movement_used > 1000 ||
       xp < 0 || xp > kMaxXp || !IsValidHitDie(hit_die) ||
       con_modifier < -kMaxConModifier || con_modifier > kMaxConModifier ||
+      hit_dice_spent < 0 || hit_dice_spent > kMaxLevel ||
       kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0 ||
       (!portrait.empty() && !IsSafeImageName(portrait))) {
@@ -195,6 +199,7 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
       .temp_hp = temp_hp,
       .hit_die = hit_die,
       .con_modifier = con_modifier,
+      .hit_dice_spent = hit_dice_spent,
       .initiative = initiative,
       .ac = ac,
       .speed = speed,

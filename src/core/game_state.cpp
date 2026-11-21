@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <random>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -293,12 +294,14 @@ auto GameState::DeathSave(TokenId id, int roll) -> std::optional<Token> {
   return *token;
 }
 
-auto GameState::RestParty(bool long_rest) -> std::vector<Token> {
-  std::vector<Token> changed;
+auto GameState::RestParty(bool long_rest, std::mt19937& rng)
+    -> std::vector<RestChange> {
+  std::vector<RestChange> changed;
   const int rest_seconds = long_rest ? kLongRestSeconds : kShortRestSeconds;
   for (Token& token : tokens_) {
     const int old_hp = token.hp;
     const int old_temp = token.temp_hp;
+    const int old_spent = token.hit_dice_spent;
     const int old_successes = token.death_save_successes;
     const int old_failures = token.death_save_failures;
     const std::size_t old_conditions = token.conditions.size();
@@ -306,7 +309,7 @@ auto GameState::RestParty(bool long_rest) -> std::vector<Token> {
     TickConditions(token, rest_seconds);
     if (token.kind != TokenKind::kPlayer) {
       if (token.conditions.size() != old_conditions) {
-        changed.push_back(token);
+        changed.push_back(RestChange{.token = token});
       }
       continue;
     }
@@ -316,8 +319,20 @@ auto GameState::RestParty(bool long_rest) -> std::vector<Token> {
       token.conditions.clear();
       token.death_save_successes = 0;
       token.death_save_failures = 0;
+      token.hit_dice_spent = 0;
     } else {
-      token.hp = std::min(token.max_hp, token.hp + ((token.max_hp + 1) / 2));
+      // Короткий отдых тратит кости хитов, пока не восстановлен максимум
+      // HP или не кончился запас.
+      const int level = LevelForXp(token.xp);
+      const int available = HitDiceAvailable(level, token.hit_dice_spent);
+      std::uniform_int_distribution<int> die(1, token.hit_die);
+      int spent = 0;
+      while (token.hp < token.max_hp && spent < available) {
+        const int heal = HitDieHeal(die(rng), token.con_modifier);
+        token.hp = std::min(token.max_hp, token.hp + heal);
+        ++spent;
+      }
+      token.hit_dice_spent += spent;
       if (token.hp > 0) {
         RemoveCondition(token, kUnconscious);
         token.death_save_successes = 0;
@@ -325,10 +340,14 @@ auto GameState::RestParty(bool long_rest) -> std::vector<Token> {
       }
     }
     if (token.hp != old_hp || token.temp_hp != old_temp ||
+        token.hit_dice_spent != old_spent ||
         token.death_save_successes != old_successes ||
         token.death_save_failures != old_failures ||
         token.conditions.size() != old_conditions) {
-      changed.push_back(token);
+      changed.push_back(
+          RestChange{.token = token,
+                     .dice_spent = token.hit_dice_spent - old_spent,
+                     .hp_restored = token.hp - old_hp});
     }
   }
   return changed;

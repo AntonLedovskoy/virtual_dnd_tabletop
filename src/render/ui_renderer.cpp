@@ -471,6 +471,10 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
     xp_line += level < kMaxLevel ? std::to_string(XpForLevel(level + 1))
                                  : std::string(strings::kXpMax);
     lines.push_back(std::move(xp_line));
+    lines.emplace_back(
+        std::string(strings::kHitDiceShort) + ": " +
+        std::to_string(HitDiceAvailable(level, token->hit_dice_spent)) + "/" +
+        std::to_string(HitDiceMaximum(level)));
   }
   lines.emplace_back(std::string(strings::kSheetAc) + ": " +
                      std::to_string(token->ac) + "   " +

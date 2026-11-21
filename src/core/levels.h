@@ -28,6 +28,16 @@ inline constexpr int kMaxXp = 1000000;
 // модификатор Телосложения, но не меньше 1 (правило 2024).
 [[nodiscard]] auto HitPointsPerLevel(int hit_die, int con_modifier) -> int;
 
+// Запас костей хитов персонажа равен его уровню (1..kMaxLevel).
+[[nodiscard]] auto HitDiceMaximum(int level) -> int;
+
+// Сколько костей хитов осталось: запас минус потраченные, не меньше нуля.
+[[nodiscard]] auto HitDiceAvailable(int level, int spent) -> int;
+
+// Лечение за одну потраченную кость хитов (2024): бросок кости плюс
+// модификатор Телосложения, но не меньше нуля.
+[[nodiscard]] auto HitDieHeal(int roll, int con_modifier) -> int;
+
 // На этих уровнях персонаж получает повышение характеристик (2024).
 [[nodiscard]] auto IsAbilityScoreLevel(int level) -> bool;
 // Эпический дар выдаётся на 19 уровне (2024).

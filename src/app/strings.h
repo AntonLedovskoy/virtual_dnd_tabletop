@@ -18,6 +18,7 @@ inline constexpr std::string_view kFree = "свободен";
 inline constexpr std::string_view kHp = "HP";
 inline constexpr std::string_view kXpShort = "XP";
 inline constexpr std::string_view kXpMax = "макс.";
+inline constexpr std::string_view kHitDiceShort = "КХ";
 inline constexpr std::string_view kInitiativeShort = "Иниц.";
 inline constexpr std::string_view kLevelShort = "Ур.";
 inline constexpr std::string_view kKind = "Тип";
@@ -132,7 +133,7 @@ inline constexpr std::array<std::string_view, 17> kHelpDm = {
     "F — шаблон области, Shift+F — убрать",
     "F5 — сохранить, F9 — загрузить",
     "Команды: /rename, /owner, /maxhp, /kick",
-    "/rest — короткий отдых, /longrest — длинный",
+    "/rest — короткий отдых (тратит кости хитов), /longrest — длинный",
     "Enter в режиме F и /aoe 2d6 15 — урон по шаблону",
     "Ctrl+Z — отменить последнее действие DM",
     "/map карта.png — подложка, /map off — убрать",

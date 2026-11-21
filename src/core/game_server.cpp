@@ -678,21 +678,38 @@ auto GameServer::HandleRest(const RestParty& command, bool can_control_all)
   if (!has_players) {
     return CommandOutcome{.reject_reason = "в партии нет персонажей"};
   }
-  const std::vector<Token> changed = state_.RestParty(command.long_rest);
+  const std::vector<RestChange> changed =
+      state_.RestParty(command.long_rest, rng_);
   CommandOutcome outcome;
   outcome.accepted = true;
-  for (const Token& token : changed) {
-    outcome.events.emplace_back(TokenUpdated{.token = token});
+  for (const RestChange& change : changed) {
+    outcome.events.emplace_back(TokenUpdated{.token = change.token});
+  }
+  std::string text;
+  if (command.long_rest) {
+    text =
+        "Длинный отдых (8 часов): HP, кости хитов и состояния "
+        "восстановлены";
+  } else {
+    std::vector<std::string> parts;
+    for (const RestChange& change : changed) {
+      if (change.dice_spent <= 0) {
+        continue;
+      }
+      const int level = LevelForXp(change.token.xp);
+      parts.emplace_back(
+          change.token.name + " +" + std::to_string(change.hp_restored) +
+          " HP (КХ " +
+          std::to_string(HitDiceAvailable(level, change.token.hit_dice_spent)) +
+          "/" + std::to_string(HitDiceMaximum(level)) + ")");
+    }
+    text = "Короткий отдых (1 час): ";
+    text += parts.empty() ? "кости хитов не тратились" : JoinChanges(parts);
   }
   outcome.events.emplace_back(LogLineAdded{
       .line =
-          LogLine{.author = "DM",
-                  .text = command.long_rest
-                              ? "Длинный отдых (8 часов): HP и состояния "
-                                "восстановлены"
-                              : "Короткий отдых (1 час): партия восстановила "
-                                "силы",
-                  .timestamp = CurrentTimeSeconds()},
+          LogLine{
+              .author = "DM", .text = text, .timestamp = CurrentTimeSeconds()},
   });
   return outcome;
 }

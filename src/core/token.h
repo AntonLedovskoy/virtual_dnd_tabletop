@@ -49,6 +49,9 @@ struct Token {
   // прирост HP при повышении уровня (core/levels.h).
   int hit_die = 8;
   int con_modifier = 0;
+  // Потраченные кости хитов: запас равен уровню (core/levels.h), короткий
+  // отдых их тратит, длинный возвращает все.
+  int hit_dice_spent = 0;
   int initiative = 0;
   int ac = 10;
   int speed = 9;

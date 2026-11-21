@@ -666,11 +666,20 @@ auto TestDamageHealRest() -> void {
   Expect(server.HandleCommand(dnd::RestParty{}, "", true).accepted,
          "the DM declares a short rest");
   const dnd::Token rested = TokenOf(server.State(), 2);
-  Expect(rested.hp == 5, "short rest restores half of max hp");
+  Expect(rested.hp >= 1 && rested.hp <= 8,
+         "short rest spends a hit die instead of restoring half of max hp");
+  Expect(rested.hit_dice_spent == 1,
+         "short rest consumes one hit die at level 1");
   Expect(rested.conditions.size() == 1 &&
              rested.conditions.front().name == "отравлен",
          "short rest wakes the character, expires timed conditions and keeps "
          "permanent ones");
+
+  Expect(server.HandleCommand(dnd::RestParty{}, "", true).accepted,
+         "a second short rest is allowed");
+  const dnd::Token drained = TokenOf(server.State(), 2);
+  Expect(drained.hp == rested.hp && drained.hit_dice_spent == 1,
+         "a spent hit die cannot be reused before a long rest");
 
   Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
              .accepted,
@@ -679,6 +688,53 @@ auto TestDamageHealRest() -> void {
   Expect(restored.hp == restored.max_hp && restored.temp_hp == 0 &&
              restored.conditions.empty(),
          "long rest restores hp and clears conditions");
+  Expect(restored.hit_dice_spent == 0, "long rest returns every spent hit die");
+}
+
+auto TestShortRestHitDice() -> void {
+  const dnd::GridMap map(6, 6);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 3,
+                         .max_hp = 200,
+                         .hit_die = 12,
+                         .con_modifier = 4,
+                         .xp = 900,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+          },
+      .next_token_id = 2,
+  };
+  dnd::GameState state(snapshot);
+  // Фиксированное зерно: тест проверяет границы лечения и учёт костей, а не
+  // случайность как таковую.
+  // NOLINTNEXTLINE(bugprone-random-generator-seed)
+  std::mt19937 rng(2024);
+
+  const std::vector<dnd::RestChange> changes = state.RestParty(false, rng);
+  Expect(changes.size() == 1, "a wounded hero is reported after the rest");
+  const dnd::Token& rested = changes.front().token;
+  Expect(rested.hit_dice_spent == 3,
+         "a short rest spends a hit die per level while hp is missing");
+  Expect(changes.front().dice_spent == 3 &&
+             changes.front().hp_restored == rested.hp - 3,
+         "the rest report counts dice and restored hp");
+  Expect(rested.hp >= 3 + (3 * 5),
+         "each spent hit die heals d12 plus Constitution, at least zero");
+
+  Expect(state.RestParty(false, rng).empty(),
+         "a short rest without dice left changes nothing");
+
+  const std::vector<dnd::RestChange> long_rest = state.RestParty(true, rng);
+  Expect(long_rest.size() == 1, "a long rest reports the hero");
+  Expect(long_rest.front().token.hp == 200 &&
+             long_rest.front().token.hit_dice_spent == 0,
+         "a long rest restores hp and every hit die");
 }
 
 auto TestConcentration() -> void {
@@ -1726,6 +1782,15 @@ auto TestLevels() -> void {
          "a level adds the hit die average plus Constitution");
   Expect(dnd::HitPointsPerLevel(6, -10) == 1,
          "a level always adds at least one hit point");
+  Expect(dnd::HitDiceMaximum(1) == 1 && dnd::HitDiceMaximum(7) == 7,
+         "a character has one hit die per level");
+  Expect(dnd::HitDiceMaximum(0) == 1 && dnd::HitDiceMaximum(30) == 20,
+         "the hit dice pool is clamped to the level range");
+  Expect(dnd::HitDiceAvailable(5, 2) == 3, "spent hit dice reduce the pool");
+  Expect(dnd::HitDiceAvailable(5, 9) == 0 && dnd::HitDiceAvailable(5, -3) == 5,
+         "the available pool never goes negative");
+  Expect(dnd::HitDieHeal(5, 3) == 8 && dnd::HitDieHeal(2, -5) == 0,
+         "a spent hit die heals its roll plus Constitution, at least zero");
   Expect(dnd::IsAbilityScoreLevel(4) && dnd::IsAbilityScoreLevel(8) &&
              dnd::IsAbilityScoreLevel(12) && dnd::IsAbilityScoreLevel(16),
          "ability score improvements come at levels 4, 8, 12 and 16");
@@ -2639,6 +2704,7 @@ auto TestSaveLoadRoundtrip() -> void {
                          .temp_hp = 3,
                          .hit_die = 10,
                          .con_modifier = 2,
+                         .hit_dice_spent = 2,
                          .initiative = 15,
                          .ac = 16,
                          .speed = 9,
@@ -2718,6 +2784,8 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().hit_die == 10 &&
                loaded->tokens.front().con_modifier == 2,
            "hit die and Constitution survive the roundtrip");
+    Expect(loaded->tokens.front().hit_dice_spent == 2,
+           "spent hit dice survive the roundtrip");
     Expect(loaded->tokens.front().diagonal_parity == 1,
            "diagonal parity survives the roundtrip");
     Expect(loaded->tokens.front().max_hp == 12, "token max hp survives");
@@ -3943,6 +4011,7 @@ auto TestCommandEventSerialization() -> void {
                           .temp_hp = 3,
                           .hit_die = 12,
                           .con_modifier = -1,
+                          .hit_dice_spent = 2,
                           .initiative = 11,
                           .ac = 14,
                           .speed = 12,
@@ -3982,6 +4051,8 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::TokenUpdated>(*updated_decoded).token.hit_die == 12 &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.con_modifier ==
               -1 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.hit_dice_spent ==
+              2 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)
                   .token.conditions.size() == 1 &&
           std::get<dnd::TokenUpdated>(*updated_decoded)
@@ -4789,6 +4860,7 @@ auto main() -> int {
     TestOwnership();
     TestClaimAndTokenAdmin();
     TestDamageHealRest();
+    TestShortRestHitDice();
     TestConcentration();
     TestAttack();
     TestAoeDamage();
