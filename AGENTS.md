@@ -1,8 +1,9 @@
 # AGENTS.md
 
 Virtual D&D tabletop, C++20 + SDL3. One `virtual_dnd_tabletop` binary:
-authoritative host/DM or TCP client. No README/CI: build scripts and tests are
-the source of truth; roadmap and weak spots in `PLAN.md`.
+authoritative host/DM or TCP client. No CI: build scripts and tests are the
+source of truth; roadmap and weak spots in `PLAN.md`, user-facing overview in
+`README.md` (keep it in sync with flags, keys and chat commands).
 
 Language: code, comments, docs in Russian; identifiers and terms in English.
 Local rules win where stricter than global (language, live UI checks).
