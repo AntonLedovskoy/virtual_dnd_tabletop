@@ -4397,6 +4397,45 @@ auto App::PruneStaleViewState() -> void {
   }
 }
 
+// Смена хода выбирает действующий токен, чтобы карточка и горячие клавиши
+// относились к тому, кто ходит. DM видит любого, игроку выбор меняем только
+// на его персонажа: чужой ход не должен отбирать у него свой лист и реакции.
+auto App::FollowActiveTurn() -> void {
+  if (!in_game_) {
+    followed_turn_id_ = 0;
+    return;
+  }
+  const Encounter& encounter = view_.EncounterState();
+  const TokenId active =
+      encounter.active && encounter.turn_index < encounter.order.size()
+          ? encounter.order[encounter.turn_index]
+          : 0;
+  if (active == followed_turn_id_) {
+    return;
+  }
+  followed_turn_id_ = active;
+  if (active == 0) {
+    return;
+  }
+  for (const Token& token : view_.Tokens()) {
+    if (token.id != active) {
+      continue;
+    }
+    if (!IsDm() && !SamePlayerName(token.owner, options_.player_name)) {
+      return;
+    }
+    if (!view_.Fog().IsVisible(token.cell)) {
+      return;
+    }
+    selected_id_ = token.id;
+    dragging_ = false;
+    drag_target_.reset();
+    measure_start_.reset();
+    measure_end_.reset();
+    return;
+  }
+}
+
 auto App::ScrollLog(int lines) -> void {
   log_scroll_.Scroll(lines, view_.Log().size());
 }
@@ -5197,6 +5236,7 @@ auto App::Iterate() -> void {
   } else if (in_game_) {
     PumpHost();
   }
+  FollowActiveTurn();
   SyncLogScroll();
   FlushSessionLog();
   CheckAutosave();

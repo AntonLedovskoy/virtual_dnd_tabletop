@@ -275,6 +275,8 @@ class App {
   auto HandleAoeKeyDown(const SDL_KeyboardEvent& key) -> bool;
   auto ClaimSelectedToken() -> void;
   auto ReleaseSelectedToken() -> void;
+  // Новый ход в бою выбирает своего токена: DM — любого, игрок — своего.
+  auto FollowActiveTurn() -> void;
   [[nodiscard]] auto PlayerHasCharacter() const -> bool;
   auto CycleSelectedColor() -> void;
   auto AdjustSelectedHp(int delta) -> void;
@@ -527,6 +529,8 @@ class App {
   DeleteConfirm delete_token_;
 
   TokenId selected_id_ = 0;
+  // Активный токен прошлого кадра: выбор переезжает только при смене хода.
+  TokenId followed_turn_id_ = 0;
   bool dragging_ = false;
   std::optional<Cell> drag_target_;
   float mouse_x_ = 0.0F;
