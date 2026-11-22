@@ -12,17 +12,23 @@
 
 namespace dnd {
 
+// Какие поля снимка знает версия файла. Появившиеся позже поля в старых
+// файлах отсутствуют, декодер подставляет значения по умолчанию.
+struct SnapshotFormat {
+  bool has_turn_economy = true;    // экономика хода (сохранение 28)
+  bool has_damage_profile = true;  // защиты и дистанция атаки (сохранение 29)
+  bool has_game_clock = true;  // игровые часы и длинный отдых (сохранение 30)
+};
+
 // Формат передачи, общий для сохранений и TCP-сообщений. Декодеры строгие:
 // отвергают обрезанные данные, лишние байты и значения вне диапазона.
 auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t>;
-// conditions_have_dc == false читает старые сейвы, где у состояний не было КС.
-// has_turn_economy == false читает сейвы до полей действия, реакции и рывка.
-// has_damage_profile == false читает сейвы до защиты от урона и дистанции.
-// has_game_clock == false читает сейвы без игровых часов и времени отдыха.
+// Кодирование в формате прошлой версии: полей, которых тогда не было, в
+// файле нет. Нужно тестам совместимости и проверке миграций.
+auto EncodeSnapshot(const GameSnapshot& snapshot, const SnapshotFormat& format)
+    -> std::vector<std::uint8_t>;
 auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
-                    bool conditions_have_dc = true,
-                    bool has_turn_economy = true,
-                    bool has_damage_profile = true, bool has_game_clock = true)
+                    const SnapshotFormat& format = SnapshotFormat{})
     -> std::optional<GameSnapshot>;
 
 auto EncodeFog(const FogSnapshot& fog) -> std::vector<std::uint8_t>;

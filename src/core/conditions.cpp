@@ -57,14 +57,6 @@ auto IsIncapacitatingCondition(std::string_view name) -> bool {
          name == "парализован" || name == "оглушён" || name == "окаменел";
 }
 
-auto ConvertLegacyConditionRounds(std::vector<Condition>& conditions) -> void {
-  for (Condition& condition : conditions) {
-    if (condition.seconds > 0) {
-      condition.seconds *= kSecondsPerRound;
-    }
-  }
-}
-
 auto DefaultConditions() -> const std::vector<std::string>& {
   // Константа названа по стилю проекта (kCamelCase), хотя clang-tidy для
   // локальных констант ждёт lower_case.

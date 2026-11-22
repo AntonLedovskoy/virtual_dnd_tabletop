@@ -2,6 +2,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
@@ -1490,12 +1491,6 @@ auto TestConditionDurationAndInitiative() -> void {
          "long durations use minutes");
   Expect(dnd::FormatConditionDuration(7200) == "2 часа",
          "hours are used for long durations");
-
-  std::vector<dnd::Condition> legacy{dnd::Condition{"отравлен", 10},
-                                     dnd::Condition{"без сознания"}};
-  dnd::ConvertLegacyConditionRounds(legacy);
-  Expect(legacy[0].seconds == 60 && legacy[1].seconds == 0,
-         "legacy rounds migrate to seconds");
 }
 
 auto TestConditionSaves() -> void {
@@ -4250,6 +4245,142 @@ auto TestSaveLoadRoundtrip() -> void {
   std::filesystem::remove(bad_path);
 }
 
+// Заголовок файла версии: magic, версия, размер, payload. Пишем вручную,
+// чтобы проверить чтение файлов прошлых релизов, а не только roundtrip.
+auto WriteVersionedFile(const std::filesystem::path& path, std::uint32_t magic,
+                        std::uint32_t version,
+                        const std::vector<std::uint8_t>& payload) -> void {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  const auto write32 = [&out](std::uint32_t value) -> void {
+    for (int shift = 0; shift < 32; shift += 8) {
+      out.put(static_cast<char>((value >> shift) & 0xFFU));
+    }
+  };
+  write32(magic);
+  write32(version);
+  write32(static_cast<std::uint32_t>(payload.size()));
+  out.write(reinterpret_cast<const char*>(payload.data()),
+            static_cast<std::streamsize>(payload.size()));
+}
+
+// Обещание раздела 7: файлы прошлых релизов открываются. Версия задаёт набор
+// полей снимка, поэтому проверяем всю поддерживаемую линейку.
+auto TestReadsPreviousVersions() -> void {
+  const dnd::GameSnapshot original{
+      .map = dnd::GridMap(5, 4),
+      .tokens =
+          {
+              dnd::Token{
+                  .id = 1,
+                  .name = "hero",
+                  .hp = 5,
+                  .max_hp = 10,
+                  .hit_dice_spent = 1,
+                  .resist = dnd::DamageTypeBit(dnd::DamageType::kFire),
+                  .attack_range = 3,
+                  .conditions = {dnd::Condition{"оглушён", 60, 12}},
+                  .kind = dnd::TokenKind::kPlayer,
+                  .cell = CellAt(1, 1),
+                  .action_used = true,
+                  .dodging = true,
+              },
+          },
+      .next_token_id = 2,
+      .game_time_seconds = 7200,
+      .last_long_rest_seconds = 3600,
+  };
+  constexpr std::uint32_t save_magic = 0x53444E44U;
+  constexpr std::uint32_t campaign_magic = 0x43444E44U;
+  const std::filesystem::path save_path =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_old_save.bin";
+
+  for (std::uint32_t version = dnd::kMinSaveVersion;
+       version <= dnd::kSaveVersion; ++version) {
+    WriteVersionedFile(save_path, save_magic, version,
+                       dnd::EncodeSnapshotAs(original, version));
+    const std::optional<dnd::GameSnapshot> loaded =
+        dnd::ReadSnapshot(save_path);
+    Expect(loaded.has_value(), "a previous save version reads back");
+    if (!loaded.has_value()) {
+      continue;
+    }
+    const dnd::Token& token = loaded->tokens.front();
+    Expect(token.conditions.size() == 1 &&
+               token.conditions.front().seconds == 60 &&
+               token.conditions.front().save_dc == 12,
+           "condition duration and КС survive previous versions");
+    Expect(token.hit_dice_spent == 1,
+           "spent hit dice survive previous versions");
+    Expect(token.action_used == (version >= 28) &&
+               token.dodging == (version >= 28),
+           "turn economy fields appear with their version");
+    Expect(token.resist == (version >= 29
+                                ? dnd::DamageTypeBit(dnd::DamageType::kFire)
+                                : 0U) &&
+               token.attack_range == (version >= 29 ? 3 : 0),
+           "damage defences appear with their version");
+    Expect(loaded->game_time_seconds == (version >= 30 ? 7200 : 0) &&
+               loaded->last_long_rest_seconds == (version >= 30 ? 3600 : -1),
+           "the game clock appears with its version");
+  }
+
+  WriteVersionedFile(save_path, save_magic, dnd::kMinSaveVersion - 1,
+                     dnd::EncodeSnapshotAs(original, dnd::kMinSaveVersion));
+  Expect(!dnd::ReadSnapshot(save_path).has_value(),
+         "a save older than the supported window is rejected");
+  WriteVersionedFile(save_path, save_magic, dnd::kSaveVersion + 1,
+                     dnd::EncodeSnapshotAs(original, dnd::kSaveVersion));
+  Expect(!dnd::ReadSnapshot(save_path).has_value(),
+         "a save from a newer version is rejected");
+  std::filesystem::remove(save_path);
+
+  const dnd::Campaign campaign{
+      .scenes = {dnd::Scene{.name = "Пролог", .snapshot = original}},
+      .active = 0,
+  };
+  const std::filesystem::path campaign_path =
+      std::filesystem::temp_directory_path() /
+      "dnd_core_tests_old_campaign.dndcamp";
+  for (std::uint32_t version = dnd::kMinCampaignVersion;
+       version <= dnd::kCampaignVersion; ++version) {
+    WriteVersionedFile(campaign_path, campaign_magic, version,
+                       dnd::EncodeCampaignAs(campaign, version));
+    const std::optional<dnd::Campaign> loaded =
+        dnd::ReadCampaign(campaign_path);
+    Expect(loaded.has_value(), "a previous campaign version reads back");
+    if (!loaded.has_value()) {
+      continue;
+    }
+    Expect(
+        loaded->scenes.size() == 1 && loaded->scenes.front().name == "Пролог",
+        "scene names survive previous campaign versions");
+    const dnd::Token& token = loaded->scenes.front().snapshot.tokens.front();
+    Expect(
+        token.conditions.size() == 1 && token.conditions.front().save_dc == 12,
+        "condition КС survives previous campaign versions");
+    Expect(token.action_used == (version >= 15),
+           "campaign turn economy appears with its version");
+    Expect(
+        token.resist ==
+            (version >= 15 ? dnd::DamageTypeBit(dnd::DamageType::kFire) : 0U),
+        "campaign damage defences appear with their version");
+    Expect(loaded->scenes.front().snapshot.game_time_seconds ==
+               (version >= 16 ? 7200 : 0),
+           "the campaign game clock appears with its version");
+  }
+
+  WriteVersionedFile(campaign_path, campaign_magic,
+                     dnd::kMinCampaignVersion - 1,
+                     dnd::EncodeCampaignAs(campaign, dnd::kMinCampaignVersion));
+  Expect(!dnd::ReadCampaign(campaign_path).has_value(),
+         "a campaign older than the supported window is rejected");
+  WriteVersionedFile(campaign_path, campaign_magic, dnd::kCampaignVersion + 1,
+                     dnd::EncodeCampaignAs(campaign, dnd::kCampaignVersion));
+  Expect(!dnd::ReadCampaign(campaign_path).has_value(),
+         "a campaign from a newer version is rejected");
+  std::filesystem::remove(campaign_path);
+}
+
 auto TestCampaign() -> void {
   dnd::GridMap first_map(5, 4);
   first_map.SetBlocked(CellAt(1, 1), true);
@@ -6522,6 +6653,7 @@ auto main() -> int {
     TestTokenPortrait();
     TestCommandEventSerialization();
     TestSaveLoadRoundtrip();
+    TestReadsPreviousVersions();
     TestCampaign();
     TestCampaignSaver();
     TestDamagedPayloads();

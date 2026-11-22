@@ -37,6 +37,7 @@ SRD, а не память и не сторонние сайты.
 - Загрузка: `gh release create vX.Y.Z dist/virtual_dnd_tabletop.exe dist/virtual_dnd_tabletop-X.Y.Z-win64.zip dist/latest.json --title "virtual_dnd_tabletop X.Y.Z" --notes-file dist/notes.txt`; если `gh` нет — те же три файла через веб-форму Releases.
 - Клиент читает манифест по стабильной ссылке `https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases/latest/download/latest.json`.
 - Бамп `kProtocolVersion` — новый релиз в тот же день: клиент со старой версией получает отказ при подключении.
+- Сохранения и кампании не ломаются о прошлый релиз: новое поле снимка добавляет ветку в `SnapshotFormat` и версию, старые версии остаются в диапазоне чтения.
 - Обновление ставится поверх той же папки: данные стола лежат рядом с `.exe`.
 
 ## Architecture
@@ -80,10 +81,10 @@ SRD, а не память и не сторонние сайты.
 ## Serialization and protocol
 
 - `src/core/serialization.cpp` — hand-written little-endian format for saves and TCP; strict decoders reject truncated data, extra bytes, out-of-range values.
-- Serialized field change in `Token`, `GameSnapshot`, `Command`, `Event` → update encode/decode, extend `core_tests`/`net_tests`, bump `kSaveVersion` (`src/core/scene_io.h`) and `kProtocolVersion` (`src/net/protocol.h`); mismatch rejects saves and clients.
+- Serialized field change in `Token`, `GameSnapshot`, `Command`, `Event` → update encode/decode, extend `core_tests`/`net_tests`, bump `kSaveVersion` (`src/core/scene_io.h`) and `kProtocolVersion` (`src/net/protocol.h`); mismatch rejects saves and clients. Saves and campaigns stay readable across releases: `SnapshotFormat` (`src/core/serialization.h`) and the version mapping in `scene_io`/`campaign_io` tell the decoder which fields a file has, from `kMinSaveVersion`/`kMinCampaignVersion` up to the current version.
 - Login: `Challenge` carries a 16-byte nonce and the host's ephemeral X25519 key; `Hello` carries the player name, the client's key and HMAC-SHA256(password, transcript: nonce + both keys + name). Host verifies it, derives keys (X25519 shared secret + HKDF-SHA256) and answers with `SessionReady` (sealed) carrying HMAC-SHA256(password, same transcript, server label); client verifies it before accepting any data. From then on every frame is sealed: `[0xF2][u64 sequence][ciphertext][HMAC-SHA256 tag]` (ChaCha20, encrypt-then-MAC); a plaintext frame after the handshake closes the connection, a repeated or forged frame fails the sequence/MAC check. Only `Challenge`, `Hello` and a reject issued before the password check stay plaintext. Server checks fingerprint, broadcasts `Roster` on join/leave/kick. Protocol version in `Hello` header; mismatch → `Reject` with both versions, so first five bytes (`DecodeHelloVersion`) layout is frozen. Login attempts share the message rate limit; brute force closes the connection.
 - Noisy peers: `kMaxPeers` (8) connections (else "no free slots on the host"), `kMaxCommandsPerSecond` (30) commands/s per player (excess silently dropped), send queue `kMaxOutgoingBytes` (1 MiB) — overflow drops the connection, not the host; `TCP_NODELAY` on.
-- Save: magic `DNDS`, version, payload length, snapshot. Campaign: magic `DNDC`, `kCampaignVersion` (`src/core/campaign_io.h`), payload length, scene count, active scene, scenes (name + nested snapshot); campaign version bumped separately from `kSaveVersion`.
+- Save: magic `DNDS`, version, payload length, snapshot. Campaign: magic `DNDC`, `kCampaignVersion` (`src/core/campaign_io.h`), payload length, scene count, active scene, scenes (name + nested snapshot); campaign version bumped separately from `kSaveVersion`. Both readers accept every version from `kMinSaveVersion`/`kMinCampaignVersion` up to the current one, so files of previous releases open; older files are rejected. `EncodeSnapshotAs`/`EncodeCampaignAs` write older layouts for the compatibility test `TestReadsPreviousVersions`.
 
 ## Style
 

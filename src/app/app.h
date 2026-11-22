@@ -53,7 +53,8 @@ struct AppOptions {
   std::string password;
   bool auto_start = false;
   bool start_editor = false;
-  // `--no-update-check`: отладка и офлайн. Проверку обновлений читает 7.3.
+  // `--no-update-check`: зарезервирован под проверку обновлений (7.3), пока
+  // ни на что не влияет.
   bool no_update_check = false;
 };
 

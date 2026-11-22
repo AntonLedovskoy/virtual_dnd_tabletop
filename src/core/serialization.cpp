@@ -79,7 +79,8 @@ constexpr std::uint8_t kEventMapBackgroundUpdated = 10;
 constexpr std::uint8_t kEventRevealedUpdated = 11;
 constexpr std::uint8_t kEventFogChanged = 12;
 
-auto WriteToken(ByteWriter& writer, const Token& token) -> void {
+auto WriteToken(ByteWriter& writer, const Token& token,
+                const SnapshotFormat& format) -> void {
   writer.U32(token.id);
   writer.String(token.name);
   writer.String(token.owner);
@@ -113,21 +114,25 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.hit_die);
   writer.I32(token.con_modifier);
   writer.I32(token.hit_dice_spent);
-  writer.U8(token.action_used ? 1 : 0);
-  writer.U8(token.bonus_action_used ? 1 : 0);
-  writer.U8(token.reaction_used ? 1 : 0);
-  writer.I32(token.movement_bonus);
-  writer.U8(token.disengaged ? 1 : 0);
-  writer.U8(token.dodging ? 1 : 0);
-  // С версии сохранения 29: защита от урона и дистанция атаки.
-  writer.U32(token.resist);
-  writer.U32(token.vulnerable);
-  writer.U32(token.immune);
-  writer.I32(token.attack_range);
+  // Экономика хода появилась в сохранении 28, защиты и дистанция — в 29.
+  if (format.has_turn_economy) {
+    writer.U8(token.action_used ? 1 : 0);
+    writer.U8(token.bonus_action_used ? 1 : 0);
+    writer.U8(token.reaction_used ? 1 : 0);
+    writer.I32(token.movement_bonus);
+    writer.U8(token.disengaged ? 1 : 0);
+    writer.U8(token.dodging ? 1 : 0);
+  }
+  if (format.has_damage_profile) {
+    writer.U32(token.resist);
+    writer.U32(token.vulnerable);
+    writer.U32(token.immune);
+    writer.I32(token.attack_range);
+  }
 }
 
-auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
-               bool has_turn_economy, bool has_damage_profile) -> bool {
+auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
+    -> bool {
   std::uint32_t id = 0;
   std::string name;
   std::string owner;
@@ -184,13 +189,9 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
     std::int32_t seconds = 0;
     std::int32_t save_dc = 0;
     if (!reader.String(condition_name, kMaxConditionLength) ||
-        !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds) {
+        !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds ||
+        !reader.I32(save_dc) || save_dc < 0 || save_dc > kMaxSaveDc) {
       return false;
-    }
-    if (conditions_have_dc) {
-      if (!reader.I32(save_dc) || save_dc < 0 || save_dc > kMaxSaveDc) {
-        return false;
-      }
     }
     conditions.emplace_back(std::move(condition_name), seconds, save_dc);
   }
@@ -203,13 +204,13 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
       death_failures < 0 || death_failures > 3) {
     return false;
   }
-  if (has_turn_economy &&
+  if (format.has_turn_economy &&
       (!reader.U8(action_used) || !reader.U8(bonus_action_used) ||
        !reader.U8(reaction_used) || !reader.I32(movement_bonus) ||
        !reader.U8(disengaged) || !reader.U8(dodging))) {
     return false;
   }
-  if (has_damage_profile &&
+  if (format.has_damage_profile &&
       (!reader.U32(resist) || !reader.U32(vulnerable) || !reader.U32(immune) ||
        !reader.I32(attack_range))) {
     return false;
@@ -1003,7 +1004,7 @@ auto DecodeLogLineEvent(ByteReader& reader) -> std::optional<Event> {
 
 auto DecodeTokenAddedEvent(ByteReader& reader) -> std::optional<Event> {
   Token token;
-  if (!ReadToken(reader, token, true, true, true) || !reader.Done()) {
+  if (!ReadToken(reader, token, SnapshotFormat{}) || !reader.Done()) {
     return std::nullopt;
   }
   return Event{TokenAdded{.token = std::move(token)}};
@@ -1019,7 +1020,7 @@ auto DecodeTokenRemovedEvent(ByteReader& reader) -> std::optional<Event> {
 
 auto DecodeTokenUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   Token token;
-  if (!ReadToken(reader, token, true, true, true) || !reader.Done()) {
+  if (!ReadToken(reader, token, SnapshotFormat{}) || !reader.Done()) {
     return std::nullopt;
   }
   return Event{TokenUpdated{.token = std::move(token)}};
@@ -1058,6 +1059,11 @@ auto ReadFogRecords(ByteReader& reader, std::uint32_t map_cells,
 }  // namespace
 
 auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
+  return EncodeSnapshot(snapshot, SnapshotFormat{});
+}
+
+auto EncodeSnapshot(const GameSnapshot& snapshot, const SnapshotFormat& format)
+    -> std::vector<std::uint8_t> {
   ByteWriter writer;
   writer.U32(static_cast<std::uint32_t>(snapshot.map.Width()));
   writer.U32(static_cast<std::uint32_t>(snapshot.map.Height()));
@@ -1069,7 +1075,7 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
   }
   writer.U32(static_cast<std::uint32_t>(snapshot.tokens.size()));
   for (const Token& token : snapshot.tokens) {
-    WriteToken(writer, token);
+    WriteToken(writer, token, format);
   }
   writer.U32(snapshot.next_token_id);
   WriteEncounter(writer, snapshot.encounter);
@@ -1081,15 +1087,16 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
     writer.I32(cell.y);
   }
   WriteFogRecords(writer, snapshot.fog);
-  writer.U32(
-      static_cast<std::uint32_t>(std::max(0, snapshot.game_time_seconds)));
-  writer.I32(snapshot.last_long_rest_seconds);
+  if (format.has_game_clock) {
+    writer.U32(
+        static_cast<std::uint32_t>(std::max(0, snapshot.game_time_seconds)));
+    writer.I32(snapshot.last_long_rest_seconds);
+  }
   return writer.Data();
 }
 
 auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
-                    bool conditions_have_dc, bool has_turn_economy,
-                    bool has_damage_profile, bool has_game_clock)
+                    const SnapshotFormat& format)
     -> std::optional<GameSnapshot> {
   ByteReader reader(data, size);
   std::uint32_t width = 0;
@@ -1124,9 +1131,7 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
   tokens.reserve(token_count);
   for (std::uint32_t i = 0; i < token_count; ++i) {
     Token token;
-    if (!ReadToken(reader, token, conditions_have_dc, has_turn_economy,
-                   has_damage_profile) ||
-        !map.Contains(token.cell)) {
+    if (!ReadToken(reader, token, format) || !map.Contains(token.cell)) {
       return std::nullopt;
     }
     tokens.push_back(std::move(token));
@@ -1166,7 +1171,7 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
   }
   std::uint32_t game_time = 0;
   std::int32_t last_long_rest = -1;
-  if (has_game_clock) {
+  if (format.has_game_clock) {
     if (!reader.U32(game_time) || !reader.I32(last_long_rest) ||
         game_time > static_cast<std::uint32_t>(kMaxGameTimeSeconds) ||
         last_long_rest < -1) {
@@ -1547,13 +1552,13 @@ auto EncodeEvent(const Event& event) -> std::vector<std::uint8_t> {
           writer.U32(ev.line.timestamp);
         } else if constexpr (std::is_same_v<T, TokenAdded>) {
           writer.U8(kEventTokenAdded);
-          WriteToken(writer, ev.token);
+          WriteToken(writer, ev.token, SnapshotFormat{});
         } else if constexpr (std::is_same_v<T, TokenRemoved>) {
           writer.U8(kEventTokenRemoved);
           writer.U32(ev.id);
         } else if constexpr (std::is_same_v<T, TokenUpdated>) {
           writer.U8(kEventTokenUpdated);
-          WriteToken(writer, ev.token);
+          WriteToken(writer, ev.token, SnapshotFormat{});
         } else if constexpr (std::is_same_v<T, EncounterUpdated>) {
           writer.U8(kEventEncounterUpdated);
           WriteEncounter(writer, ev.encounter);

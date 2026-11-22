@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "core/byte_io.h"
-#include "core/conditions.h"
+#include "core/scene_io.h"
 #include "core/serialization.h"
 
 namespace dnd {
@@ -17,12 +17,6 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x43444E44;  // "DNDC" в little-endian
 constexpr std::uint32_t kMaxPayload = 256U * 1024U * 1024U;
-// До версии 13 у состояний не было КС; до версии 12 длительность была в ходах.
-// Версия 14 не знает полей экономики хода (действие, реакция, рывок) и защит
-// от урона, версия 15 — игровых часов.
-constexpr std::uint32_t kLegacyRoundsCampaignVersion = 11;
-constexpr std::uint32_t kLegacySecondsCampaignVersion = 12;
-constexpr std::uint32_t kPreviousCampaignVersion = 15;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -44,14 +38,31 @@ auto WriteU32(std::ostream& out, std::uint32_t value) -> void {
   }
 }
 
-auto EncodeCampaign(const Campaign& campaign) -> std::vector<std::uint8_t> {
+// Кампания 13 хранит снимки сохранения 26, 14 — 27, 15 — 28 или 29, 16 — 30.
+// Набор полей берём из версии сохранения, чтобы история формата жила в одном
+// месте (scene_io).
+auto CampaignSnapshotFormat(std::uint32_t campaign_version) -> SnapshotFormat {
+  if (campaign_version >= 16) {
+    return SaveSnapshotFormat(kSaveVersion);
+  }
+  if (campaign_version >= 15) {
+    // Версия 28 не знает защит от урона; такой файл ловится повтором в
+    // ReadCampaign, поэтому по умолчанию считаем снимки версией 29.
+    return SaveSnapshotFormat(29);
+  }
+  return SaveSnapshotFormat(27);
+}
+
+auto EncodeCampaign(const Campaign& campaign, const SnapshotFormat& format)
+    -> std::vector<std::uint8_t> {
   ByteWriter writer;
   writer.U32(static_cast<std::uint32_t>(campaign.scenes.size()));
   writer.U32(static_cast<std::uint32_t>(campaign.active));
   for (const Scene& scene : campaign.scenes) {
     writer.String(scene.name);
     writer.String(scene.note);
-    const std::vector<std::uint8_t> blob = EncodeSnapshot(scene.snapshot);
+    const std::vector<std::uint8_t> blob =
+        EncodeSnapshot(scene.snapshot, format);
     writer.U32(static_cast<std::uint32_t>(blob.size()));
     writer.Raw(blob);
   }
@@ -59,9 +70,7 @@ auto EncodeCampaign(const Campaign& campaign) -> std::vector<std::uint8_t> {
 }
 
 auto DecodeCampaign(const std::uint8_t* data, std::size_t size,
-                    bool conditions_have_dc, bool has_turn_economy,
-                    bool has_damage_profile, bool has_game_clock)
-    -> std::optional<Campaign> {
+                    const SnapshotFormat& format) -> std::optional<Campaign> {
   ByteReader reader(data, size);
   std::uint32_t scene_count = 0;
   std::uint32_t active = 0;
@@ -86,8 +95,7 @@ auto DecodeCampaign(const std::uint8_t* data, std::size_t size,
       return std::nullopt;
     }
     const std::optional<GameSnapshot> snapshot =
-        DecodeSnapshot(blob.data(), blob.size(), conditions_have_dc,
-                       has_turn_economy, has_damage_profile, has_game_clock);
+        DecodeSnapshot(blob.data(), blob.size(), format);
     if (!snapshot.has_value()) {
       return std::nullopt;
     }
@@ -108,7 +116,8 @@ auto WriteCampaign(const Campaign& campaign, const std::filesystem::path& path)
   if (campaign.scenes.empty() || campaign.active >= campaign.scenes.size()) {
     return false;
   }
-  const std::vector<std::uint8_t> payload = EncodeCampaign(campaign);
+  const std::vector<std::uint8_t> payload =
+      EncodeCampaign(campaign, SnapshotFormat{});
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out) {
     return false;
@@ -135,10 +144,8 @@ auto ReadCampaign(const std::filesystem::path& path)
   if (!ReadU32(in, magic) || magic != kMagic) {
     return std::nullopt;
   }
-  if (!ReadU32(in, version) ||
-      (version != kCampaignVersion && version != kPreviousCampaignVersion &&
-       version != kLegacySecondsCampaignVersion &&
-       version != kLegacyRoundsCampaignVersion)) {
+  if (!ReadU32(in, version) || version < kMinCampaignVersion ||
+      version > kCampaignVersion) {
     return std::nullopt;
   }
   if (!ReadU32(in, payload_size) || payload_size == 0 ||
@@ -152,19 +159,21 @@ auto ReadCampaign(const std::filesystem::path& path)
   if (!in) {
     return std::nullopt;
   }
-  std::optional<Campaign> campaign = DecodeCampaign(
-      payload.data(), payload.size(),
-      version == kCampaignVersion || version == kPreviousCampaignVersion,
-      version >= kPreviousCampaignVersion, version >= kPreviousCampaignVersion,
-      version >= kCampaignVersion);
-  if (campaign.has_value() && version == kLegacyRoundsCampaignVersion) {
-    for (Scene& scene : campaign->scenes) {
-      for (Token& token : scene.snapshot.tokens) {
-        ConvertLegacyConditionRounds(token.conditions);
-      }
-    }
+  SnapshotFormat format = CampaignSnapshotFormat(version);
+  std::optional<Campaign> campaign =
+      DecodeCampaign(payload.data(), payload.size(), format);
+  // Кампания 15 писалась и до появления защит от урона (снимки 28), поэтому
+  // пробуем и старый набор полей: строгий декодер не примет лишние байты.
+  if (!campaign.has_value() && version == 15) {
+    format.has_damage_profile = false;
+    campaign = DecodeCampaign(payload.data(), payload.size(), format);
   }
   return campaign;
+}
+
+auto EncodeCampaignAs(const Campaign& campaign, std::uint32_t campaign_version)
+    -> std::vector<std::uint8_t> {
+  return EncodeCampaign(campaign, CampaignSnapshotFormat(campaign_version));
 }
 
 auto ListCampaignFiles(const std::filesystem::path& directory)

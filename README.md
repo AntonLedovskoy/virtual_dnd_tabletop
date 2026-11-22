@@ -52,7 +52,8 @@ virtual_dnd_tabletop [--menu] [--host] [--editor] [--port N]
 - `--name`, `--password` — имя игрока и пароль стола (проверка
   challenge-response, дальше кадры шифруются).
 - `--version` — версия, версии протокола, сохранений и кампаний.
-- `--help` — справка, `--no-update-check` — режим отладки и офлайна.
+- `--help` — справка. `--no-update-check` зарезервирован под проверку
+  обновлений (раздел 7.3 плана) и пока ни на что не влияет.
 
 Окно консоли у сборки нет: `SDL_Log` пишется в `virtual_dnd_tabletop.log`
 рядом с `.exe`, `--help` и ошибки запуска показываются диалогом.
@@ -148,7 +149,10 @@ virtual_dnd_tabletop [--menu] [--host] [--editor] [--port N]
 
 Кампания, сохранения и сеть используют один рукописный little-endian формат
 (`src/core/serialization.cpp`): смена полей требует бампа `kSaveVersion`,
-`kCampaignVersion` и `kProtocolVersion`.
+`kCampaignVersion` и `kProtocolVersion`. Сохранения и кампании читаются начиная
+с файлов v0.1.0 (`kMinSaveVersion`/`kMinCampaignVersion`): по версии файла
+декодер знает, каких полей в нём нет. Протокол строгий — хост и клиент должны
+быть одной версии.
 
 ## Устройство
 

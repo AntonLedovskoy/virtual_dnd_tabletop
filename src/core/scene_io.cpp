@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "core/byte_io.h"
-#include "core/conditions.h"
 #include "core/serialization.h"
 
 namespace dnd {
@@ -14,12 +13,11 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x53444E44;  // "DNDS" в little-endian
 constexpr std::uint32_t kMaxPayload = 64U * 1024U * 1024U;
-// До версии 25 у состояний не было КС; до версии 24 длительность была в ходах.
-// Версия 27 не знает полей экономики хода (действие, реакция, рывок), версия
-// 28 — защиты от урона и дистанции атаки, версия 29 — игровых часов.
-constexpr std::uint32_t kLegacyRoundsSaveVersion = 23;
-constexpr std::uint32_t kLegacySecondsSaveVersion = 24;
-constexpr std::uint32_t kPreviousSaveVersion = 29;
+// Что появилось когда: экономика хода — сохранение 28, защиты от урона и
+// дистанция атаки — 29, игровые часы и время длинного отдыха — 30.
+constexpr std::uint32_t kTurnEconomySaveVersion = 28;
+constexpr std::uint32_t kDamageProfileSaveVersion = 29;
+constexpr std::uint32_t kGameClockSaveVersion = 30;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -42,6 +40,14 @@ auto WriteU32(std::ostream& out, std::uint32_t value) -> void {
 }
 
 }  // namespace
+
+auto SaveSnapshotFormat(std::uint32_t save_version) -> SnapshotFormat {
+  return SnapshotFormat{
+      .has_turn_economy = save_version >= kTurnEconomySaveVersion,
+      .has_damage_profile = save_version >= kDamageProfileSaveVersion,
+      .has_game_clock = save_version >= kGameClockSaveVersion,
+  };
+}
 
 auto WriteSnapshot(const GameSnapshot& snapshot,
                    const std::filesystem::path& path) -> bool {
@@ -72,10 +78,8 @@ auto ReadSnapshot(const std::filesystem::path& path)
   if (!ReadU32(in, magic) || magic != kMagic) {
     return std::nullopt;
   }
-  if (!ReadU32(in, version) ||
-      (version != kSaveVersion && version != kPreviousSaveVersion &&
-       version != kLegacySecondsSaveVersion &&
-       version != kLegacyRoundsSaveVersion)) {
+  if (!ReadU32(in, version) || version < kMinSaveVersion ||
+      version > kSaveVersion) {
     return std::nullopt;
   }
   if (!ReadU32(in, payload_size) || payload_size == 0 ||
@@ -89,15 +93,13 @@ auto ReadSnapshot(const std::filesystem::path& path)
   if (!in) {
     return std::nullopt;
   }
-  std::optional<GameSnapshot> snapshot =
-      DecodeSnapshot(payload.data(), payload.size(), version >= 25,
-                     version >= 28, version >= 29, version >= 30);
-  if (snapshot.has_value() && version == kLegacyRoundsSaveVersion) {
-    for (Token& token : snapshot->tokens) {
-      ConvertLegacyConditionRounds(token.conditions);
-    }
-  }
-  return snapshot;
+  return DecodeSnapshot(payload.data(), payload.size(),
+                        SaveSnapshotFormat(version));
+}
+
+auto EncodeSnapshotAs(const GameSnapshot& snapshot, std::uint32_t save_version)
+    -> std::vector<std::uint8_t> {
+  return EncodeSnapshot(snapshot, SaveSnapshotFormat(save_version));
 }
 
 }  // namespace dnd

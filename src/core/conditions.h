@@ -59,9 +59,6 @@ inline constexpr std::size_t kMaxConditionNameBytes = 32;
 // снимается без спасброска.
 [[nodiscard]] auto IsIncapacitatingCondition(std::string_view name) -> bool;
 
-// Старые сохранения хранили длительность в ходах: перевести их в секунды.
-auto ConvertLegacyConditionRounds(std::vector<Condition>& conditions) -> void;
-
 // Палитра состояний 2024 для панели K (истощение — одна запись, уровень
 // считается по числу записей).
 [[nodiscard]] auto DefaultConditions() -> const std::vector<std::string>&;

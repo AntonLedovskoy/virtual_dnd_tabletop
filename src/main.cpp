@@ -26,7 +26,8 @@ namespace {
 constexpr const char* kUsage =
     "usage: virtual_dnd_tabletop [--menu] [--host] [--editor] [--port N] "
     "[--name NAME] [--password PASS] [--connect HOST[:PORT]] [--version] "
-    "[--no-update-check]";
+    "[--no-update-check]\n\n"
+    "--no-update-check зарезервирован: проверка обновлений пока не сделана.";
 
 // `--version` — тоже диалогом: консоли нет. В developer build видно, почему
 // автообновление выключено.
