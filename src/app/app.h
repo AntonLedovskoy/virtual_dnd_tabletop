@@ -169,6 +169,10 @@ class App {
   auto HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleConditionsTextInput(const char* text) -> void;
   auto ApplyConditionDc() -> void;
+  // Панель действий хода: рывок, отход, уклонение и остальные приёмы 2024.
+  auto OpenActions() -> void;
+  auto CloseActions() -> void;
+  auto HandleActionsKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto ToggleAoeMode() -> void;
   auto ClearAoe() -> void;
   auto SendAoe(const AoeTemplate& aoe) -> void;
@@ -305,6 +309,9 @@ class App {
   std::size_t conditions_selected_ = 0;
   bool conditions_dc_edit_ = false;
   std::string conditions_dc_buffer_;
+
+  bool actions_active_ = false;
+  TokenId actions_token_id_ = 0;
 
   bool scenes_active_ = false;
   std::size_t scenes_selected_ = 0;

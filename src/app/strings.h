@@ -54,6 +54,7 @@ inline constexpr std::string_view kHintSave = "S — спасбросок";
 inline constexpr std::string_view kHintInitiative = "I — бросок инициативы";
 inline constexpr std::string_view kHintSheet = "L — лист";
 inline constexpr std::string_view kHintConditions = "K — состояния";
+inline constexpr std::string_view kHintActions = "X — действия";
 inline constexpr std::string_view kHintMoveRange = "M — дальность";
 inline constexpr std::string_view kHintRuler = "Alt+ЛКМ — линейка";
 inline constexpr std::string_view kHintAoe = "F — шаблон области";
@@ -107,7 +108,7 @@ inline constexpr std::string_view kHelpCommonTitle = "Для всех";
 inline constexpr std::string_view kHelpDmTitle = "Мастер (DM)";
 inline constexpr std::string_view kHelpPlayerTitle = "Игрок";
 inline constexpr std::string_view kHelpClose = "F1 или Esc — закрыть";
-inline constexpr std::array<std::string_view, 17> kHelpCommon = {
+inline constexpr std::array<std::string_view, 18> kHelpCommon = {
     "Enter — чат и команды",
     "F1 — справка, Esc — закрыть",
     "Esc без активного режима — выйти в меню",
@@ -120,11 +121,12 @@ inline constexpr std::array<std::string_view, 17> kHelpCommon = {
     "PgUp / PgDn — лог, End — к новым",
     "Колесо над логом — прокрутка лога",
     "A — атака цели под курсором, Shift+A — преимущество, Ctrl+A — помеха",
+    "A в чужой ход — реакция по соседней цели",
     "S — спасбросок, I — инициатива",
     "K — состояния, L — лист (правит DM)",
+    "X — действия хода (рывок, отход, уклонение и другие)",
     "M — дальность хода (5–10–5), V — цвет",
-    "Команды: /damage N, /heal N",
-    "/deathsave — при 0 HP",
+    "Команды: /damage N, /heal N, /deathsave при 0 HP",
 };
 inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "C — забрать персонажа под курсором",
@@ -242,6 +244,35 @@ inline constexpr std::string_view kConditionsViewHint =
 inline constexpr std::string_view kConditionDcPrompt = "КС (0–30): ";
 inline constexpr std::string_view kConditionDcNeedActive =
     "Сначала включите состояние";
+// Панель действий хода: список 2024 и подсказки о счётчиках.
+inline constexpr std::string_view kActionsTitle = "Действия";
+inline constexpr std::string_view kActionsHint =
+    "1–8 — потратить действие | Esc — закрыть";
+inline constexpr std::string_view kActionsNoAccess =
+    "Действиями управляет владелец токена";
+inline constexpr std::string_view kActionAvailable = "Действие доступно";
+inline constexpr std::string_view kActionSpent = "Действие потрачено";
+inline constexpr std::string_view kActionNotTurn =
+    "Сейчас не ваш ход — доступна только реакция";
+inline constexpr std::string_view kActionCounter = "Действие";
+inline constexpr std::string_view kActionBonus = "Бонусное действие";
+inline constexpr std::string_view kActionBonusShort = "Бонус";
+inline constexpr std::string_view kActionReaction = "Реакция";
+inline constexpr std::string_view kCounterAvailable = "есть";
+inline constexpr std::string_view kCounterSpent = "потрачено";
+inline constexpr std::string_view kActionDashBonus = "Рывок: ещё ";
+inline constexpr std::array<std::string_view, 8> kActionNames = {
+    "Рывок",    "Отход", "Уклонение", "Помощь",
+    "Скрыться", "Поиск", "Изучение",  "Использовать предмет"};
+inline constexpr std::array<std::string_view, 8> kActionNotes = {
+    "дополнительное движение",
+    "движение без атак по возможности",
+    "атаки по вам с помехой",
+    "преимущество союзнику",
+    "спрятаться",
+    "осмотреть местность",
+    "вспомнить сведения",
+    "применить предмет"};
 inline constexpr std::string_view kMovementLeft = "Осталось хода";
 inline constexpr std::string_view kMovementOf = "из";
 inline constexpr std::string_view kMovementFree =
@@ -346,6 +377,8 @@ inline constexpr std::string_view kTimeDmOnly =
       return kHintSheet;
     case Hint::kConditions:
       return kHintConditions;
+    case Hint::kActions:
+      return kHintActions;
     case Hint::kColor:
       return kColorHint;
     case Hint::kMoveRange:
@@ -384,6 +417,8 @@ inline constexpr std::string_view kTimeDmOnly =
       return kConditionsHint;
     case Hint::kConditionsViewKeys:
       return kConditionsViewHint;
+    case Hint::kActionsKeys:
+      return kActionsHint;
   }
   return {};
 }

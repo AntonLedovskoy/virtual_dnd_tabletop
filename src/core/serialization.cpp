@@ -60,6 +60,7 @@ constexpr std::uint8_t kCommandAwardXp = 31;
 constexpr std::uint8_t kCommandAttackToken = 32;
 constexpr std::uint8_t kCommandHideArea = 33;
 constexpr std::uint8_t kCommandAdvanceTime = 34;
+constexpr std::uint8_t kCommandUseTurnAction = 35;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -108,10 +109,16 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.hit_die);
   writer.I32(token.con_modifier);
   writer.I32(token.hit_dice_spent);
+  writer.U8(token.action_used ? 1 : 0);
+  writer.U8(token.bonus_action_used ? 1 : 0);
+  writer.U8(token.reaction_used ? 1 : 0);
+  writer.I32(token.movement_bonus);
+  writer.U8(token.disengaged ? 1 : 0);
+  writer.U8(token.dodging ? 1 : 0);
 }
 
-auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
-    -> bool {
+auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
+               bool has_turn_economy) -> bool {
   std::uint32_t id = 0;
   std::string name;
   std::string owner;
@@ -141,6 +148,12 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
   std::int32_t hit_die = 8;
   std::int32_t con_modifier = 0;
   std::int32_t hit_dice_spent = 0;
+  std::uint8_t action_used = 0;
+  std::uint8_t bonus_action_used = 0;
+  std::uint8_t reaction_used = 0;
+  std::int32_t movement_bonus = 0;
+  std::uint8_t disengaged = 0;
+  std::uint8_t dodging = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -177,6 +190,12 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
       death_failures < 0 || death_failures > 3) {
     return false;
   }
+  if (has_turn_economy &&
+      (!reader.U8(action_used) || !reader.U8(bonus_action_used) ||
+       !reader.U8(reaction_used) || !reader.I32(movement_bonus) ||
+       !reader.U8(disengaged) || !reader.U8(dodging))) {
+    return false;
+  }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
       initiative < -1000000 || initiative > 1000000 || ac <= 0 || ac > 1000 ||
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
@@ -184,7 +203,9 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
       initiative_bonus > 100 || movement_used < 0 || movement_used > 1000 ||
       xp < 0 || xp > kMaxXp || !IsValidHitDie(hit_die) ||
       con_modifier < -kMaxConModifier || con_modifier > kMaxConModifier ||
-      hit_dice_spent < 0 || hit_dice_spent > kMaxLevel ||
+      hit_dice_spent < 0 || hit_dice_spent > kMaxLevel || action_used > 1 ||
+      bonus_action_used > 1 || reaction_used > 1 || movement_bonus < 0 ||
+      movement_bonus > 1000 || disengaged > 1 || dodging > 1 ||
       kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0 ||
       (!portrait.empty() && !IsSafeImageName(portrait))) {
@@ -218,6 +239,12 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc)
       .color = color,
       .portrait = std::move(portrait),
       .cell = Cell{.x = x, .y = y},
+      .action_used = action_used != 0,
+      .bonus_action_used = bonus_action_used != 0,
+      .reaction_used = reaction_used != 0,
+      .movement_bonus = movement_bonus,
+      .disengaged = disengaged != 0,
+      .dodging = dodging != 0,
   };
   return true;
 }
@@ -421,13 +448,25 @@ auto DecodeAttackCommand(ByteReader& reader) -> std::optional<Command> {
   std::uint32_t target = 0;
   std::uint8_t flags = 0;
   if (!reader.U32(attacker) || !reader.U32(target) || !reader.U8(flags) ||
-      (flags & ~0x3U) != 0 || (flags & 0x3U) == 0x3U || !reader.Done()) {
+      (flags & ~0x7U) != 0 || (flags & 0x3U) == 0x3U || !reader.Done()) {
     return std::nullopt;
   }
   return Command{AttackToken{.attacker = attacker,
                              .target = target,
                              .advantage = (flags & 0x1U) != 0,
-                             .disadvantage = (flags & 0x2U) != 0}};
+                             .disadvantage = (flags & 0x2U) != 0,
+                             .reaction = (flags & 0x4U) != 0}};
+}
+
+auto DecodeUseTurnActionCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::uint8_t kind = 0;
+  if (!reader.U32(id) || !reader.U8(kind) ||
+      kind >= static_cast<std::uint8_t>(kTurnActionCount) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{
+      UseTurnAction{.id = id, .kind = static_cast<TurnActionKind>(kind)}};
 }
 
 auto DecodePingCommand(ByteReader& reader) -> std::optional<Command> {
@@ -878,7 +917,7 @@ auto DecodeLogLineEvent(ByteReader& reader) -> std::optional<Event> {
 
 auto DecodeTokenAddedEvent(ByteReader& reader) -> std::optional<Event> {
   Token token;
-  if (!ReadToken(reader, token, true) || !reader.Done()) {
+  if (!ReadToken(reader, token, true, true) || !reader.Done()) {
     return std::nullopt;
   }
   return Event{TokenAdded{.token = std::move(token)}};
@@ -894,7 +933,7 @@ auto DecodeTokenRemovedEvent(ByteReader& reader) -> std::optional<Event> {
 
 auto DecodeTokenUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   Token token;
-  if (!ReadToken(reader, token, true) || !reader.Done()) {
+  if (!ReadToken(reader, token, true, true) || !reader.Done()) {
     return std::nullopt;
   }
   return Event{TokenUpdated{.token = std::move(token)}};
@@ -960,7 +999,8 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
 }
 
 auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
-                    bool conditions_have_dc) -> std::optional<GameSnapshot> {
+                    bool conditions_have_dc, bool has_turn_economy)
+    -> std::optional<GameSnapshot> {
   ByteReader reader(data, size);
   std::uint32_t width = 0;
   std::uint32_t height = 0;
@@ -994,7 +1034,7 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
   tokens.reserve(token_count);
   for (std::uint32_t i = 0; i < token_count; ++i) {
     Token token;
-    if (!ReadToken(reader, token, conditions_have_dc) ||
+    if (!ReadToken(reader, token, conditions_have_dc, has_turn_economy) ||
         !map.Contains(token.cell)) {
       return std::nullopt;
     }
@@ -1216,7 +1256,14 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           if (cmd.disadvantage) {
             flags |= 0x2U;
           }
+          if (cmd.reaction) {
+            flags |= 0x4U;
+          }
           writer.U8(flags);
+        } else if constexpr (std::is_same_v<T, UseTurnAction>) {
+          writer.U8(kCommandUseTurnAction);
+          writer.U32(cmd.id);
+          writer.U8(static_cast<std::uint8_t>(cmd.kind));
         } else if constexpr (std::is_same_v<T, PingAt>) {
           writer.U8(kCommandPing);
           writer.I32(cmd.cell.x);
@@ -1327,6 +1374,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeClearRevealedCommand(reader);
     case kCommandAwardXp:
       return DecodeAwardXpCommand(reader);
+    case kCommandUseTurnAction:
+      return DecodeUseTurnActionCommand(reader);
     default:
       return std::nullopt;
   }

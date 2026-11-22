@@ -15,6 +15,8 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
     case HintMode::kConditions:
       return {context.is_dm ? Hint::kConditionsKeys
                             : Hint::kConditionsViewKeys};
+    case HintMode::kActions:
+      return {Hint::kActionsKeys};
     case HintMode::kTable:
       break;
   }
@@ -31,8 +33,9 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
   if (!context.has_selection) {
     hints.push_back(Hint::kSelect);
   } else {
-    hints.insert(hints.end(), {Hint::kAttack, Hint::kSave, Hint::kMoveRange,
-                               Hint::kRuler, Hint::kConditions});
+    hints.insert(hints.end(),
+                 {Hint::kAttack, Hint::kSave, Hint::kMoveRange, Hint::kRuler,
+                  Hint::kConditions, Hint::kActions});
     if (context.can_view_sheet) {
       hints.push_back(Hint::kSheet);
     }

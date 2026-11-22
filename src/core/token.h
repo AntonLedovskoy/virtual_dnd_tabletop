@@ -78,6 +78,16 @@ struct Token {
   // Имя картинки-портрета рядом с .exe; пусто — цвет и инициалы.
   std::string portrait;
   Cell cell{};
+  // Экономика хода 2024. Действие, бонусное действие и реакция сбрасываются
+  // в начале хода токена. Рывок даёт movement_bonus клеток движения,
+  // отход запрещает атаки по возможности, уклонение даёт помеху атакам по
+  // токену; оба эффекта держатся до начала его следующего хода.
+  bool action_used = false;
+  bool bonus_action_used = false;
+  bool reaction_used = false;
+  int movement_bonus = 0;
+  bool disengaged = false;
+  bool dodging = false;
 };
 
 }  // namespace dnd

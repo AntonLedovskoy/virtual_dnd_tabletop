@@ -70,8 +70,8 @@ enum class MovementInfo : std::uint8_t {
 // Возвращает нижнюю границу панели или 0, если ничего не нарисовано.
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
-                    bool is_client, bool can_claim, MovementInfo movement)
-    -> float;
+                    bool is_client, bool can_claim, MovementInfo movement,
+                    bool in_combat) -> float;
 
 // Список игроков слева из ростера хоста, размещается на заданной координате y.
 auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
@@ -119,6 +119,11 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const std::vector<Condition>& conditions,
                          bool read_only, std::size_t selected, bool edit_dc,
                          const std::string& dc_buffer) -> void;
+
+// Модальный список действий хода (2024): рывок, отход, уклонение и другие.
+// own_turn — ход этого токена и действие ещё не потрачено.
+auto DrawActionsPanel(SDL_Renderer* renderer, TextRenderer* text,
+                      const Token& token, bool own_turn) -> void;
 
 // Модальный список сцен кампании для DM: имя, заметка, активная и выбранная.
 // edit_label непустой, когда DM правит имя или заметку; status — сообщение

@@ -48,6 +48,7 @@
 #include "core/session_log.h"
 #include "core/sha256.h"
 #include "core/ui_hint.h"
+#include "core/units.h"
 #include "core/utf8.h"
 #include "core/version.h"
 #include "core/visibility.h"
@@ -2728,6 +2729,152 @@ auto TestMovementBudget() -> void {
          "player cannot jump over a sealed wall");
 }
 
+auto TestTurnEconomy() -> void {
+  const dnd::GridMap map(16, 3);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .initiative = 20,
+                         .ac = 10,
+                         .speed = 9,
+                         .attack_bonus = 100,
+                         .initiative_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "rival",
+                         .owner = "bob",
+                         .initiative = 10,
+                         .ac = 1,
+                         .speed = 9,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 1)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 12, 7);
+  Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the DM starts a turn-economy encounter");
+  Expect(server.State().ActiveTokenId() == 1, "the hero acts first");
+
+  const dnd::CommandOutcome rival_move = server.HandleCommand(
+      dnd::MoveToken{.id = 2, .target = CellAt(2, 2)}, "bob", false);
+  Expect(
+      !rival_move.accepted && rival_move.reject_reason == "сейчас не ваш ход",
+      "a player cannot move on someone else's turn");
+  const dnd::CommandOutcome rival_attack = server.HandleCommand(
+      dnd::AttackToken{.attacker = 2, .target = 1}, "bob", false);
+  Expect(!rival_attack.accepted &&
+             rival_attack.reject_reason == "сейчас не ваш ход",
+         "an attack outside your turn needs a reaction");
+  Expect(server
+             .HandleCommand(
+                 dnd::AttackToken{.attacker = 2, .target = 1, .reaction = true},
+                 "bob", false)
+             .accepted,
+         "an adjacent target can be attacked as a reaction");
+  Expect(TokenOf(server.State(), 2).reaction_used, "the reaction is spent");
+  const dnd::CommandOutcome second_reaction = server.HandleCommand(
+      dnd::AttackToken{.attacker = 2, .target = 1, .reaction = true}, "bob",
+      false);
+  Expect(!second_reaction.accepted &&
+             second_reaction.reject_reason == "реакция уже потрачена",
+         "only one reaction per round");
+
+  Expect(
+      server
+          .HandleCommand(
+              dnd::UseTurnAction{.id = 1, .kind = dnd::TurnActionKind::kDodge},
+              "alice", false)
+          .accepted,
+      "the active player spends the action on Dodge");
+  const dnd::Token dodging = TokenOf(server.State(), 1);
+  Expect(dodging.action_used && dodging.dodging,
+         "Dodge marks the action spent and the token dodging");
+  const dnd::CommandOutcome spent_action = server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 2}, "alice", false);
+  Expect(!spent_action.accepted &&
+             spent_action.reject_reason == "действие уже потрачено",
+         "one action per turn");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(3, 1)},
+                            "alice", false)
+             .accepted,
+         "movement is separate from the action");
+
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the DM ends the hero turn");
+  Expect(server.State().ActiveTokenId() == 2, "the rival acts next");
+  Expect(server
+             .HandleCommand(
+                 dnd::AttackToken{.attacker = 1, .target = 2, .reaction = true},
+                 "alice", false)
+             .accepted,
+         "the hero reacts on the rival's turn");
+  Expect(TokenOf(server.State(), 1).reaction_used,
+         "the hero reaction is spent");
+  Expect(server
+             .HandleCommand(dnd::AttackToken{.attacker = 2, .target = 1}, "bob",
+                            false)
+             .accepted,
+         "the rival uses the action on their own turn");
+
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the round returns to the hero");
+  const dnd::Token fresh = TokenOf(server.State(), 1);
+  Expect(!fresh.action_used && !fresh.reaction_used && !fresh.dodging &&
+             fresh.movement_bonus == 0,
+         "a new turn restores action, reaction and Dodge");
+  Expect(
+      server
+          .HandleCommand(
+              dnd::UseTurnAction{.id = 1, .kind = dnd::TurnActionKind::kDash},
+              "alice", false)
+          .accepted,
+      "Dash spends the action");
+  const dnd::Token dashed = TokenOf(server.State(), 1);
+  Expect(dashed.movement_bonus == dnd::SpeedToCells(dashed.speed),
+         "Dash adds a full speed of movement");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(10, 1)},
+                            "alice", false)
+             .accepted,
+         "the dash budget covers a longer move");
+  Expect(TokenOf(server.State(), 1).movement_used == 7,
+         "the longer move is charged normally");
+
+  Expect(server
+             .HandleCommand(
+                 dnd::UpdateTokenCombat{
+                     .id = 1, .conditions = {dnd::Condition{"оглушён"}}},
+                 "", true)
+             .accepted,
+         "the DM stuns the hero");
+  const dnd::CommandOutcome stunned_move = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(11, 1)}, "alice", false);
+  Expect(!stunned_move.accepted &&
+             stunned_move.reject_reason == "персонаж недееспособен",
+         "an incapacitated token does not move");
+  const dnd::CommandOutcome stunned_attack = server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 2}, "alice", false);
+  Expect(!stunned_attack.accepted &&
+             stunned_attack.reject_reason == "персонаж недееспособен",
+         "an incapacitated token does not attack");
+  const dnd::CommandOutcome stunned_action = server.HandleCommand(
+      dnd::UseTurnAction{.id = 1, .kind = dnd::TurnActionKind::kHide}, "alice",
+      false);
+  Expect(!stunned_action.accepted &&
+             stunned_action.reject_reason == "персонаж недееспособен",
+         "an incapacitated token has no actions");
+}
+
 auto TestMovementPathsAndDiagonals() -> void {
   const dnd::GridMap corridor(6, 1);
   const dnd::GameSnapshot snapshot{
@@ -4110,8 +4257,8 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::AwardXp>(*award_decoded).party,
          "xp command survives serialization");
 
-  const dnd::Command attack_command{
-      dnd::AttackToken{.attacker = 4, .target = 7, .advantage = true}};
+  const dnd::Command attack_command{dnd::AttackToken{
+      .attacker = 4, .target = 7, .advantage = true, .reaction = true}};
   const std::vector<std::uint8_t> attack_bytes =
       dnd::EncodeCommand(attack_command);
   const std::optional<dnd::Command> attack_decoded =
@@ -4121,12 +4268,29 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::AttackToken>(*attack_decoded).attacker == 4 &&
              std::get<dnd::AttackToken>(*attack_decoded).target == 7 &&
              std::get<dnd::AttackToken>(*attack_decoded).advantage &&
-             !std::get<dnd::AttackToken>(*attack_decoded).disadvantage,
+             !std::get<dnd::AttackToken>(*attack_decoded).disadvantage &&
+             std::get<dnd::AttackToken>(*attack_decoded).reaction,
          "attack command survives serialization");
-
   const std::vector<std::uint8_t> both_modes{32, 1, 0, 0, 0, 2, 0, 0, 0, 3};
   Expect(!dnd::DecodeCommand(both_modes.data(), both_modes.size()).has_value(),
          "advantage and disadvantage together are rejected by the decoder");
+
+  const dnd::Command turn_action{
+      dnd::UseTurnAction{.id = 5, .kind = dnd::TurnActionKind::kDodge}};
+  const std::vector<std::uint8_t> turn_action_bytes =
+      dnd::EncodeCommand(turn_action);
+  const std::optional<dnd::Command> turn_action_decoded =
+      dnd::DecodeCommand(turn_action_bytes.data(), turn_action_bytes.size());
+  Expect(turn_action_decoded.has_value() &&
+             std::holds_alternative<dnd::UseTurnAction>(*turn_action_decoded) &&
+             std::get<dnd::UseTurnAction>(*turn_action_decoded).id == 5 &&
+             std::get<dnd::UseTurnAction>(*turn_action_decoded).kind ==
+                 dnd::TurnActionKind::kDodge,
+         "turn action command survives serialization");
+  const std::vector<std::uint8_t> unknown_action{35, 5, 0, 0, 0, 8};
+  Expect(!dnd::DecodeCommand(unknown_action.data(), unknown_action.size())
+              .has_value(),
+         "an unknown turn action is rejected");
 
   const dnd::Event revealed_event{
       dnd::RevealedUpdated{.cells = {CellAt(1, 1), CellAt(2, 2)}}};
@@ -4380,7 +4544,12 @@ auto TestCommandEventSerialization() -> void {
                           .death_save_failures = 2,
                           .kind = dnd::TokenKind::kMonster,
                           .color = 0x46A864U,
-                          .cell = CellAt(1, 1)},
+                          .cell = CellAt(1, 1),
+                          .action_used = true,
+                          .reaction_used = true,
+                          .movement_bonus = 6,
+                          .disengaged = true,
+                          .dodging = true},
   }};
   const std::vector<std::uint8_t> updated_bytes = dnd::EncodeEvent(updated);
   const std::optional<dnd::Event> updated_decoded =
@@ -4424,7 +4593,15 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::TokenUpdated>(*updated_decoded).token.kind ==
               dnd::TokenKind::kMonster &&
           std::get<dnd::TokenUpdated>(*updated_decoded).token.color ==
-              0x46A864U,
+              0x46A864U &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.action_used &&
+          !std::get<dnd::TokenUpdated>(*updated_decoded)
+               .token.bonus_action_used &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.reaction_used &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.movement_bonus ==
+              6 &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.disengaged &&
+          std::get<dnd::TokenUpdated>(*updated_decoded).token.dodging,
       "token update survives serialization");
 
   const dnd::Command start{dnd::StartEncounter{}};
@@ -5249,6 +5426,7 @@ auto main() -> int {
     TestEncounter();
     TestEncounterCommands();
     TestMovementBudget();
+    TestTurnEconomy();
     TestMovementPathsAndDiagonals();
     TestAoe();
     TestAoeCommands();

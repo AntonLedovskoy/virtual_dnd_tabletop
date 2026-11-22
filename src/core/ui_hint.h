@@ -14,6 +14,7 @@ enum class HintMode : std::uint8_t {
   kBestiary,
   kScenes,
   kConditions,
+  kActions,
 };
 
 // Одно действие в нижней подсказке. Текст живёт в src/app/strings.h, чтобы
@@ -32,6 +33,7 @@ enum class Hint : std::uint8_t {
   kInitiative,
   kSheet,
   kConditions,
+  kActions,
   kColor,
   kMoveRange,
   kRuler,
@@ -51,6 +53,7 @@ enum class Hint : std::uint8_t {
   kScenesKeys,
   kConditionsKeys,
   kConditionsViewKeys,
+  kActionsKeys,
 };
 
 // Что сейчас происходит за столом. Остальное подсказка не учитывает: ей

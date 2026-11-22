@@ -1324,6 +1324,13 @@ auto App::HandleEvent(SDL_Event event) -> void {
     return;
   }
 
+  if (actions_active_) {
+    if (event.type == SDL_EVENT_KEY_DOWN) {
+      HandleActionsKeyDown(event.key);
+    }
+    return;
+  }
+
   if (bestiary_active_) {
     switch (event.type) {
       case SDL_EVENT_MOUSE_MOTION:
@@ -1537,6 +1544,9 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SDLK_K:
       OpenConditions();
+      break;
+    case SDLK_X:
+      OpenActions();
       break;
     case SDLK_M:
       if (FindSelectedToken() == nullptr) {
@@ -1894,6 +1904,8 @@ auto App::BottomHintText() const -> std::string {
     context.mode = HintMode::kScenes;
   } else if (conditions_active_) {
     context.mode = HintMode::kConditions;
+  } else if (actions_active_) {
+    context.mode = HintMode::kActions;
   }
   std::string text;
   for (const Hint hint : BottomHints(context)) {
@@ -1987,6 +1999,7 @@ auto App::OpenSheet() -> void {
   conditions_active_ = false;
   conditions_read_only_ = false;
   bestiary_active_ = false;
+  actions_active_ = false;
   sheet_token_id_ = token->id;
   sheet_field_ = SheetField::kAc;
   sheet_ac_ = std::to_string(token->ac);
@@ -2092,10 +2105,18 @@ auto App::AttackTarget(bool advantage, bool disadvantage) -> void {
     view_.AddLocalLine(std::string(strings::kAttackSelf));
     return;
   }
+  // Хост — DM и не ограничен ходом. Клиент в чужой ход отправляет атаку как
+  // реакцию: сервер проверит запас реакции и соседнюю цель.
+  const Encounter& encounter = view_.EncounterState();
+  const bool own_turn = !encounter.active ||
+                        (encounter.turn_index < encounter.order.size() &&
+                         encounter.order[encounter.turn_index] == attacker->id);
+  const bool reaction = options_.mode == AppMode::kClient && !own_turn;
   SendCommand(AttackToken{.attacker = attacker->id,
                           .target = target_id,
                           .advantage = advantage,
-                          .disadvantage = disadvantage});
+                          .disadvantage = disadvantage,
+                          .reaction = reaction});
 }
 
 auto App::RollSave() -> void {
@@ -2240,6 +2261,7 @@ auto App::OpenBestiary() -> void {
   sheet_read_only_ = false;
   conditions_active_ = false;
   conditions_read_only_ = false;
+  actions_active_ = false;
 }
 
 auto App::HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void {
@@ -2324,6 +2346,7 @@ auto App::OpenConditions() -> void {
   sheet_active_ = false;
   sheet_read_only_ = false;
   bestiary_active_ = false;
+  actions_active_ = false;
 }
 
 auto App::CloseConditions() -> void {
@@ -2333,6 +2356,46 @@ auto App::CloseConditions() -> void {
   conditions_dc_buffer_.clear();
   conditions_token_id_ = 0;
   conditions_draft_.clear();
+}
+
+auto App::OpenActions() -> void {
+  const Token* token = FindSelectedToken();
+  if (token == nullptr) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  if (!CanEditToken(*token)) {
+    view_.AddLocalLine(std::string(strings::kActionsNoAccess));
+    return;
+  }
+  actions_active_ = true;
+  actions_token_id_ = token->id;
+  sheet_active_ = false;
+  sheet_read_only_ = false;
+  conditions_active_ = false;
+  bestiary_active_ = false;
+}
+
+auto App::CloseActions() -> void {
+  actions_active_ = false;
+  actions_token_id_ = 0;
+}
+
+auto App::HandleActionsKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (key.repeat) {
+    return;
+  }
+  if (key.key == SDLK_ESCAPE) {
+    CloseActions();
+    return;
+  }
+  if (key.key >= SDLK_1 &&
+      key.key < SDLK_1 + static_cast<SDL_Keycode>(kTurnActionCount)) {
+    const auto index = static_cast<std::uint8_t>(key.key - SDLK_1);
+    SendCommand(UseTurnAction{.id = actions_token_id_,
+                              .kind = static_cast<TurnActionKind>(index)});
+    CloseActions();
+  }
 }
 
 auto App::ToggleCondition(int index, bool until_removed) -> void {
@@ -2987,6 +3050,9 @@ auto App::PruneStaleViewState() -> void {
   if (conditions_active_ && !has_token(conditions_token_id_)) {
     CloseConditions();
   }
+  if (actions_active_ && !has_token(actions_token_id_)) {
+    CloseActions();
+  }
 }
 
 auto App::ScrollLog(int lines) -> void {
@@ -3451,6 +3517,7 @@ auto App::OpenScenes() -> void {
   sheet_read_only_ = false;
   conditions_active_ = false;
   conditions_read_only_ = false;
+  actions_active_ = false;
   chat_.Close();
 }
 
@@ -3718,7 +3785,8 @@ auto App::Iterate() -> void {
     if (range_token != nullptr) {
       int radius = SpeedToCells(range_token->speed);
       if (encounter.active && !is_dm) {
-        radius = std::max(0, radius - range_token->movement_used);
+        radius = std::max(0, radius + range_token->movement_bonus -
+                                 range_token->movement_used);
       }
       // Монстры и NPC перекрывают путь, персонажи — нет; встать на занятую
       // клетку всё равно нельзя, поэтому её не показываем.
@@ -3797,7 +3865,7 @@ auto App::Iterate() -> void {
   }
   const float token_bottom =
       DrawTokenPanel(renderer_, text_.get(), selected, options_.player_name,
-                     is_client, can_claim, movement);
+                     is_client, can_claim, movement, encounter.active);
   const float players_y = token_bottom > 0.0F ? token_bottom + 12.0F : 280.0F;
   players_top_ = players_y;
   DrawPlayersPanel(renderer_, text_.get(), players_, players_y);
@@ -3854,6 +3922,24 @@ auto App::Iterate() -> void {
                           conditions_draft_, conditions_read_only_,
                           conditions_selected_, conditions_dc_edit_,
                           conditions_dc_buffer_);
+    }
+  }
+  if (actions_active_) {
+    const Token* action_token = nullptr;
+    for (const Token& token : view_.Tokens()) {
+      if (token.id == actions_token_id_) {
+        action_token = &token;
+        break;
+      }
+    }
+    if (action_token == nullptr) {
+      CloseActions();
+    } else {
+      const bool own_turn =
+          !encounter.active || is_dm ||
+          (encounter.turn_index < encounter.order.size() &&
+           encounter.order[encounter.turn_index] == action_token->id);
+      DrawActionsPanel(renderer_, text_.get(), *action_token, own_turn);
     }
   }
   if (history_active_) {

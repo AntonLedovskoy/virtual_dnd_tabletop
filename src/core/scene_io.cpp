@@ -15,8 +15,10 @@ namespace {
 constexpr std::uint32_t kMagic = 0x53444E44;  // "DNDS" в little-endian
 constexpr std::uint32_t kMaxPayload = 64U * 1024U * 1024U;
 // До версии 25 у состояний не было КС; до версии 24 длительность была в ходах.
+// Версия 27 не знает полей экономики хода (действие, реакция, рывок).
 constexpr std::uint32_t kLegacyRoundsSaveVersion = 23;
 constexpr std::uint32_t kLegacySecondsSaveVersion = 24;
+constexpr std::uint32_t kPreviousSaveVersion = 27;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -70,7 +72,8 @@ auto ReadSnapshot(const std::filesystem::path& path)
     return std::nullopt;
   }
   if (!ReadU32(in, version) ||
-      (version != kSaveVersion && version != kLegacySecondsSaveVersion &&
+      (version != kSaveVersion && version != kPreviousSaveVersion &&
+       version != kLegacySecondsSaveVersion &&
        version != kLegacyRoundsSaveVersion)) {
     return std::nullopt;
   }
@@ -86,7 +89,9 @@ auto ReadSnapshot(const std::filesystem::path& path)
     return std::nullopt;
   }
   std::optional<GameSnapshot> snapshot =
-      DecodeSnapshot(payload.data(), payload.size(), version == kSaveVersion);
+      DecodeSnapshot(payload.data(), payload.size(),
+                     version == kSaveVersion || version == kPreviousSaveVersion,
+                     version >= kSaveVersion);
   if (snapshot.has_value() && version == kLegacyRoundsSaveVersion) {
     for (Token& token : snapshot->tokens) {
       ConvertLegacyConditionRounds(token.conditions);

@@ -112,6 +112,13 @@ class GameState {
   // запоминает чётность диагоналей после хода.
   [[nodiscard]] auto SpendMovement(TokenId id, int steps, int diagonal_parity)
       -> std::optional<Token>;
+  // Тратит действие или реакцию токена; возвращает обновлённый токен.
+  // Проверкой хода и недееспособности занимается сервер.
+  [[nodiscard]] auto SpendAction(TokenId id) -> std::optional<Token>;
+  [[nodiscard]] auto SpendReaction(TokenId id) -> std::optional<Token>;
+  // Действие хода: отмечает действие потраченным и включает эффект приёма.
+  [[nodiscard]] auto UseTurnAction(TokenId id, TurnActionKind kind)
+      -> std::optional<Token>;
 
   // Боевой порядок.
   [[nodiscard]] auto EncounterState() const -> const Encounter& {
@@ -151,6 +158,9 @@ class GameState {
   auto FindToken(TokenId id) -> Token*;
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;
   auto RebuildOrder(TokenId keep) -> void;
+  // Начало хода: полный запас движения, доступные действие, бонусное действие
+  // и реакция, снятые эффекты рывка, отхода и уклонения.
+  static auto ResetTurnEconomy(Token& token) -> void;
 
   GridMap map_;
   std::vector<Token> tokens_;

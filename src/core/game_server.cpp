@@ -89,15 +89,67 @@ auto ControlRejectReason(const Token& token) -> const char* {
   return "токен контролирует другой игрок";
 }
 
-// Токены, чей запас движения нужно показать клиентам после сброса.
-auto TokensWithSpentMovement(const GameState& state) -> std::vector<TokenId> {
+// Токены, чьё состояние хода нужно показать клиентам после сброса.
+auto TokensWithTurnState(const GameState& state) -> std::vector<TokenId> {
   std::vector<TokenId> ids;
   for (const Token& token : state.Tokens()) {
-    if (token.movement_used != 0) {
+    if (token.movement_used != 0 || token.action_used ||
+        token.bonus_action_used || token.reaction_used ||
+        token.movement_bonus != 0 || token.disengaged || token.dodging) {
       ids.push_back(token.id);
     }
   }
   return ids;
+}
+
+auto TurnActionName(TurnActionKind kind) -> const char* {
+  switch (kind) {
+    case TurnActionKind::kDash:
+      return "Рывок";
+    case TurnActionKind::kDisengage:
+      return "Отход";
+    case TurnActionKind::kDodge:
+      return "Уклонение";
+    case TurnActionKind::kHelp:
+      return "Помощь";
+    case TurnActionKind::kHide:
+      return "Скрыться";
+    case TurnActionKind::kSearch:
+      return "Поиск";
+    case TurnActionKind::kStudy:
+      return "Изучение";
+    case TurnActionKind::kUseObject:
+      return "Использовать предмет";
+  }
+  return "Действие";
+}
+
+auto TurnActionEffect(TurnActionKind kind, const Token& token) -> std::string {
+  switch (kind) {
+    case TurnActionKind::kDash:
+      return " — ещё " + FormatMeters(SpeedToCells(token.speed)) + " движения";
+    case TurnActionKind::kDisengage:
+      return " — движение не вызывает атак по возможности";
+    case TurnActionKind::kDodge:
+      return " — атаки по нему с помехой до начала его следующего хода";
+    case TurnActionKind::kHelp:
+      return " — преимущество союзнику (на столе)";
+    case TurnActionKind::kHide:
+      return " — скрывается";
+    case TurnActionKind::kSearch:
+      return " — осматривает местность";
+    case TurnActionKind::kStudy:
+      return " — вспоминает сведения";
+    case TurnActionKind::kUseObject:
+      return " — использует предмет";
+  }
+  return {};
+}
+
+// Атака по возможности бьёт только цель в 5 футах, то есть в соседней клетке.
+auto AreAdjacent(Cell left, Cell right) -> bool {
+  return std::abs(left.x - right.x) <= 1 && std::abs(left.y - right.y) <= 1 &&
+         (left.x != right.x || left.y != right.y);
 }
 
 }  // namespace
@@ -193,6 +245,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleClearRevealed(can_control_all);
         } else if constexpr (std::is_same_v<T, AwardXp>) {
           return HandleAwardXp(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, UseTurnAction>) {
+          return HandleUseTurnAction(cmd, actor, can_control_all);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -216,6 +270,21 @@ auto GameServer::CanControl(const Token& token, const std::string& actor,
   return SamePlayerName(token.owner, actor);
 }
 
+auto GameServer::TurnRejectReason(const Token& token,
+                                  bool can_control_all) const -> const char* {
+  if (can_control_all) {
+    return nullptr;
+  }
+  // Недееспособный персонаж не действует ни в свой ход, ни в чужой.
+  if (IsIncapacitated(token)) {
+    return "персонаж недееспособен";
+  }
+  if (state_.EncounterState().active && state_.ActiveTokenId() != token.id) {
+    return "сейчас не ваш ход";
+  }
+  return nullptr;
+}
+
 auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
                             bool can_control_all) -> CommandOutcome {
   const Token* token = FindToken(command.id);
@@ -224,6 +293,11 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   }
   if (!CanControl(*token, actor, can_control_all)) {
     return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  // В свой ход двигается только тот, чья сейчас очередь; вне боя и у DM
+  // ограничений нет. Недееспособного не двигает даже владелец.
+  if (const char* reason = TurnRejectReason(*token, can_control_all)) {
+    return CommandOutcome{.reject_reason = reason};
   }
   // Игрок не может вслепую ткнуть в неразведанную клетку. DM двигает токены
   // свободно, а разведанная клетка остаётся допустимой, даже если сейчас
@@ -262,7 +336,8 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
     }
   }
   if (budgeted) {
-    if (token->movement_used + path->cost > SpeedToCells(token->speed)) {
+    const int budget = SpeedToCells(token->speed) + token->movement_bonus;
+    if (token->movement_used + path->cost > budget) {
       return CommandOutcome{.reject_reason = "не хватает движения на ход"};
     }
   }
@@ -602,6 +677,29 @@ auto GameServer::HandleAttack(const AttackToken& command,
   if (!CanControl(*attacker, actor, can_control_all)) {
     return CommandOutcome{.reject_reason = ControlRejectReason(*attacker)};
   }
+  const bool encounter_active = state_.EncounterState().active;
+  const bool own_turn =
+      !encounter_active || state_.ActiveTokenId() == attacker->id;
+  const bool is_reaction = encounter_active && !own_turn;
+  if (!can_control_all) {
+    if (IsIncapacitated(*attacker)) {
+      return CommandOutcome{.reject_reason = "персонаж недееспособен"};
+    }
+    if (is_reaction) {
+      if (!command.reaction) {
+        return CommandOutcome{.reject_reason = "сейчас не ваш ход"};
+      }
+      if (attacker->reaction_used) {
+        return CommandOutcome{.reject_reason = "реакция уже потрачена"};
+      }
+      if (!AreAdjacent(attacker->cell, target->cell)) {
+        return CommandOutcome{.reject_reason =
+                                  "реакция — только по соседней цели"};
+      }
+    } else if (attacker->action_used) {
+      return CommandOutcome{.reject_reason = "действие уже потрачено"};
+    }
+  }
   // Игрок не бьёт то, чего не видит: иначе командой вручную можно нащупать
   // монстра в тумане. DM видит весь стол.
   if (!can_control_all && !IsVisibleTo(actor, target->cell)) {
@@ -610,6 +708,17 @@ auto GameServer::HandleAttack(const AttackToken& command,
   if (command.advantage && command.disadvantage) {
     return CommandOutcome{.reject_reason =
                               "нельзя одновременно преимущество и помеху"};
+  }
+  // Уклонение даёт помеху атакам по токену. Преимущество и помеха взаимно
+  // гасятся, как и любые другие источники (SRD 5.2.1).
+  bool advantage = command.advantage;
+  bool disadvantage = command.disadvantage;
+  if (target->dodging) {
+    if (advantage) {
+      advantage = false;
+    } else {
+      disadvantage = true;
+    }
   }
   DiceExpression damage;
   if (attacker->damage.size() > kMaxDamageExpression ||
@@ -622,18 +731,19 @@ auto GameServer::HandleAttack(const AttackToken& command,
       .count = 1,
       .sides = 20,
       .modifier = attacker->attack_bonus,
-      .advantage = command.advantage,
-      .disadvantage = command.disadvantage,
+      .advantage = advantage,
+      .disadvantage = disadvantage,
   };
   const DiceRollResult roll = RollDiceExpression(attack, rng_);
   const AttackCheck check =
       CheckAttack(roll.chosen, attacker->attack_bonus, target->ac);
 
   std::ostringstream text;
-  text << "Атака: " << attacker->name << " по " << target->name;
-  if (command.advantage) {
+  text << "Атака" << (is_reaction ? " (реакция)" : "") << ": " << attacker->name
+       << " по " << target->name;
+  if (advantage) {
     text << " с преимуществом";
-  } else if (command.disadvantage) {
+  } else if (disadvantage) {
     text << " с помехой";
   }
   text << ": d20" << (attacker->attack_bonus >= 0 ? " + " : " - ")
@@ -668,10 +778,56 @@ auto GameServer::HandleAttack(const AttackToken& command,
                       .text = text.str(),
                       .timestamp = CurrentTimeSeconds()},
   });
+  if (!can_control_all && encounter_active) {
+    const std::optional<Token> spent = is_reaction
+                                           ? state_.SpendReaction(attacker->id)
+                                           : state_.SpendAction(attacker->id);
+    if (spent.has_value()) {
+      outcome.events.emplace_back(TokenUpdated{.token = *spent});
+    }
+  }
   if (applied_damage > 0) {
     DamageAndLog(target_id, applied_damage, check.critical, actor,
                  outcome.events);
   }
+  return outcome;
+}
+
+auto GameServer::HandleUseTurnAction(const UseTurnAction& command,
+                                     const std::string& actor,
+                                     bool can_control_all) -> CommandOutcome {
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!CanControl(*token, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  if (!IsValidTurnAction(command.kind)) {
+    return CommandOutcome{.reject_reason = "неизвестное действие"};
+  }
+  if (const char* reason = TurnRejectReason(*token, can_control_all)) {
+    return CommandOutcome{.reject_reason = reason};
+  }
+  if (!can_control_all && token->action_used) {
+    return CommandOutcome{.reject_reason = "действие уже потрачено"};
+  }
+
+  const std::optional<Token> updated =
+      state_.UseTurnAction(command.id, command.kind);
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "не удалось выполнить действие"};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  outcome.events.emplace_back(LogLineAdded{
+      .line =
+          LogLine{.author = AuthorName(actor),
+                  .text = token->name + ": " + TurnActionName(command.kind) +
+                          TurnActionEffect(command.kind, *token),
+                  .timestamp = CurrentTimeSeconds()},
+  });
   return outcome;
 }
 
@@ -1336,16 +1492,20 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
   if (!can_control_all) {
     return CommandOutcome{.reject_reason = "бой начинает только DM"};
   }
-  const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
+  const std::vector<TokenId> spent = TokensWithTurnState(state_);
   // Инициатива бросается за всех сразу: d20 + бонус из листа. Это же
   // значение потом можно поправить вручную через [ и ].
   std::uniform_int_distribution<int> d20(1, 20);
   std::vector<std::pair<int, std::string>> rolls;
   rolls.reserve(state_.Tokens().size());
+  std::vector<TokenId> changed = spent;
   for (const Token& token : state_.Tokens()) {
     const int value = d20(rng_) + token.initiative_bonus;
     rolls.emplace_back(value, token.name);
-    (void)state_.SetInitiative(token.id, value);
+    if (state_.SetInitiative(token.id, value).has_value() &&
+        std::ranges::find(changed, token.id) == changed.end()) {
+      changed.push_back(token.id);
+    }
   }
   if (!state_.StartEncounter()) {
     return CommandOutcome{.reject_reason = "нет токенов для инициативы"};
@@ -1367,7 +1527,7 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
                       .text = initiative.str(),
                       .timestamp = CurrentTimeSeconds()},
   });
-  for (const TokenId id : spent) {
+  for (const TokenId id : changed) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
     }
@@ -1382,7 +1542,7 @@ auto GameServer::HandleEndEncounter(bool can_control_all) -> CommandOutcome {
   if (!state_.EncounterState().active) {
     return CommandOutcome{.reject_reason = "нет активного боя"};
   }
-  const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
+  const std::vector<TokenId> spent = TokensWithTurnState(state_);
   state_.EndEncounter();
   CommandOutcome outcome;
   outcome.accepted = true;
@@ -1442,7 +1602,7 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
     }
   }
 
-  const std::vector<TokenId> spent = TokensWithSpentMovement(state_);
+  const std::vector<TokenId> spent = TokensWithTurnState(state_);
   if (!state_.NextTurn()) {
     return CommandOutcome{.reject_reason = "нет активного боя"};
   }
@@ -1451,6 +1611,16 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
   }
   // У нового активного токена время хода уже срезало его состояния.
   remember(state_.ActiveTokenId());
+  if (const std::optional<Token> active =
+          state_.TokenCopy(state_.ActiveTokenId())) {
+    outcome.events.emplace_back(LogLineAdded{
+        .line =
+            LogLine{.author = "DM",
+                    .text = "Ход: " + active->name + " (раунд " +
+                            std::to_string(state_.EncounterState().round) + ")",
+                    .timestamp = CurrentTimeSeconds()},
+    });
+  }
   for (const TokenId id : changed) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});

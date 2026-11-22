@@ -433,8 +433,8 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
 
 auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token* token, const std::string& player_name,
-                    bool is_client, bool can_claim, MovementInfo movement)
-    -> float {
+                    bool is_client, bool can_claim, MovementInfo movement,
+                    bool in_combat) -> float {
   if (renderer == nullptr || text == nullptr || token == nullptr) {
     return 0.0F;
   }
@@ -481,13 +481,24 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                      std::string(strings::kSheetSpeed) + ": " +
                      std::to_string(token->speed));
   if (movement == MovementInfo::kBudget) {
-    const int budget = SpeedToCells(token->speed);
+    const int budget = SpeedToCells(token->speed) + token->movement_bonus;
     const int left = std::max(0, budget - token->movement_used);
     lines.emplace_back(
         std::string(strings::kMovementLeft) + ": " + FormatMeters(left) + " " +
         std::string(strings::kMovementOf) + " " + FormatMeters(budget));
   } else if (movement == MovementInfo::kFree) {
     lines.emplace_back(strings::kMovementFree);
+  }
+  if (in_combat) {
+    const auto counter = [](bool used) -> std::string_view {
+      return used ? strings::kCounterSpent : strings::kCounterAvailable;
+    };
+    lines.emplace_back(std::string(strings::kActionCounter) + ": " +
+                       std::string(counter(token->action_used)) + "   " +
+                       std::string(strings::kActionBonusShort) + ": " +
+                       std::string(counter(token->bonus_action_used)));
+    lines.emplace_back(std::string(strings::kActionReaction) + ": " +
+                       std::string(counter(token->reaction_used)));
   }
   if (!token->conditions.empty()) {
     std::string condition_line = std::string(strings::kConditions) + ": ";
@@ -936,6 +947,75 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
              y + height - 48.0F, kHintText, content_width);
   text->Draw(std::string(strings::kConditionsPanelHint2), left,
              y + height - 26.0F, kHintText, content_width);
+}
+
+auto DrawActionsPanel(SDL_Renderer* renderer, TextRenderer* text,
+                      const Token& token, bool own_turn) -> void {
+  if (renderer == nullptr || text == nullptr) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!RenderSize(renderer, window_width, window_height)) {
+    return;
+  }
+  constexpr float width = 560.0F;
+  constexpr float height = 360.0F;
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const auto left = x + 30.0F;
+  const auto content_width = width - 60.0F;
+  auto cursor_y = y + 18.0F;
+  text->Draw(std::string(strings::kActionsTitle) + ": " + token.name, left,
+             cursor_y, kAuthorText, content_width);
+  cursor_y += text->LineHeight() + 8.0F;
+
+  std::string_view status = strings::kActionAvailable;
+  if (token.action_used) {
+    status = strings::kActionSpent;
+  } else if (!own_turn) {
+    status = strings::kActionNotTurn;
+  }
+  text->Draw(std::string(status), left, cursor_y,
+             token.action_used || !own_turn ? kHintText : kLogText,
+             content_width);
+  cursor_y += text->LineHeight() + 4.0F;
+
+  const auto counter = [](bool used) -> std::string_view {
+    return used ? strings::kCounterSpent : strings::kCounterAvailable;
+  };
+  const std::string counters = std::string(strings::kActionBonus) + ": " +
+                               std::string(counter(token.bonus_action_used)) +
+                               "   " + std::string(strings::kActionReaction) +
+                               ": " + std::string(counter(token.reaction_used));
+  text->Draw(counters, left, cursor_y, kLogText, content_width);
+  cursor_y += text->LineHeight() + 4.0F;
+
+  if (token.movement_bonus > 0) {
+    text->Draw(std::string(strings::kActionDashBonus) +
+                   FormatMeters(token.movement_bonus),
+               left, cursor_y, kLogText, content_width);
+    cursor_y += text->LineHeight() + 4.0F;
+  }
+  cursor_y += 4.0F;
+
+  for (std::size_t i = 0; i < strings::kActionNames.size(); ++i) {
+    const std::string line = std::to_string(i + 1) + ". " +
+                             std::string(strings::kActionNames[i]) + " — " +
+                             std::string(strings::kActionNotes[i]);
+    text->Draw(line, left, cursor_y, kLogText, content_width);
+    cursor_y += text->LineHeight() + 2.0F;
+  }
+  text->Draw(std::string(strings::kActionsHint), left, y + height - 30.0F,
+             kHintText, content_width);
 }
 
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,

@@ -104,10 +104,22 @@ class GameServer {
                                   const std::string& actor,
                                   bool can_control_all) -> CommandOutcome;
   // Атака: сравнение с КД цели и урон при попадании. Цель должна быть видна
-  // атакующему игроку; DM бьёт любого.
+  // атакующему игроку; DM бьёт любого. Игрок бьёт только в свой ход и тратит
+  // действие; вне своего хода — реакция по соседней цели.
   [[nodiscard]] auto HandleAttack(const AttackToken& command,
                                   const std::string& actor,
                                   bool can_control_all) -> CommandOutcome;
+  // Стандартное действие хода: проверяет ход, недееспособность и остаток
+  // действия, включает эффект (рывок, отход, уклонение) и пишет строку в лог.
+  [[nodiscard]] auto HandleUseTurnAction(const UseTurnAction& command,
+                                         const std::string& actor,
+                                         bool can_control_all)
+      -> CommandOutcome;
+  // Причина, по которой токен не может действовать сейчас; nullptr — можно.
+  // DM не ограничен, вне боя ход не проверяется.
+  [[nodiscard]] auto TurnRejectReason(const Token& token,
+                                      bool can_control_all) const -> const
+      char*;
   // Наносит урон и добавляет события токена, лога и проверки концентрации.
   // critical — критическое попадание (урон по лежачему даёт два провала).
   auto DamageAndLog(TokenId id, int amount, bool critical,

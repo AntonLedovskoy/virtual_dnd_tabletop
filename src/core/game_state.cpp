@@ -9,6 +9,7 @@
 
 #include "core/conditions.h"
 #include "core/levels.h"
+#include "core/units.h"
 
 namespace dnd {
 namespace {
@@ -526,6 +527,68 @@ auto GameState::SpendMovement(TokenId id, int steps, int diagonal_parity)
   return *token;
 }
 
+auto GameState::SpendAction(TokenId id) -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->action_used = true;
+  return *token;
+}
+
+auto GameState::SpendReaction(TokenId id) -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->reaction_used = true;
+  return *token;
+}
+
+auto GameState::UseTurnAction(TokenId id, TurnActionKind kind)
+    -> std::optional<Token> {
+  if (!IsValidTurnAction(kind)) {
+    return std::nullopt;
+  }
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->action_used = true;
+  switch (kind) {
+    case TurnActionKind::kDash:
+      // Рывок даёт ещё столько же движения, сколько обычный запас.
+      token->movement_bonus = SpeedToCells(token->speed);
+      break;
+    case TurnActionKind::kDisengage:
+      token->disengaged = true;
+      break;
+    case TurnActionKind::kDodge:
+      token->dodging = true;
+      break;
+    case TurnActionKind::kHelp:
+    case TurnActionKind::kHide:
+    case TurnActionKind::kSearch:
+    case TurnActionKind::kStudy:
+    case TurnActionKind::kUseObject:
+      // Подсказки для стола: отдельных автоматических эффектов у этих
+      // действий в первой версии нет.
+      break;
+  }
+  return *token;
+}
+
+auto GameState::ResetTurnEconomy(Token& token) -> void {
+  token.movement_used = 0;
+  token.diagonal_parity = 0;
+  token.action_used = false;
+  token.bonus_action_used = false;
+  token.reaction_used = false;
+  token.movement_bonus = 0;
+  token.disengaged = false;
+  token.dodging = false;
+}
+
 auto GameState::ActiveTokenId() const -> TokenId {
   if (!encounter_.active || encounter_.turn_index >= encounter_.order.size()) {
     return 0;
@@ -541,8 +604,7 @@ auto GameState::StartEncounter() -> bool {
   encounter_.active = true;
   encounter_.round = 1;
   for (Token& token : tokens_) {
-    token.movement_used = 0;
-    token.diagonal_parity = 0;
+    ResetTurnEconomy(token);
   }
   RebuildOrder(0);
   return true;
@@ -551,8 +613,7 @@ auto GameState::StartEncounter() -> bool {
 auto GameState::EndEncounter() -> void {
   encounter_ = Encounter{};
   for (Token& token : tokens_) {
-    token.movement_used = 0;
-    token.diagonal_parity = 0;
+    ResetTurnEconomy(token);
   }
 }
 
@@ -630,8 +691,7 @@ auto GameState::NextTurn() -> bool {
   // бою идёт по 6 секунд за ход: срочные состояния этого токена уменьшаются
   // в начале его хода; состояния с seconds == 0 держатся до ручного снятия.
   if (Token* token = FindToken(ActiveTokenId())) {
-    token->movement_used = 0;
-    token->diagonal_parity = 0;
+    ResetTurnEconomy(*token);
     TickConditions(*token, kSecondsPerRound);
   }
   return true;

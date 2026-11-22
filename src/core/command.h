@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <variant>
 
@@ -132,12 +133,40 @@ struct UpdateTokenSheet {
 // Атака одним токеном другого: сервер бросает d20 + бонус атаки против КД
 // цели и при попадании применяет урон из листа. 20 на d20 — критическое
 // попадание с удвоенными костями, 1 — промах. advantage/disadvantage
-// соответствуют броскам с преимуществом и помехой.
+// соответствуют броскам с преимуществом и помехой. reaction — атака по
+// возможности вне своего хода: тратит реакцию и бьёт только соседнюю цель.
 struct AttackToken {
   TokenId attacker = 0;
   TokenId target = 0;
   bool advantage = false;
   bool disadvantage = false;
+  bool reaction = false;
+};
+
+// Действие хода по правилам 2024. Экономику ведёт сервер: действие и
+// бонусное действие сбрасываются в начале хода токена, реакция — там же.
+enum class TurnActionKind : std::uint8_t {
+  kDash = 0,
+  kDisengage = 1,
+  kDodge = 2,
+  kHelp = 3,
+  kHide = 4,
+  kSearch = 5,
+  kStudy = 6,
+  kUseObject = 7,
+};
+
+inline constexpr int kTurnActionCount = 8;
+
+[[nodiscard]] constexpr auto IsValidTurnAction(TurnActionKind kind) -> bool {
+  return static_cast<std::uint8_t>(kind) <
+         static_cast<std::uint8_t>(kTurnActionCount);
+}
+
+// Владелец или DM: потратить действие на один из стандартных приёмов.
+struct UseTurnAction {
+  TokenId id = 0;
+  TurnActionKind kind = TurnActionKind::kDash;
 };
 
 // Владелец или DM: нанести урон. Временные HP принимают удар первыми, при
@@ -236,6 +265,6 @@ using Command =
                  StartEncounter, EndEncounter, NextTurn, SetAoe, AttackToken,
                  DamageToken, HealToken, RestParty, AdvanceTime, AoeDamage,
                  DeathSave, PingAt, SetMapBackground, SetTokenPortrait,
-                 RevealArea, HideArea, ClearRevealed, AwardXp>;
+                 RevealArea, HideArea, ClearRevealed, AwardXp, UseTurnAction>;
 
 }  // namespace dnd
