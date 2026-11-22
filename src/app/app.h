@@ -22,6 +22,7 @@
 #include "core/chat_input.h"
 #include "core/client_view.h"
 #include "core/delete_confirm.h"
+#include "core/editor_paint.h"
 #include "core/game_server.h"
 #include "core/local_transport.h"
 #include "core/log_history.h"
@@ -58,6 +59,13 @@ struct AppOptions {
   bool no_update_check = false;
 };
 
+// Штрих кисти в редакторе: зажатая ЛКМ рисует, ПКМ стирает.
+enum class EditorPaintMode : std::uint8_t {
+  kNone = 0,
+  kBrush = 1,
+  kErase = 2,
+};
+
 // Владеет окном/рендерером SDL и связывает ввод с командами, локальным
 // авторитетным GameServer и ClientView. Режим хоста обслуживает удалённых
 // клиентов по TCP; режим клиента работает с удалённым хостом без локального
@@ -89,6 +97,12 @@ class App {
   auto ResizeScene(int width, int height) -> void;
   auto CenterCamera() -> void;
   auto ApplyEditorBrush(Cell cell) -> void;
+  // Штрих кисти: клетки между последовательными положениями курсора.
+  auto BeginEditorStroke(EditorPaintMode mode, Cell cell) -> void;
+  auto ContinueEditorStroke(Cell cell) -> void;
+  auto EndEditorStroke() -> void;
+  auto PaintEditorCell(Cell cell, EditorPaintMode mode) -> void;
+  auto EraseEditorCell(Cell cell) -> void;
   auto AddEditorToken(Cell cell, TokenKind kind) -> void;
   // Бестиарий в редакторе: шаблон копируется в токен прямо в сцене.
   auto SpawnEditorBestiary(int index, bool group) -> void;
@@ -100,8 +114,15 @@ class App {
   auto CloseEditorScenes() -> void;
   auto HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleEditorScenesMouseDown(const SDL_MouseButtonEvent& button) -> void;
+  auto HandleEditorScenesTextInput(const char* text) -> void;
   auto SwitchEditorScene(std::size_t index) -> void;
   auto CreateEditorScene() -> void;
+  // Переименование и удаление карты в панели редактора.
+  auto BeginEditorSceneRename() -> void;
+  auto CancelEditorSceneRename() -> void;
+  auto CommitEditorSceneRename() -> void;
+  auto RequestDeleteEditorScene() -> void;
+  auto DeleteEditorScene(std::size_t index) -> void;
   auto HandlePanMotion(const SDL_MouseMotionEvent& motion) -> void;
   auto HandleWheel(const SDL_MouseWheelEvent& wheel) -> void;
   auto SubmitMenu() -> void;
@@ -291,11 +312,19 @@ class App {
   bool editor_scenes_active_ = false;
   std::size_t editor_scenes_selected_ = 0;
   std::string editor_scenes_status_;
+  // Имя карты в панели редактора набирается с нуля; первый TEXT_INPUT — это
+  // сама клавиша R.
+  bool editor_scene_edit_ = false;
+  std::string editor_scene_edit_buffer_;
+  bool editor_scene_edit_ignore_text_ = false;
+  DeleteConfirm delete_editor_scene_;
   bool client_connecting_ = false;
 
   EditorBrush editor_brush_ = EditorBrush::kWall;
   std::string editor_status_;
   bool editor_panel_visible_ = true;
+  EditorPaintMode editor_paint_mode_ = EditorPaintMode::kNone;
+  PaintDrag editor_stroke_;
 
   bool sheet_active_ = false;
   bool sheet_read_only_ = false;

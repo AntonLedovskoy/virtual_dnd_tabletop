@@ -201,6 +201,9 @@ inline constexpr std::string_view kEditorDescription =
     "Создайте карту, расставьте стены, рельеф, персонажей и монстров.";
 inline constexpr std::string_view kEditorSize = "Размер";
 inline constexpr std::string_view kEditorBrush = "Кисть";
+inline constexpr std::string_view kEditorMap = "Карта";
+inline constexpr std::string_view kEditorMapOf = "из";
+inline constexpr std::string_view kEditorNoMap = "не выбрана";
 inline constexpr std::string_view kBrushWall = "стена";
 inline constexpr std::string_view kBrushFloor = "пол";
 inline constexpr std::string_view kBrushTree = "дерево";
@@ -210,16 +213,22 @@ inline constexpr std::string_view kBrushLava = "лава";
 inline constexpr std::string_view kEditorSizeHint =
     "[ / ] — ширина карты, - / = — высота";
 inline constexpr std::string_view kEditorMouseHint =
-    "ЛКМ — рисовать | ПКМ — удалить | СКМ — панорама | колесо — зум";
+    "ЛКМ — рисовать, с зажатой — вести кисть | ПКМ — стереть | "
+    "СКМ — панорама | колесо — зум";
 inline constexpr std::string_view kEditorKeyHint =
-    "1–6 — кисть | P — персонаж | B — бестиарий | Tab — сцены | "
+    "1–6 — кисть | P — персонаж | B — бестиарий | Tab — карты | "
     "F2 — панель | F5 — сохранить | F9 — загрузить | Enter — играть | "
     "Esc — меню";
 inline constexpr std::string_view kEditorScenesHint =
-    "↑ ↓ — выбрать | Enter — открыть | 1–9 — сцена | N — новая из этой "
-    "карты | F5 — сохранить | Esc — закрыть";
+    "↑ ↓ — выбрать | Enter — открыть | 1–9 — карта | N — новая из этой "
+    "карты | R — переименовать | Del — удалить | F5 — сохранить | "
+    "Esc — закрыть";
 inline constexpr std::string_view kEditorSceneOpened = "Открыта сцена: ";
 inline constexpr std::string_view kEditorSceneCreated = "Создана сцена: ";
+inline constexpr std::string_view kEditorSceneRenamed = "Карта переименована: ";
+inline constexpr std::string_view kEditorSceneDeleted = "Карта удалена: ";
+inline constexpr std::string_view kEditorLastScene =
+    "Нельзя удалить последнюю карту";
 inline constexpr std::string_view kEditorSceneSaved = "Сцена сохранена";
 inline constexpr std::string_view kEditorSceneLoaded = "Сцена загружена";
 inline constexpr std::string_view kEditorSceneMissing =

@@ -499,6 +499,11 @@ auto App::StartEditor() -> void {
   editor_scenes_active_ = false;
   editor_scenes_selected_ = editor_scene_;
   editor_scenes_status_.clear();
+  editor_scene_edit_ = false;
+  editor_scene_edit_buffer_.clear();
+  editor_scene_edit_ignore_text_ = false;
+  delete_editor_scene_.Clear();
+  EndEditorStroke();
   ClearUndo();
   selected_id_ = 0;
   dragging_ = false;
@@ -755,6 +760,52 @@ auto App::ApplyEditorBrush(Cell cell) -> void {
   scene_.encounter = Encounter{};
 }
 
+auto App::BeginEditorStroke(EditorPaintMode mode, Cell cell) -> void {
+  if (mode == EditorPaintMode::kNone) {
+    return;
+  }
+  editor_paint_mode_ = mode;
+  editor_stroke_.Begin(cell);
+  PaintEditorCell(cell, mode);
+}
+
+auto App::ContinueEditorStroke(Cell cell) -> void {
+  if (editor_paint_mode_ == EditorPaintMode::kNone) {
+    return;
+  }
+  for (const Cell& painted : editor_stroke_.Move(cell)) {
+    PaintEditorCell(painted, editor_paint_mode_);
+  }
+}
+
+auto App::EndEditorStroke() -> void {
+  editor_paint_mode_ = EditorPaintMode::kNone;
+  editor_stroke_.End();
+}
+
+auto App::PaintEditorCell(Cell cell, EditorPaintMode mode) -> void {
+  if (mode == EditorPaintMode::kBrush) {
+    ApplyEditorBrush(cell);
+  } else if (mode == EditorPaintMode::kErase) {
+    EraseEditorCell(cell);
+  }
+}
+
+auto App::EraseEditorCell(Cell cell) -> void {
+  if (!scene_.map.Contains(cell)) {
+    return;
+  }
+  // ПКМ убирает сначала токен, иначе возвращает полу; туман не трогаем.
+  const auto before = scene_.tokens.size();
+  std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
+    return token.cell == cell;
+  });
+  if (scene_.tokens.size() == before) {
+    scene_.map.SetTerrain(cell, Terrain::kFloor);
+  }
+  scene_.encounter = Encounter{};
+}
+
 auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
   switch (key.key) {
     case SDLK_ESCAPE:
@@ -824,19 +875,26 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
 }
 
 auto App::OpenEditorScenes() -> void {
+  EndEditorStroke();
   editor_scenes_active_ = true;
   editor_scenes_selected_ = editor_scene_;
   editor_scenes_status_.clear();
+  editor_scene_edit_ = false;
+  editor_scene_edit_buffer_.clear();
+  editor_scene_edit_ignore_text_ = false;
+  delete_editor_scene_.Clear();
 }
 
 auto App::CloseEditorScenes() -> void {
   editor_scenes_active_ = false;
   editor_scenes_status_.clear();
+  CancelEditorSceneRename();
+  delete_editor_scene_.Clear();
 }
 
 auto App::HandleEditorScenesMouseDown(const SDL_MouseButtonEvent& button)
     -> void {
-  if (button.button != SDL_BUTTON_LEFT) {
+  if (button.button != SDL_BUTTON_LEFT || editor_scene_edit_) {
     return;
   }
   const std::size_t index =
@@ -853,6 +911,17 @@ auto App::HandleEditorScenesMouseDown(const SDL_MouseButtonEvent& button)
 }
 
 auto App::HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (editor_scene_edit_) {
+    if (key.key == SDLK_ESCAPE) {
+      CancelEditorSceneRename();
+    } else if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
+      CommitEditorSceneRename();
+    } else if (key.key == SDLK_BACKSPACE) {
+      EraseLastCodePoint(editor_scene_edit_buffer_);
+      editor_scenes_status_.clear();
+    }
+    return;
+  }
   switch (key.key) {
     case SDLK_ESCAPE:
     case SDLK_TAB:
@@ -873,6 +942,12 @@ auto App::HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SDLK_N:
       CreateEditorScene();
       return;
+    case SDLK_R:
+      BeginEditorSceneRename();
+      return;
+    case SDLK_DELETE:
+      RequestDeleteEditorScene();
+      return;
     case SDLK_F5:
       SaveScene();
       return;
@@ -889,12 +964,121 @@ auto App::HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
   }
 }
 
+auto App::HandleEditorScenesTextInput(const char* text) -> void {
+  if (!editor_scene_edit_ || text == nullptr) {
+    return;
+  }
+  // Первый TEXT_INPUT — это сама клавиша R, её не вводим.
+  if (editor_scene_edit_ignore_text_) {
+    editor_scene_edit_ignore_text_ = false;
+    return;
+  }
+  AppendUtf8(editor_scene_edit_buffer_, text, kMaxSceneNameLength);
+  editor_scenes_status_.clear();
+}
+
+auto App::BeginEditorSceneRename() -> void {
+  if (editor_scenes_selected_ >= campaign_.scenes.size()) {
+    return;
+  }
+  editor_scene_edit_ = true;
+  // Имя набирается с нуля: старое стирать не нужно.
+  editor_scene_edit_buffer_.clear();
+  editor_scene_edit_ignore_text_ = true;
+  editor_scenes_status_.clear();
+}
+
+auto App::CancelEditorSceneRename() -> void {
+  editor_scene_edit_ = false;
+  editor_scene_edit_buffer_.clear();
+  editor_scene_edit_ignore_text_ = false;
+}
+
+auto App::CommitEditorSceneRename() -> void {
+  if (!editor_scene_edit_ ||
+      editor_scenes_selected_ >= campaign_.scenes.size()) {
+    CancelEditorSceneRename();
+    return;
+  }
+  std::string name(TrimText(editor_scene_edit_buffer_));
+  if (name.empty()) {
+    editor_scenes_status_ = std::string(strings::kSceneNameEmpty);
+    return;
+  }
+  TruncateUtf8(name, kMaxSceneNameLength);
+  // Проверки те же, что у панели сцен DM: пусто, длина и занятое имя.
+  if (!dnd::RenameScene(campaign_, editor_scenes_selected_, std::move(name))) {
+    editor_scenes_status_ = std::string(strings::kSceneNameTaken);
+    return;
+  }
+  editor_status_ = std::string(strings::kEditorSceneRenamed) +
+                   campaign_.scenes[editor_scenes_selected_].name;
+  CancelEditorSceneRename();
+  editor_scenes_status_.clear();
+  SaveCampaign();
+}
+
+auto App::RequestDeleteEditorScene() -> void {
+  if (editor_scenes_selected_ >= campaign_.scenes.size()) {
+    return;
+  }
+  if (!CanDeleteScene(campaign_)) {
+    editor_scenes_status_ = std::string(strings::kEditorLastScene);
+    delete_editor_scene_.Clear();
+    return;
+  }
+  if (delete_editor_scene_.Request(editor_scenes_selected_,
+                                   std::chrono::steady_clock::now())) {
+    DeleteEditorScene(editor_scenes_selected_);
+    return;
+  }
+  editor_scenes_status_ = std::string(strings::kDeleteConfirm);
+}
+
+auto App::DeleteEditorScene(std::size_t index) -> void {
+  if (index >= campaign_.scenes.size() || !CanDeleteScene(campaign_)) {
+    return;
+  }
+  EndEditorStroke();
+  CancelEditorSceneRename();
+  // Правки открытой карты не теряем: она уходит в кампанию до удаления.
+  if (editor_scene_ < campaign_.scenes.size()) {
+    campaign_.scenes[editor_scene_].snapshot = scene_;
+  }
+  const std::string name = campaign_.scenes[index].name;
+  campaign_.scenes.erase(campaign_.scenes.begin() +
+                         static_cast<std::ptrdiff_t>(index));
+  const std::size_t next = IndexAfterDelete(index, campaign_.scenes.size());
+  const bool deleted_open = index == editor_scene_;
+  if (editor_scene_ > index) {
+    --editor_scene_;
+  }
+  if (deleted_open) {
+    editor_scene_ = next;
+    scene_ = campaign_.scenes[next].snapshot;
+    scene_.encounter = Encounter{};
+    selected_id_ = 0;
+    dragging_ = false;
+    drag_target_.reset();
+    panning_ = false;
+    CenterCamera();
+  }
+  campaign_.active = editor_scene_;
+  editor_scenes_selected_ = next;
+  editor_scenes_status_.clear();
+  editor_status_ = std::string(strings::kEditorSceneDeleted) + name;
+  SaveCampaign();
+}
+
 auto App::SwitchEditorScene(std::size_t index) -> void {
   if (index >= campaign_.scenes.size()) {
     return;
   }
+  EndEditorStroke();
+  CancelEditorSceneRename();
   if (index != editor_scene_ && editor_scene_ < campaign_.scenes.size()) {
-    // Правки остаются в памяти кампании и уйдут на диск при F5 или старте.
+    // Правки остаются в памяти кампании и сразу уходят на диск: Esc из
+    // редактора не должен терять уже закрытую карту.
     campaign_.scenes[editor_scene_].snapshot = scene_;
   }
   editor_scene_ = index;
@@ -907,6 +1091,7 @@ auto App::SwitchEditorScene(std::size_t index) -> void {
   drag_target_.reset();
   panning_ = false;
   CenterCamera();
+  SaveCampaign();
   editor_status_ =
       std::string(strings::kEditorSceneOpened) + campaign_.scenes[index].name;
   CloseEditorScenes();
@@ -914,6 +1099,7 @@ auto App::SwitchEditorScene(std::size_t index) -> void {
 
 auto App::CreateEditorScene() -> void {
   editor_scenes_status_.clear();
+  CancelEditorSceneRename();
   if (campaign_.scenes.size() >= kMaxCampaignScenes) {
     editor_scenes_status_ = "Достигнут предел числа сцен";
     return;
@@ -943,6 +1129,7 @@ auto App::HandleEditorMouseDown(const SDL_MouseButtonEvent& button) -> void {
     return;
   }
   if (button.button == SDL_BUTTON_MIDDLE) {
+    EndEditorStroke();
     panning_ = true;
     pan_last_x_ = button.x;
     pan_last_y_ = button.y;
@@ -950,20 +1137,15 @@ auto App::HandleEditorMouseDown(const SDL_MouseButtonEvent& button) -> void {
   }
   const Cell cell = CellFromPixel(button.x, button.y);
   if (button.button == SDL_BUTTON_LEFT) {
-    ApplyEditorBrush(cell);
+    BeginEditorStroke(EditorPaintMode::kBrush, cell);
   } else if (button.button == SDL_BUTTON_RIGHT) {
-    const auto before = scene_.tokens.size();
-    std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
-      return token.cell == cell;
-    });
-    if (scene_.tokens.size() == before) {
-      scene_.map.SetTerrain(cell, Terrain::kFloor);
-    }
-    scene_.encounter = Encounter{};
+    BeginEditorStroke(EditorPaintMode::kErase, cell);
   }
 }
 
 auto App::HandleEditorMouseUp(const SDL_MouseButtonEvent& button) -> void {
+  // Любая отпущенная кнопка заканчивает штрих, а не только та, что начала.
+  EndEditorStroke();
   if (button.button == SDL_BUTTON_MIDDLE) {
     panning_ = false;
   }
@@ -1379,6 +1561,9 @@ auto App::HandleEvent(SDL_Event event) -> void {
   if (in_editor_) {
     if (editor_scenes_active_) {
       switch (event.type) {
+        case SDL_EVENT_TEXT_INPUT:
+          HandleEditorScenesTextInput(event.text.text);
+          break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
           HandleEditorScenesMouseDown(event.button);
           break;
@@ -1401,12 +1586,22 @@ auto App::HandleEvent(SDL_Event event) -> void {
         mouse_x_ = event.motion.x;
         mouse_y_ = event.motion.y;
         HandlePanMotion(event.motion);
+        if (panning_) {
+          EndEditorStroke();
+        } else {
+          ContinueEditorStroke(CellFromPixel(event.motion.x, event.motion.y));
+        }
         break;
       case SDL_EVENT_MOUSE_WHEEL:
         HandleWheel(event.wheel);
         break;
       case SDL_EVENT_KEY_DOWN:
         HandleEditorKeyDown(event.key);
+        break;
+      case SDL_EVENT_WINDOW_FOCUS_LOST:
+        // Потеря фокуса отпускает кнопку мыши, не дожидаясь MOUSE_UP.
+        EndEditorStroke();
+        panning_ = false;
         break;
       default:
         break;
@@ -4006,13 +4201,21 @@ auto App::Iterate() -> void {
     DrawTokens(renderer_, scene_.tokens, camera_.cell_size, camera_.x,
                camera_.y, text_.get(), 0, 0, &editor_art);
     if (editor_panel_visible_) {
+      const std::string map_name = editor_scene_ < campaign_.scenes.size()
+                                       ? campaign_.scenes[editor_scene_].name
+                                       : std::string{};
       DrawEditorPanel(renderer_, text_.get(), scene_, editor_brush_,
+                      editor_scene_, campaign_.scenes.size(), map_name,
                       editor_status_);
     }
     if (editor_scenes_active_) {
+      const std::string edit_label = editor_scene_edit_
+                                         ? std::string(strings::kSceneNameLabel)
+                                         : std::string{};
       DrawScenesPanel(renderer_, text_.get(), campaign_.scenes,
-                      campaign_.active, editor_scenes_selected_, "", "",
-                      editor_scenes_status_, strings::kEditorScenesHint);
+                      campaign_.active, editor_scenes_selected_, edit_label,
+                      editor_scene_edit_buffer_, editor_scenes_status_,
+                      strings::kEditorScenesHint);
     }
     if (bestiary_active_) {
       DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());

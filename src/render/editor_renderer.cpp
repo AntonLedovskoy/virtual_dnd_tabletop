@@ -23,7 +23,7 @@ constexpr SDL_Color kHint{
 constexpr int kPanelX = 12;
 constexpr int kPanelY = 12;
 constexpr int kPanelWidth = 350;
-constexpr int kPanelHeight = 420;
+constexpr int kPanelHeight = 460;
 constexpr int kPadding = 12;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
@@ -59,7 +59,9 @@ auto EditorPanelBounds() -> SDL_FRect {
 
 auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
                      const GameSnapshot& scene, EditorBrush brush,
-                     const std::string& status) -> void {
+                     std::size_t scene_index, std::size_t scene_count,
+                     const std::string& scene_name, const std::string& status)
+    -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -78,6 +80,16 @@ auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
 
   text->Draw(std::string(strings::kEditorTitle), text_x, y, kTitleText,
              max_text_width);
+  y += static_cast<float>(line_height);
+  const std::string map_name =
+      scene_name.empty() ? std::string(strings::kEditorNoMap) : scene_name;
+  std::string map_line = std::string(strings::kEditorMap) + ": " + map_name;
+  if (scene_count > 0) {
+    map_line += "   " + std::to_string(scene_index + 1) + " " +
+                std::string(strings::kEditorMapOf) + " " +
+                std::to_string(scene_count);
+  }
+  text->Draw(map_line, text_x, y, kTitleText, max_text_width);
   y += static_cast<float>(line_height);
   y = text->DrawWrapped(std::string(strings::kEditorDescription), text_x, y,
                         kHint, max_text_width) +

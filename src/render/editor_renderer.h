@@ -2,6 +2,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -20,12 +21,13 @@ enum class EditorBrush : std::uint8_t {
   kLava = 5,
 };
 
-// Фиксированная панель слева сверху. Клики внутри неё зарезервированы для
-// будущих элементов и не должны рисовать на карте под панелью.
+// Фиксированная панель слева сверху: имя открытой карты, «N из M» и кисти.
 auto EditorPanelBounds() -> SDL_FRect;
 
 auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
                      const GameSnapshot& scene, EditorBrush brush,
-                     const std::string& status) -> void;
+                     std::size_t scene_index, std::size_t scene_count,
+                     const std::string& scene_name, const std::string& status)
+    -> void;
 
 }  // namespace dnd

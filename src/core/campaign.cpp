@@ -64,6 +64,10 @@ auto RenameScene(Campaign& campaign, std::size_t index, std::string name)
   return true;
 }
 
+auto CanDeleteScene(const Campaign& campaign) -> bool {
+  return campaign.scenes.size() > 1;
+}
+
 auto ParseSceneRename(const Campaign& campaign, std::string_view args)
     -> std::optional<SceneRenameRequest> {
   args = TrimText(args);

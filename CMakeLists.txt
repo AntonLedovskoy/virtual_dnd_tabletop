@@ -128,6 +128,7 @@ add_library(dnd_core STATIC
   src/core/damage.cpp
   src/core/delete_confirm.cpp
   src/core/dice.cpp
+  src/core/editor_paint.cpp
   src/core/game_server.cpp
   src/core/game_state.cpp
   src/core/grid_map.cpp

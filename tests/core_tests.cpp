@@ -32,6 +32,7 @@
 #include "core/conditions.h"
 #include "core/delete_confirm.h"
 #include "core/dice.h"
+#include "core/editor_paint.h"
 #include "core/game_server.h"
 #include "core/game_state.h"
 #include "core/grid_map.h"
@@ -6563,6 +6564,52 @@ auto TestNavigation() -> void {
          "digit 9 reaches the ninth scene in a longer campaign");
 }
 
+auto TestEditorPaint() -> void {
+  dnd::PaintDrag drag;
+  Expect(!drag.Active(), "a paint stroke starts idle");
+  const std::vector<dnd::Cell> idle = drag.Move(dnd::Cell{.x = 4, .y = 2});
+  Expect(idle.empty() && !drag.Active(), "a move without Begin paints nothing");
+
+  drag.Begin(dnd::Cell{.x = 0, .y = 0});
+  Expect(drag.Move(dnd::Cell{.x = 0, .y = 0}).empty(),
+         "the same cell paints nothing");
+  const std::vector<dnd::Cell> diagonal = drag.Move(dnd::Cell{.x = 3, .y = 3});
+  Expect(diagonal.size() == 4, "a diagonal stroke walks every cell");
+  Expect(diagonal.front() == dnd::Cell{.x = 0, .y = 0} &&
+             diagonal.back() == dnd::Cell{.x = 3, .y = 3},
+         "the diagonal stroke includes both ends");
+  Expect(diagonal[1] == dnd::Cell{.x = 1, .y = 1},
+         "the diagonal stroke has no holes");
+
+  const std::vector<dnd::Cell> jump = drag.Move(dnd::Cell{.x = 10, .y = 0});
+  Expect(jump.size() == 8, "a far move paints every cell of the line");
+  Expect(jump.front() == dnd::Cell{.x = 3, .y = 3} &&
+             jump.back() == dnd::Cell{.x = 10, .y = 0},
+         "the jump starts at the previous cell");
+  Expect(jump[7] == dnd::Cell{.x = 10, .y = 0},
+         "the jump ends exactly on the cursor cell");
+
+  drag.End();
+  Expect(!drag.Active(), "End finishes the stroke");
+  Expect(drag.Move(dnd::Cell{.x = 0, .y = 0}).empty(),
+         "a move right after End paints nothing");
+
+  const std::vector<dnd::Cell> line =
+      dnd::LineCells(dnd::Cell{.x = 5, .y = 5}, dnd::Cell{.x = 5, .y = 5});
+  Expect(line.size() == 1 && line.front() == dnd::Cell{.x = 5, .y = 5},
+         "a zero-length line is one cell");
+}
+
+auto TestSceneDeleteRules() -> void {
+  dnd::Campaign campaign = dnd::MakeCampaign(dnd::GameSnapshot{}, "Одна");
+  Expect(!dnd::CanDeleteScene(campaign),
+         "the last scene of a campaign cannot be deleted");
+  campaign.scenes.push_back(
+      dnd::Scene{.name = "Вторая", .note = "", .snapshot = {}});
+  Expect(dnd::CanDeleteScene(campaign),
+         "a campaign with two scenes allows deletion");
+}
+
 auto TestChatInput() -> void {
   dnd::ChatInput chat;
   Expect(!chat.Active() && chat.Text().empty(), "chat starts closed");
@@ -6672,6 +6719,8 @@ auto main() -> int {
     TestMenuModel();
     TestBottomHints();
     TestNavigation();
+    TestEditorPaint();
+    TestSceneDeleteRules();
     TestChatInput();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());

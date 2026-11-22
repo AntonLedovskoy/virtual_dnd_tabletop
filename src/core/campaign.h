@@ -45,6 +45,10 @@ auto NextSceneName(const Campaign& campaign) -> std::string;
 [[nodiscard]] auto RenameScene(Campaign& campaign, std::size_t index,
                                std::string name) -> bool;
 
+// Кампания не может остаться без сцен: последнюю карту не удаляют ни панель
+// DM, ни редактор.
+[[nodiscard]] auto CanDeleteScene(const Campaign& campaign) -> bool;
+
 // Разбор «СТАРОЕ НОВОЕ» для /scene rename: имя сцены может содержать
 // пробелы, поэтому берётся самая длинная подходящая сцена.
 struct SceneRenameRequest {
