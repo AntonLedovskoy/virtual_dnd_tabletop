@@ -18,10 +18,11 @@ namespace {
 constexpr std::uint32_t kMagic = 0x43444E44;  // "DNDC" в little-endian
 constexpr std::uint32_t kMaxPayload = 256U * 1024U * 1024U;
 // До версии 13 у состояний не было КС; до версии 12 длительность была в ходах.
-// Версия 14 не знает полей экономики хода (действие, реакция, рывок).
+// Версия 14 не знает полей экономики хода (действие, реакция, рывок) и защит
+// от урона, версия 15 — игровых часов.
 constexpr std::uint32_t kLegacyRoundsCampaignVersion = 11;
 constexpr std::uint32_t kLegacySecondsCampaignVersion = 12;
-constexpr std::uint32_t kPreviousCampaignVersion = 14;
+constexpr std::uint32_t kPreviousCampaignVersion = 15;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -58,7 +59,8 @@ auto EncodeCampaign(const Campaign& campaign) -> std::vector<std::uint8_t> {
 }
 
 auto DecodeCampaign(const std::uint8_t* data, std::size_t size,
-                    bool conditions_have_dc, bool has_turn_economy)
+                    bool conditions_have_dc, bool has_turn_economy,
+                    bool has_damage_profile, bool has_game_clock)
     -> std::optional<Campaign> {
   ByteReader reader(data, size);
   std::uint32_t scene_count = 0;
@@ -83,8 +85,9 @@ auto DecodeCampaign(const std::uint8_t* data, std::size_t size,
         !reader.Bytes(blob_size, blob)) {
       return std::nullopt;
     }
-    const std::optional<GameSnapshot> snapshot = DecodeSnapshot(
-        blob.data(), blob.size(), conditions_have_dc, has_turn_economy);
+    const std::optional<GameSnapshot> snapshot =
+        DecodeSnapshot(blob.data(), blob.size(), conditions_have_dc,
+                       has_turn_economy, has_damage_profile, has_game_clock);
     if (!snapshot.has_value()) {
       return std::nullopt;
     }
@@ -152,6 +155,7 @@ auto ReadCampaign(const std::filesystem::path& path)
   std::optional<Campaign> campaign = DecodeCampaign(
       payload.data(), payload.size(),
       version == kCampaignVersion || version == kPreviousCampaignVersion,
+      version >= kPreviousCampaignVersion, version >= kPreviousCampaignVersion,
       version >= kCampaignVersion);
   if (campaign.has_value() && version == kLegacyRoundsCampaignVersion) {
     for (Scene& scene : campaign->scenes) {

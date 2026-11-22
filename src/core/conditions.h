@@ -32,6 +32,12 @@ inline constexpr int kSecondsPerHour = 60 * kSecondsPerMinute;
 inline constexpr int kDefaultConditionSeconds = kSecondsPerMinute;
 // Предел длительности одного состояния и разового сдвига времени: 7 дней.
 inline constexpr int kMaxConditionSeconds = 7 * 24 * kSecondsPerHour;
+// Следующий длинный отдых — не раньше чем через 16 часов после начала
+// предыдущего (2024).
+inline constexpr int kLongRestCooldownSeconds = 16 * kSecondsPerHour;
+// Потолок игровых часов: больше 30 лет за кампанию не нужно, а переполнение
+// int не должно ломать сравнение времени отдыха.
+inline constexpr int kMaxGameTimeSeconds = 1000000000;
 // Предел КС спасброска состояния.
 inline constexpr int kMaxSaveDc = 30;
 // Предел имени состояния в байтах UTF-8.

@@ -39,6 +39,7 @@
 #include "core/log_history.h"
 #include "core/log_scroll.h"
 #include "core/menu_model.h"
+#include "core/movement.h"
 #include "core/navigation.h"
 #include "core/password.h"
 #include "core/player_name.h"
@@ -792,6 +793,14 @@ auto TestDamageHealRest() -> void {
   Expect(server.HandleCommand(dnd::DamageToken{.id = 2, .amount = 10}, "", true)
              .accepted,
          "the DM can drop the character to zero");
+  // Следующий длинный отдых — не раньше чем через 16 часов.
+  Expect(!server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
+              .accepted,
+         "a long rest cannot repeat before 16 hours");
+  Expect(
+      server.HandleCommand(dnd::AdvanceTime{.seconds = 16 * 60 * 60}, "", true)
+          .accepted,
+      "the DM advances the clock between long rests");
   Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
              .accepted,
          "a long rest over a downed party is allowed");
@@ -804,6 +813,10 @@ auto TestDamageHealRest() -> void {
          "massive damage on a downed character is applied");
   Expect(HasCondition(TokenOf(server.State(), 2), dnd::kDead),
          "damage equal to max hp kills a downed character");
+  Expect(
+      server.HandleCommand(dnd::AdvanceTime{.seconds = 16 * 60 * 60}, "", true)
+          .accepted,
+      "the clock advances before the last long rest");
   Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
              .accepted,
          "the DM can still call a long rest");
@@ -871,6 +884,104 @@ auto TestShortRestHitDice() -> void {
          "a long rest restores hp and every hit die");
   Expect(long_rest[1].token.hp == 100 && long_rest[1].token.hit_dice_spent == 0,
          "a long rest restores the frail hero too");
+}
+
+auto TestRestChoicesAndClock() -> void {
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 1,
+                         .max_hp = 100,
+                         .hit_die = 8,
+                         .con_modifier = 2,
+                         .xp = 6500,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "downed",
+                         .owner = "bob",
+                         .hp = 1,
+                         .max_hp = 10,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 2)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 6, 2024);
+
+  // В бою отдых прерывает инициатива.
+  Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the encounter starts");
+  const dnd::CommandOutcome in_combat =
+      server.HandleCommand(dnd::RestParty{}, "", true);
+  Expect(!in_combat.accepted &&
+             in_combat.reject_reason.find("инициатива") != std::string::npos,
+         "combat rejects a rest");
+  Expect(server.HandleCommand(dnd::EndEncounter{}, "", true).accepted,
+         "the encounter ends");
+
+  // Игрок сам выбирает, сколько костей потратить.
+  const dnd::CommandOutcome one_die =
+      server.HandleCommand(dnd::RestParty{.hit_dice = 1}, "", true);
+  Expect(one_die.accepted, "a short rest with one hit die is accepted");
+  Expect(TokenOf(server.State(), 1).hit_dice_spent == 1,
+         "exactly the chosen number of hit dice is spent");
+  const int hp_after_one = TokenOf(server.State(), 1).hp;
+  Expect(hp_after_one > 1 && hp_after_one < 100,
+         "one hit die heals but does not fill the character");
+
+  const dnd::CommandOutcome auto_dice =
+      server.HandleCommand(dnd::RestParty{}, "", true);
+  Expect(auto_dice.accepted, "a short rest without a limit is accepted");
+  Expect(TokenOf(server.State(), 1).hit_dice_spent > 1,
+         "the automatic rest spends more dice until full");
+
+  // Длинный отдых — не чаще чем раз в 16 часов.
+  const int before_long = server.State().GameTimeSeconds();
+  Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
+             .accepted,
+         "the first long rest is allowed");
+  Expect(server.State().LongRestReadyInSeconds() ==
+             dnd::kLongRestCooldownSeconds - 8 * dnd::kSecondsPerHour,
+         "a long rest leaves eight more hours of cooldown");
+  const dnd::CommandOutcome too_soon =
+      server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true);
+  Expect(!too_soon.accepted &&
+             too_soon.reject_reason.find("не раньше") != std::string::npos,
+         "the second long rest is rejected with a clear reason");
+  Expect(server.State().GameTimeSeconds() ==
+             before_long + 8 * dnd::kSecondsPerHour,
+         "a long rest advances the clock by eight hours");
+  Expect(
+      server.HandleCommand(dnd::AdvanceTime{.seconds = 8 * 60 * 60}, "", true)
+          .accepted,
+      "the clock advances after the long rest");
+  Expect(server.State().LongRestReadyInSeconds() == 0,
+         "sixteen hours after the start the next long rest is ready");
+  Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
+             .accepted,
+         "the next long rest is allowed after the cooldown");
+
+  // Лежачему отдых не помогает: при нуле HP у всех персонажей команда
+  // отклоняется с понятной причиной.
+  Expect(
+      server.HandleCommand(dnd::DamageToken{.id = 1, .amount = 200}, "", true)
+          .accepted,
+      "the DM drops the hero");
+  Expect(
+      server.HandleCommand(dnd::DamageToken{.id = 2, .amount = 200}, "", true)
+          .accepted,
+      "the DM drops the second hero");
+  const dnd::CommandOutcome downed =
+      server.HandleCommand(dnd::RestParty{}, "", true);
+  Expect(!downed.accepted &&
+             downed.reject_reason.find("0 HP") != std::string::npos,
+         "a party lying at zero hp cannot rest");
 }
 
 auto TestConcentration() -> void {
@@ -3661,6 +3772,146 @@ auto TestMovementPathsAndDiagonals() -> void {
          "ending combat resets the diagonal parity");
 }
 
+auto TestCrawlJumpFall() -> void {
+  // Ползание: не встаём, платим двойную цену, остаёмся «сбит с ног».
+  const dnd::GridMap open(8, 8);
+  const dnd::GameSnapshot prone_snapshot{
+      .map = open,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .speed = 9,
+                            .conditions = {dnd::Condition{"сбит с ног"}},
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 1)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer prone_server(prone_snapshot, 6, 11);
+  Expect(prone_server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the crawl encounter starts");
+  const dnd::CommandOutcome crawled = prone_server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(2, 1), .crawl = true}, "alice",
+      false);
+  Expect(crawled.accepted, "a prone character can crawl");
+  const dnd::Token after_crawl = TokenOf(prone_server.State(), 1);
+  Expect(after_crawl.cell == CellAt(2, 1), "crawling moves the token");
+  Expect(HasCondition(after_crawl, "сбит с ног"),
+         "crawling keeps the prone condition");
+  Expect(after_crawl.movement_used == 2, "crawling costs two cells per cell");
+  Expect(dnd::StandUpCostCells(after_crawl) == 3 &&
+             dnd::RemainingMovementCells(after_crawl) == 1,
+         "standing up costs half the speed and leaves the same reach as M");
+  const dnd::CommandOutcome stands = prone_server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(2, 2)}, "alice", false);
+  Expect(stands.accepted, "a normal move stands up first");
+  const dnd::Token after_stand = TokenOf(prone_server.State(), 1);
+  Expect(!HasCondition(after_stand, "сбит с ног"),
+         "standing removes the prone condition");
+  Expect(after_stand.movement_used == 6,
+         "standing and the step spend half speed plus the path");
+
+  // Прыжок: через воду можно, через стену и дальше 10 футов — нет.
+  dnd::GridMap water_map(8, 8);
+  water_map.SetTerrain(CellAt(2, 1), dnd::Terrain::kWater);
+  const dnd::GameSnapshot jump_snapshot{
+      .map = water_map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "jumper",
+                            .owner = "alice",
+                            .speed = 3,
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 1)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer jump_server(jump_snapshot, 6, 12);
+  Expect(jump_server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the jump encounter starts");
+  Expect(!jump_server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(3, 1)},
+                             "alice", false)
+              .accepted,
+         "a walk cannot cross water");
+  Expect(jump_server
+             .HandleCommand(
+                 dnd::MoveToken{.id = 1, .target = CellAt(3, 1), .jump = true},
+                 "alice", false)
+             .accepted,
+         "a jump crosses water");
+  const dnd::Token jumped = TokenOf(jump_server.State(), 1);
+  Expect(jumped.cell == CellAt(3, 1) && jumped.movement_used == 2,
+         "a two-cell jump lands and spends two cells");
+  Expect(!jump_server
+              .HandleCommand(
+                  dnd::MoveToken{.id = 1, .target = CellAt(6, 1), .jump = true},
+                  "alice", false)
+              .accepted,
+         "a jump farther than 10 feet is rejected");
+
+  dnd::GridMap wall_map(8, 8);
+  wall_map.SetTerrain(CellAt(2, 2), dnd::Terrain::kWall);
+  const dnd::GameSnapshot wall_snapshot{
+      .map = wall_map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "jumper",
+                            .owner = "alice",
+                            .speed = 9,
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 2)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer wall_server(wall_snapshot, 6, 13);
+  Expect(!wall_server
+              .HandleCommand(
+                  dnd::MoveToken{.id = 1, .target = CellAt(3, 2), .jump = true},
+                  "alice", false)
+              .accepted,
+         "a wall cannot be jumped over");
+
+  // Падение: 1d6 за каждые 10 футов, «сбит с ног» только при уроне.
+  Expect(dnd::FallDamageDice(9) == 0 && dnd::FallDamageDice(10) == 1 &&
+             dnd::FallDamageDice(200) == 20 && dnd::FallDamageDice(2000) == 20,
+         "falling damage caps at 20d6");
+  const dnd::GameSnapshot fall_snapshot{
+      .map = open,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "faller",
+                            .owner = "alice",
+                            .hp = 20,
+                            .max_hp = 20,
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 1)}},
+      .next_token_id = 2,
+  };
+  dnd::GameServer fall_server(fall_snapshot, 6, 14);
+  Expect(fall_server.HandleCommand(dnd::FallToken{.id = 1, .feet = 5}, "", true)
+             .accepted,
+         "a short fall is accepted");
+  Expect(TokenOf(fall_server.State(), 1).hp == 20 &&
+             !HasCondition(TokenOf(fall_server.State(), 1), "сбит с ног"),
+         "a fall under 10 feet deals no damage and does not knock prone");
+  Expect(
+      fall_server.HandleCommand(dnd::FallToken{.id = 1, .feet = 30}, "", true)
+          .accepted,
+      "a 30-foot fall is accepted");
+  const dnd::Token fallen = TokenOf(fall_server.State(), 1);
+  Expect(fallen.hp < 20, "falling deals bludgeoning damage");
+  Expect(HasCondition(fallen, "сбит с ног"),
+         "taking fall damage knocks the character prone");
+
+  // Иммунитет к дробящему урону: урона нет, «сбит с ног» тоже.
+  dnd::GameSnapshot immune_snapshot = fall_snapshot;
+  immune_snapshot.tokens[0].immune =
+      dnd::DamageTypeBit(dnd::DamageType::kBludgeoning);
+  dnd::GameServer immune_server(immune_snapshot, 6, 15);
+  Expect(immune_server
+             .HandleCommand(dnd::FallToken{.id = 1, .feet = 100}, "", true)
+             .accepted,
+         "an immune character still falls");
+  const dnd::Token immune = TokenOf(immune_server.State(), 1);
+  Expect(immune.hp == 20 && !HasCondition(immune, "сбит с ног"),
+         "immunity to bludgeoning prevents both damage and prone");
+}
+
 auto TestAoe() -> void {
   const dnd::GridMap map(10, 10);
 
@@ -3891,6 +4142,8 @@ auto TestSaveLoadRoundtrip() -> void {
       .revealed = {CellAt(0, 0), CellAt(5, 3)},
       .fog = {dnd::FogRecord{.owner = {}, .explored = party_fog},
               dnd::FogRecord{.owner = "alice", .explored = alice_fog}},
+      .game_time_seconds = 12345,
+      .last_long_rest_seconds = 12000,
   };
 
   const std::filesystem::path path =
@@ -3922,6 +4175,9 @@ auto TestSaveLoadRoundtrip() -> void {
                loaded->fog.back().explored.size() == 24 &&
                loaded->fog.back().explored[13] == 1,
            "explored cells survive the roundtrip");
+    Expect(loaded->game_time_seconds == 12345 &&
+               loaded->last_long_rest_seconds == 12000,
+           "the game clock and long rest time survive the roundtrip");
     Expect(loaded->tokens.front().owner == "alice", "token owner survives");
     Expect(loaded->tokens.front().hp == 7, "token hp survives");
     Expect(loaded->tokens.front().xp == 900, "token xp survives");
@@ -4524,11 +4780,28 @@ auto TestChatCommandParsing() -> void {
   Expect(parse("/deathsave").kind == ChatCommandKind::kDeathSave,
          "/deathsave is a command");
   const dnd::ChatCommand rest = parse("/rest");
-  Expect(rest.kind == ChatCommandKind::kRest && !rest.long_rest,
-         "/rest is a short rest");
+  Expect(
+      rest.kind == ChatCommandKind::kRest && !rest.long_rest && rest.value == 0,
+      "/rest is a short rest that spends dice until full");
+  const dnd::ChatCommand diced_rest = parse("/rest 2");
+  Expect(diced_rest.kind == ChatCommandKind::kRest && diced_rest.value == 2,
+         "/rest N limits the hit dice");
+  Expect(parse("/rest 0").error == ChatCommandError::kBadRest,
+         "/rest rejects zero dice");
+  Expect(parse("/rest много").error == ChatCommandError::kBadRest,
+         "/rest rejects text");
   const dnd::ChatCommand long_rest = parse("/longrest");
   Expect(long_rest.kind == ChatCommandKind::kRest && long_rest.long_rest,
          "/longrest is a long rest");
+  Expect(parse("/longrest 2").error == ChatCommandError::kBadRest,
+         "/longrest does not take a dice count");
+  const dnd::ChatCommand fall = parse("/fall 30");
+  Expect(fall.kind == ChatCommandKind::kFall && fall.value == 30,
+         "/fall keeps the height");
+  Expect(parse("/fall 0").error == ChatCommandError::kBadFall,
+         "/fall rejects zero height");
+  Expect(parse("/fall высоко").error == ChatCommandError::kBadFall,
+         "/fall rejects text");
 
   // /time: по умолчанию минуты, суффиксы s/m/h.
   const dnd::ChatCommand minutes = parse("/time 10");
@@ -5263,6 +5536,38 @@ auto TestCommandEventSerialization() -> void {
              std::holds_alternative<dnd::RestParty>(*rest_decoded) &&
              std::get<dnd::RestParty>(*rest_decoded).long_rest,
          "rest command survives serialization");
+
+  const dnd::Command diced_rest{
+      dnd::RestParty{.long_rest = false, .hit_dice = 2}};
+  const std::vector<std::uint8_t> diced_rest_bytes =
+      dnd::EncodeCommand(diced_rest);
+  const std::optional<dnd::Command> diced_rest_decoded =
+      dnd::DecodeCommand(diced_rest_bytes.data(), diced_rest_bytes.size());
+  Expect(diced_rest_decoded.has_value() &&
+             std::holds_alternative<dnd::RestParty>(*diced_rest_decoded) &&
+             std::get<dnd::RestParty>(*diced_rest_decoded).hit_dice == 2,
+         "the chosen hit dice survive serialization");
+
+  const dnd::Command fall{dnd::FallToken{.id = 7, .feet = 30}};
+  const std::vector<std::uint8_t> fall_bytes = dnd::EncodeCommand(fall);
+  const std::optional<dnd::Command> fall_decoded =
+      dnd::DecodeCommand(fall_bytes.data(), fall_bytes.size());
+  Expect(fall_decoded.has_value() &&
+             std::holds_alternative<dnd::FallToken>(*fall_decoded) &&
+             std::get<dnd::FallToken>(*fall_decoded).id == 7 &&
+             std::get<dnd::FallToken>(*fall_decoded).feet == 30,
+         "fall command survives serialization");
+
+  const dnd::Command jump{dnd::MoveToken{
+      .id = 3, .target = CellAt(2, 2), .crawl = false, .jump = true}};
+  const std::vector<std::uint8_t> jump_bytes = dnd::EncodeCommand(jump);
+  const std::optional<dnd::Command> jump_decoded =
+      dnd::DecodeCommand(jump_bytes.data(), jump_bytes.size());
+  Expect(jump_decoded.has_value() &&
+             std::holds_alternative<dnd::MoveToken>(*jump_decoded) &&
+             std::get<dnd::MoveToken>(*jump_decoded).jump &&
+             !std::get<dnd::MoveToken>(*jump_decoded).crawl,
+         "the jump flag survives serialization");
 
   const dnd::Command time{dnd::AdvanceTime{.seconds = 600}};
   const std::vector<std::uint8_t> time_bytes = dnd::EncodeCommand(time);
@@ -6004,6 +6309,11 @@ auto TestBottomHints() -> void {
              has(own_hints, dnd::Hint::kSheet) &&
              has(own_hints, dnd::Hint::kConditions),
          "a selection shows token keys");
+  Expect(has(own_hints, dnd::Hint::kJump) && !has(own_hints, dnd::Hint::kCrawl),
+         "a standing token offers jump but not crawl");
+  own.prone = true;
+  Expect(has(dnd::BottomHints(own), dnd::Hint::kCrawl),
+         "a prone token offers crawling");
   Expect(
       !has(own_hints, dnd::Hint::kClaim) && !has(own_hints, dnd::Hint::kColor),
       "an owned character offers neither claim nor colour");
@@ -6170,6 +6480,7 @@ auto main() -> int {
     TestClaimAndTokenAdmin();
     TestDamageHealRest();
     TestShortRestHitDice();
+    TestRestChoicesAndClock();
     TestConcentration();
     TestAttack();
     TestAoeDamage();
@@ -6201,6 +6512,7 @@ auto main() -> int {
     TestMovementBudget();
     TestTurnEconomy();
     TestMovementPathsAndDiagonals();
+    TestCrawlJumpFall();
     TestAoe();
     TestAoeCommands();
     TestChatAndDice();

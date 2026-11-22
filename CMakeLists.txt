@@ -138,6 +138,7 @@ add_library(dnd_core STATIC
   src/core/log_scroll.cpp
   src/core/map_background.cpp
   src/core/menu_model.cpp
+  src/core/movement.cpp
   src/core/navigation.cpp
   src/core/password.cpp
   src/core/player_name.cpp

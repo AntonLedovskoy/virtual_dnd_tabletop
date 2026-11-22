@@ -73,13 +73,20 @@ class GameState {
       -> std::optional<Token>;
   // Отдых по правилам 2024. Короткий (1 час) тратит кости хитов на HP:
   // каждая даёт бросок d{hit_die} плюс модификатор Телосложения (не меньше
-  // единицы), пока не восстановлен максимум или не кончился запас. Длинный
-  // (8 часов) возвращает HP и кости хитов и снимает 1 уровень истощения.
-  // Отдых даёт эффект только персонажу хотя бы с 1 HP: мёртвый и лежачий на
-  // нуле не встаёт. Отдых двигает игровое время, поэтому срочные состояния
-  // истекают. Возвращает изменившихся персонажей с подробностями для лога.
-  [[nodiscard]] auto RestParty(bool long_rest, std::mt19937& rng)
-      -> std::vector<RestChange>;
+  // единицы), пока не восстановлен максимум или не кончился запас.
+  // max_dice > 0 ограничивает число костей, которые тратит каждый персонаж;
+  // 0 — «до полного HP». Длинный (8 часов) возвращает HP и кости хитов и
+  // снимает 1 уровень истощения. Отдых даёт эффект только персонажу хотя
+  // бы с 1 HP: мёртвый и лежачий на нуле не встаёт. Отдых двигает игровое
+  // время, поэтому срочные состояния истекают. Возвращает изменившихся
+  // персонажей с подробностями для лога.
+  [[nodiscard]] auto RestParty(bool long_rest, std::mt19937& rng,
+                               int max_dice = 0) -> std::vector<RestChange>;
+  // Игровые часы сцены и время до следующего длинного отдыха.
+  [[nodiscard]] auto GameTimeSeconds() const -> int {
+    return game_time_seconds_;
+  }
+  [[nodiscard]] auto LongRestReadyInSeconds() const -> int;
   [[nodiscard]] auto SetInitiative(TokenId id, int value)
       -> std::optional<Token>;
   [[nodiscard]] auto SetTokenOwner(TokenId id, std::string owner)
@@ -105,6 +112,10 @@ class GameState {
       std::uint32_t immune = 0) -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenCombat(TokenId id,
                                        std::vector<Condition> conditions)
+      -> std::optional<Token>;
+  // Добавляет состояние, если его ещё нет (например, «сбит с ног» после
+  // падения). Шестой уровень истощения по-прежнему убивает.
+  [[nodiscard]] auto AddTokenCondition(TokenId id, Condition condition)
       -> std::optional<Token>;
   [[nodiscard]] auto RemoveTokenCondition(TokenId id, std::string_view name)
       -> std::optional<Token>;
@@ -181,6 +192,8 @@ class GameState {
   AoeTemplate aoe_;
   MapBackground background_;
   std::vector<Cell> revealed_;
+  int game_time_seconds_ = 0;
+  int last_long_rest_seconds_ = -1;
 };
 
 }  // namespace dnd

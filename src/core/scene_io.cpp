@@ -16,10 +16,10 @@ constexpr std::uint32_t kMagic = 0x53444E44;  // "DNDS" в little-endian
 constexpr std::uint32_t kMaxPayload = 64U * 1024U * 1024U;
 // До версии 25 у состояний не было КС; до версии 24 длительность была в ходах.
 // Версия 27 не знает полей экономики хода (действие, реакция, рывок), версия
-// 28 — защиты от урона и дистанции атаки.
+// 28 — защиты от урона и дистанции атаки, версия 29 — игровых часов.
 constexpr std::uint32_t kLegacyRoundsSaveVersion = 23;
 constexpr std::uint32_t kLegacySecondsSaveVersion = 24;
-constexpr std::uint32_t kPreviousSaveVersion = 28;
+constexpr std::uint32_t kPreviousSaveVersion = 29;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -91,7 +91,7 @@ auto ReadSnapshot(const std::filesystem::path& path)
   }
   std::optional<GameSnapshot> snapshot =
       DecodeSnapshot(payload.data(), payload.size(), version >= 25,
-                     version >= 28, version >= 29);
+                     version >= 28, version >= 29, version >= 30);
   if (snapshot.has_value() && version == kLegacyRoundsSaveVersion) {
     for (Token& token : snapshot->tokens) {
       ConvertLegacyConditionRounds(token.conditions);

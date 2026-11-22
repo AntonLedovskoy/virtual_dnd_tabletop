@@ -25,6 +25,7 @@
 #include "core/conditions.h"
 #include "core/dice.h"
 #include "core/levels.h"
+#include "core/movement.h"
 #include "core/navigation.h"
 #include "core/player_name.h"
 #include "core/scene_io.h"
@@ -192,6 +193,10 @@ auto ChatUsageText(ChatCommandError error) -> std::string_view {
       return strings::kXpUsage;
     case ChatCommandError::kBadTime:
       return strings::kTimeUsage;
+    case ChatCommandError::kBadRest:
+      return strings::kRestUsage;
+    case ChatCommandError::kBadFall:
+      return strings::kFallUsage;
     case ChatCommandError::kNone:
       break;
   }
@@ -1563,6 +1568,9 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
         show_movement_range_ = !show_movement_range_;
       }
       break;
+    case SDLK_J:
+      JumpSelectedToken();
+      break;
     case SDLK_F:
       if ((key.mod & SDL_KMOD_SHIFT) != 0) {
         ClearAoe();
@@ -1734,7 +1742,8 @@ auto App::HandleMouseUp(const SDL_MouseButtonEvent& button) -> void {
         !view_.Fog().IsExplored(cell)) {
       view_.AddLocalLine(std::string(strings::kCellNotExplored));
     } else {
-      SubmitMove(cell);
+      // Ctrl+перетаскивание — ползание, если токен «сбит с ног».
+      SubmitMove(cell, (SDL_GetModState() & SDL_KMOD_CTRL) != 0);
     }
   }
   dragging_ = false;
@@ -1778,8 +1787,27 @@ auto App::TokenAt(Cell cell) const -> TokenId {
   return 0;
 }
 
-auto App::SubmitMove(Cell target) -> void {
-  SendCommand(MoveToken{.id = selected_id_, .target = target});
+auto App::SubmitMove(Cell target, bool crawl, bool jump) -> void {
+  SendCommand(MoveToken{
+      .id = selected_id_, .target = target, .crawl = crawl, .jump = jump});
+}
+
+auto App::JumpSelectedToken() -> void {
+  const Token* token = FindSelectedToken();
+  if (token == nullptr) {
+    view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  const Cell target = CellFromPixel(mouse_x_, mouse_y_);
+  if (!view_.Map().Contains(target)) {
+    view_.AddLocalLine("Клетка прыжка за пределами карты");
+    return;
+  }
+  if (target == token->cell) {
+    view_.AddLocalLine("Наведите курсор на клетку прыжка");
+    return;
+  }
+  SubmitMove(target, false, true);
 }
 
 auto App::SubmitPing(Cell cell) -> void {
@@ -1904,6 +1932,7 @@ auto App::BottomHintText() const -> std::string {
                       !claimed_once_;
   context.in_combat = view_.EncounterState().active;
   context.log_scrolled = log_scroll_.Offset() > 0;
+  context.prone = selected != nullptr && IsProne(*selected);
   // Открытый режим важнее выделения: пока он включён, остальные клавиши
   // молчат, поэтому и подсказка показывает только его.
   if (aoe_mode_) {
@@ -3016,8 +3045,22 @@ auto App::SubmitChat() -> void {
         view_.AddLocalLine("Отдых объявляет только DM");
         return;
       }
-      SendCommand(RestParty{.long_rest = command.long_rest});
+      SendCommand(
+          RestParty{.long_rest = command.long_rest, .hit_dice = command.value});
       return;
+    case ChatCommandKind::kFall: {
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine(std::string(strings::kFallDmOnly));
+        return;
+      }
+      const Token* token = FindSelectedToken();
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      SendCommand(FallToken{.id = token->id, .feet = command.value});
+      return;
+    }
     case ChatCommandKind::kTime:
       if (options_.mode != AppMode::kHost) {
         view_.AddLocalLine(std::string(strings::kTimeDmOnly));
@@ -4030,12 +4073,7 @@ auto App::Iterate() -> void {
       const int budget = EffectiveSpeedCells(*range_token);
       int radius = budget;
       if (encounter.active && !is_dm) {
-        radius = std::max(0, budget + range_token->movement_bonus -
-                                 range_token->movement_used);
-        // Встать из «сбит с ног» стоит половину скорости.
-        if (HasCondition(*range_token, "сбит с ног")) {
-          radius = std::max(0, radius - std::max(1, budget / 2));
-        }
+        radius = RemainingMovementCells(*range_token);
       }
       // Монстры и NPC перекрывают путь, персонажи — нет; встать на занятую
       // клетку всё равно нельзя, поэтому её не показываем.

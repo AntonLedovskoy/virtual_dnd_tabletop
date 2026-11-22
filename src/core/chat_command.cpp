@@ -7,7 +7,9 @@
 #include "core/conditions.h"
 #include "core/dice.h"
 #include "core/image_name.h"
+#include "core/levels.h"
 #include "core/map_background.h"
+#include "core/movement.h"
 
 namespace dnd {
 namespace {
@@ -271,9 +273,28 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
     return command;
   }
 
-  if (text == "/rest" || text == "/longrest") {
+  if (MatchesCommand(text, "/rest") || MatchesCommand(text, "/longrest")) {
+    const bool long_rest = MatchesCommand(text, "/longrest");
     command.kind = ChatCommandKind::kRest;
-    command.long_rest = text == "/longrest";
+    command.long_rest = long_rest;
+    const std::string_view args =
+        CommandArgs(text, long_rest ? "/longrest" : "/rest");
+    // /rest N — сколько костей хитов тратить; без N — до полного HP.
+    if (!args.empty()) {
+      if (long_rest || !ParsePositiveNumber(args, command.value) ||
+          command.value > kMaxLevel) {
+        return reject(ChatCommandError::kBadRest);
+      }
+    }
+    return command;
+  }
+
+  if (MatchesCommand(text, "/fall")) {
+    command.kind = ChatCommandKind::kFall;
+    if (!ParsePositiveNumber(CommandArgs(text, "/fall"), command.value) ||
+        command.value > kMaxFallFeet) {
+      return reject(ChatCommandError::kBadFall);
+    }
     return command;
   }
 

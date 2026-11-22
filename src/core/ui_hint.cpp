@@ -38,6 +38,10 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
     hints.insert(hints.end(),
                  {Hint::kAttack, Hint::kSave, Hint::kMoveRange, Hint::kRuler,
                   Hint::kConditions, Hint::kActions});
+    hints.push_back(Hint::kJump);
+    if (context.prone) {
+      hints.push_back(Hint::kCrawl);
+    }
     if (context.can_view_sheet) {
       hints.push_back(Hint::kSheet);
     }

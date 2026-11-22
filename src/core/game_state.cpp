@@ -146,7 +146,11 @@ GameState::GameState(GameSnapshot snapshot)
       encounter_(std::move(snapshot.encounter)),
       aoe_(snapshot.aoe),
       background_(std::move(snapshot.background)),
-      revealed_(std::move(snapshot.revealed)) {
+      revealed_(std::move(snapshot.revealed)),
+      game_time_seconds_(std::max(0, snapshot.game_time_seconds)),
+      last_long_rest_seconds_(snapshot.last_long_rest_seconds) {
+  last_long_rest_seconds_ =
+      std::min(last_long_rest_seconds_, game_time_seconds_);
   // Старые сохранения и события могли прийти в порядке открытия: приводим
   // срез к порядку CellOrder и убираем повторы.
   std::ranges::sort(revealed_, CellOrder);
@@ -163,6 +167,8 @@ auto GameState::Snapshot() const -> GameSnapshot {
       .aoe = aoe_,
       .background = background_,
       .revealed = revealed_,
+      .game_time_seconds = game_time_seconds_,
+      .last_long_rest_seconds = last_long_rest_seconds_,
   };
 }
 
@@ -334,10 +340,11 @@ auto GameState::DeathSave(TokenId id, int roll, int penalty)
   return *token;
 }
 
-auto GameState::RestParty(bool long_rest, std::mt19937& rng)
+auto GameState::RestParty(bool long_rest, std::mt19937& rng, int max_dice)
     -> std::vector<RestChange> {
   std::vector<RestChange> changed;
   const int rest_seconds = long_rest ? kLongRestSeconds : kShortRestSeconds;
+  const int rest_started = game_time_seconds_;
   for (Token& token : tokens_) {
     const int old_hp = token.hp;
     const int old_temp = token.temp_hp;
@@ -361,12 +368,14 @@ auto GameState::RestParty(bool long_rest, std::mt19937& rng)
       }
     } else if (benefits) {
       // Короткий отдых тратит кости хитов, пока не восстановлен максимум
-      // HP или не кончился запас.
+      // HP, не кончился запас или не достигнут выбор игрока («/rest N»).
       const int level = LevelForXp(token.xp);
       const int available = HitDiceAvailable(level, token.hit_dice_spent);
+      const int limit =
+          max_dice > 0 ? std::min(max_dice, available) : available;
       std::uniform_int_distribution<int> die(1, token.hit_die);
       int spent = 0;
-      while (token.hp < token.max_hp && spent < available) {
+      while (token.hp < token.max_hp && spent < limit) {
         const int heal = HitDieHeal(die(rng), token.con_modifier);
         token.hp = std::min(token.max_hp, token.hp + heal);
         ++spent;
@@ -390,7 +399,20 @@ auto GameState::RestParty(bool long_rest, std::mt19937& rng)
                      .exhaustion_removed = exhaustion_removed});
     }
   }
+  if (long_rest) {
+    last_long_rest_seconds_ = rest_started;
+  }
+  game_time_seconds_ =
+      std::min(kMaxGameTimeSeconds, game_time_seconds_ + rest_seconds);
   return changed;
+}
+
+auto GameState::LongRestReadyInSeconds() const -> int {
+  if (last_long_rest_seconds_ < 0) {
+    return 0;
+  }
+  const int elapsed = std::max(0, game_time_seconds_ - last_long_rest_seconds_);
+  return std::max(0, kLongRestCooldownSeconds - elapsed);
 }
 
 auto GameState::SetInitiative(TokenId id, int value) -> std::optional<Token> {
@@ -510,6 +532,21 @@ auto GameState::UpdateTokenCombat(TokenId id, std::vector<Condition> conditions)
   }
   token->conditions = std::move(conditions);
   // Шестой уровень истощения убивает (SRD 5.2.1).
+  if (ExhaustionLevel(*token) >= kMaxExhaustionLevel &&
+      !HasCondition(*token, kDead)) {
+    token->hp = 0;
+    KillToken(*token);
+  }
+  return *token;
+}
+
+auto GameState::AddTokenCondition(TokenId id, Condition condition)
+    -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  AddConditionIfMissing(*token, std::move(condition));
   if (ExhaustionLevel(*token) >= kMaxExhaustionLevel &&
       !HasCondition(*token, kDead)) {
     token->hp = 0;
@@ -784,6 +821,8 @@ auto GameState::AdvanceTime(int seconds) -> std::vector<Token> {
       changed.push_back(token);
     }
   }
+  game_time_seconds_ =
+      std::min(kMaxGameTimeSeconds, game_time_seconds_ + std::max(0, seconds));
   return changed;
 }
 

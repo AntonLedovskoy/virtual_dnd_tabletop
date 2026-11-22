@@ -18,6 +18,10 @@ namespace dnd {
 struct MoveToken {
   TokenId id = 0;
   Cell target{};
+  // Ползти, не вставая из «сбит с ног»; каждый фут стоит два.
+  bool crawl = false;
+  // Прыжок по прямой до 10 футов: пропасть и воду можно перепрыгнуть.
+  bool jump = false;
 };
 
 // Обычная строка чата, отображаемая в общем логе.
@@ -197,10 +201,20 @@ struct HealToken {
 
 // Только DM: отдых партии. Короткий (1 час) тратит кости хитов персонажей на
 // восстановление HP, длинный (8 часов) — все HP, кости хитов и состояния,
-// снимает временные HP. Отдых двигает игровое время, поэтому срочные
-// состояния истекают.
+// снимает временные HP. hit_dice > 0 ограничивает трату костей каждым
+// персонажем, 0 — до полного HP. Отдых двигает игровое время, поэтому срочные
+// состояния истекают. Длинный отдых сервер разрешает не чаще чем раз в
+// 16 часов.
 struct RestParty {
   bool long_rest = false;
+  int hit_dice = 0;
+};
+
+// Только DM: падение выбранного токена с высоты feet (1d6 за 10 футов,
+// максимум 20d6). Если урон прошёл, токен получает «сбит с ног».
+struct FallToken {
+  TokenId id = 0;
+  int feet = 0;
 };
 
 // Только DM и только вне боя: прокрутить игровое время. Срочные состояния
@@ -282,8 +296,8 @@ using Command = std::variant<
     SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner, RenameToken,
     SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
     StartEncounter, EndEncounter, NextTurn, SetEncounterComposition, SetAoe,
-    AttackToken, DamageToken, HealToken, RestParty, AdvanceTime, AoeDamage,
-    DeathSave, PingAt, SetMapBackground, SetTokenPortrait, RevealArea, HideArea,
-    ClearRevealed, AwardXp, UseTurnAction>;
+    AttackToken, DamageToken, HealToken, RestParty, FallToken, AdvanceTime,
+    AoeDamage, DeathSave, PingAt, SetMapBackground, SetTokenPortrait,
+    RevealArea, HideArea, ClearRevealed, AwardXp, UseTurnAction>;
 
 }  // namespace dnd

@@ -139,7 +139,8 @@ class App {
   auto HandleMouseMotion(const SDL_MouseMotionEvent& motion) -> void;
   auto HandleKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleDmHotkey(SDL_Keycode key) -> void;
-  auto SubmitMove(Cell target) -> void;
+  auto SubmitMove(Cell target, bool crawl = false, bool jump = false) -> void;
+  auto JumpSelectedToken() -> void;
   // Показывает всему столу клетку «сюда» (Alt+ПКМ или /ping).
   auto SubmitPing(Cell cell) -> void;
   auto SendCommand(const Command& command) -> void;

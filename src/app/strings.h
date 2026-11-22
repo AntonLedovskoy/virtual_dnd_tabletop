@@ -37,8 +37,8 @@ inline constexpr std::string_view kYourToken = "это ваш персонаж";
 inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
-    "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /map | "
-    "/portrait | /reveal | /unreveal | /xp | /time | /kick";
+    "/rename | /owner | /maxhp | /damage | /heal | /rest | /fall | /aoe | "
+    "/map | /portrait | /reveal | /unreveal | /xp | /time | /kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 // Нижняя подсказка собирается из этих кусков по контексту (core/ui_hint):
 // общие клавиши, клавиши выбранного токена и добавки роли.
@@ -56,6 +56,8 @@ inline constexpr std::string_view kHintSheet = "L — лист";
 inline constexpr std::string_view kHintConditions = "K — состояния";
 inline constexpr std::string_view kHintActions = "X — действия";
 inline constexpr std::string_view kHintMoveRange = "M — дальность";
+inline constexpr std::string_view kHintCrawl = "Ctrl+ЛКМ — ползти";
+inline constexpr std::string_view kHintJump = "J — прыжок под курсором";
 inline constexpr std::string_view kHintRuler = "Alt+ЛКМ — линейка";
 inline constexpr std::string_view kHintAoe = "F — шаблон области";
 inline constexpr std::string_view kHintBestiary = "B — бестиарий";
@@ -109,12 +111,13 @@ inline constexpr std::string_view kHelpCommonTitle = "Для всех";
 inline constexpr std::string_view kHelpDmTitle = "Мастер (DM)";
 inline constexpr std::string_view kHelpPlayerTitle = "Игрок";
 inline constexpr std::string_view kHelpClose = "F1 или Esc — закрыть";
-inline constexpr std::array<std::string_view, 18> kHelpCommon = {
+inline constexpr std::array<std::string_view, 19> kHelpCommon = {
     "Enter — чат и команды",
     "F1 — справка, Esc — закрыть",
     "Esc без активного режима — выйти в меню",
     "F3 — журнал стола с поиском и прошлыми сессиями",
     "ЛКМ — выбрать, перетащить; в списках — клик",
+    "Ctrl+ЛКМ — ползти, J — прыжок под курсором",
     "СКМ — панорама, колесо — зум",
     "Ctrl+= / Ctrl+- — масштаб интерфейса",
     "Home — центрировать карту",
@@ -134,7 +137,7 @@ inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "R — освободить своего персонажа",
     "/portrait файл.png — портрет своего персонажа",
 };
-inline constexpr std::array<std::string_view, 18> kHelpDm = {
+inline constexpr std::array<std::string_view, 19> kHelpDm = {
     "P — персонаж под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -145,7 +148,8 @@ inline constexpr std::array<std::string_view, 18> kHelpDm = {
     "F — шаблон области, Shift+F — убрать",
     "F5 — сохранить, F9 — загрузить",
     "Команды: /rename, /owner, /maxhp, /kick",
-    "/rest — короткий отдых (тратит кости хитов), /longrest — длинный",
+    "/rest N — короткий отдых (до N костей), /longrest — длинный",
+    "/fall N — падение с высоты N футов",
     "Enter в режиме F и /aoe 2d6 15 — урон по шаблону",
     "Ctrl+Z — отменить последнее действие DM",
     "/map карта.png — подложка, /map off — убрать",
@@ -374,6 +378,11 @@ inline constexpr std::string_view kTimeUsage =
     "Использование: /time 10 (минуты), /time 30s или /time 2h";
 inline constexpr std::string_view kTimeDmOnly =
     "Время вне боя двигает только DM";
+inline constexpr std::string_view kRestUsage =
+    "Использование: /rest, /rest 2 (до двух костей), /longrest";
+inline constexpr std::string_view kFallUsage =
+    "Использование: /fall 30 (высота падения в футах)";
+inline constexpr std::string_view kFallDmOnly = "Падение объявляет только DM";
 
 // Текст одного действия нижней подсказки. Какие действия показывать и в каком
 // порядке, решает core/ui_hint, поэтому строки остаются здесь.
@@ -411,6 +420,10 @@ inline constexpr std::string_view kTimeDmOnly =
       return kColorHint;
     case Hint::kMoveRange:
       return kHintMoveRange;
+    case Hint::kCrawl:
+      return kHintCrawl;
+    case Hint::kJump:
+      return kHintJump;
     case Hint::kRuler:
       return kHintRuler;
     case Hint::kAoe:

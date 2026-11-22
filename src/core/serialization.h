@@ -18,10 +18,11 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t>;
 // conditions_have_dc == false читает старые сейвы, где у состояний не было КС.
 // has_turn_economy == false читает сейвы до полей действия, реакции и рывка.
 // has_damage_profile == false читает сейвы до защиты от урона и дистанции.
+// has_game_clock == false читает сейвы без игровых часов и времени отдыха.
 auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
                     bool conditions_have_dc = true,
                     bool has_turn_economy = true,
-                    bool has_damage_profile = true)
+                    bool has_damage_profile = true, bool has_game_clock = true)
     -> std::optional<GameSnapshot>;
 
 auto EncodeFog(const FogSnapshot& fog) -> std::vector<std::uint8_t>;

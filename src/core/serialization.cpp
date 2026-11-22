@@ -1,5 +1,6 @@
 #include "core/serialization.h"
 
+#include <algorithm>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -8,6 +9,7 @@
 #include "core/conditions.h"
 #include "core/levels.h"
 #include "core/map_background.h"
+#include "core/movement.h"
 
 namespace dnd {
 namespace {
@@ -62,6 +64,7 @@ constexpr std::uint8_t kCommandHideArea = 33;
 constexpr std::uint8_t kCommandAdvanceTime = 34;
 constexpr std::uint8_t kCommandUseTurnAction = 35;
 constexpr std::uint8_t kCommandSetEncounterComposition = 36;
+constexpr std::uint8_t kCommandFallToken = 37;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -437,10 +440,22 @@ auto DecodeHealCommand(ByteReader& reader) -> std::optional<Command> {
 
 auto DecodeRestCommand(ByteReader& reader) -> std::optional<Command> {
   std::uint8_t long_rest = 0;
-  if (!reader.U8(long_rest) || long_rest > 1 || !reader.Done()) {
+  std::int32_t hit_dice = 0;
+  if (!reader.U8(long_rest) || long_rest > 1 || !reader.I32(hit_dice) ||
+      hit_dice < 0 || hit_dice > kMaxLevel || !reader.Done()) {
     return std::nullopt;
   }
-  return Command{RestParty{.long_rest = long_rest != 0}};
+  return Command{RestParty{.long_rest = long_rest != 0, .hit_dice = hit_dice}};
+}
+
+auto DecodeFallCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::int32_t feet = 0;
+  if (!reader.U32(id) || !reader.I32(feet) || feet <= 0 ||
+      feet > kMaxFallFeet || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{FallToken{.id = id, .feet = feet}};
 }
 
 auto DecodeAdvanceTimeCommand(ByteReader& reader) -> std::optional<Command> {
@@ -545,10 +560,15 @@ auto DecodeSetEncounterCompositionCommand(ByteReader& reader)
 auto DecodeMoveCommand(ByteReader& reader) -> std::optional<Command> {
   std::uint32_t id = 0;
   Cell cell;
-  if (!reader.U32(id) || !ReadPosition(reader, cell) || !reader.Done()) {
+  std::uint8_t flags = 0;
+  if (!reader.U32(id) || !ReadPosition(reader, cell) || !reader.U8(flags) ||
+      (flags & ~0x3U) != 0 || (flags & 0x3U) == 0x3U || !reader.Done()) {
     return std::nullopt;
   }
-  return Command{MoveToken{.id = id, .target = cell}};
+  return Command{MoveToken{.id = id,
+                           .target = cell,
+                           .crawl = (flags & 0x1U) != 0,
+                           .jump = (flags & 0x2U) != 0}};
 }
 
 auto DecodeSayCommand(ByteReader& reader) -> std::optional<Command> {
@@ -1061,12 +1081,16 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
     writer.I32(cell.y);
   }
   WriteFogRecords(writer, snapshot.fog);
+  writer.U32(
+      static_cast<std::uint32_t>(std::max(0, snapshot.game_time_seconds)));
+  writer.I32(snapshot.last_long_rest_seconds);
   return writer.Data();
 }
 
 auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
                     bool conditions_have_dc, bool has_turn_economy,
-                    bool has_damage_profile) -> std::optional<GameSnapshot> {
+                    bool has_damage_profile, bool has_game_clock)
+    -> std::optional<GameSnapshot> {
   ByteReader reader(data, size);
   std::uint32_t width = 0;
   std::uint32_t height = 0;
@@ -1140,6 +1164,20 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
   if (!ReadFogRecords(reader, map_cells, fog)) {
     return std::nullopt;
   }
+  std::uint32_t game_time = 0;
+  std::int32_t last_long_rest = -1;
+  if (has_game_clock) {
+    if (!reader.U32(game_time) || !reader.I32(last_long_rest) ||
+        game_time > static_cast<std::uint32_t>(kMaxGameTimeSeconds) ||
+        last_long_rest < -1) {
+      return std::nullopt;
+    }
+    const auto last_rest_time = static_cast<std::int64_t>(last_long_rest);
+    const auto scene_time = static_cast<std::int64_t>(game_time);
+    if (last_rest_time >= 0 && last_rest_time > scene_time) {
+      return std::nullopt;
+    }
+  }
   if (!reader.Done()) {
     return std::nullopt;
   }
@@ -1153,6 +1191,8 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
       .background = std::move(background),
       .revealed = std::move(revealed),
       .fog = std::move(fog),
+      .game_time_seconds = static_cast<int>(game_time),
+      .last_long_rest_seconds = last_long_rest,
   };
 }
 
@@ -1202,6 +1242,14 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U32(cmd.id);
           writer.I32(cmd.target.x);
           writer.I32(cmd.target.y);
+          std::uint8_t flags = 0;
+          if (cmd.crawl) {
+            flags |= 0x1U;
+          }
+          if (cmd.jump) {
+            flags |= 0x2U;
+          }
+          writer.U8(flags);
         } else if constexpr (std::is_same_v<T, Say>) {
           writer.U8(kCommandSay);
           writer.String(cmd.text);
@@ -1315,6 +1363,11 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, RestParty>) {
           writer.U8(kCommandRestParty);
           writer.U8(cmd.long_rest ? 1 : 0);
+          writer.I32(cmd.hit_dice);
+        } else if constexpr (std::is_same_v<T, FallToken>) {
+          writer.U8(kCommandFallToken);
+          writer.U32(cmd.id);
+          writer.I32(cmd.feet);
         } else if constexpr (std::is_same_v<T, AdvanceTime>) {
           writer.U8(kCommandAdvanceTime);
           writer.I32(cmd.seconds);
@@ -1435,6 +1488,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeHealCommand(reader);
     case kCommandRestParty:
       return DecodeRestCommand(reader);
+    case kCommandFallToken:
+      return DecodeFallCommand(reader);
     case kCommandAdvanceTime:
       return DecodeAdvanceTimeCommand(reader);
     case kCommandAoeDamage:

@@ -131,6 +131,8 @@ class GameServer {
       -> CommandOutcome;
   [[nodiscard]] auto HandleRest(const RestParty& command, bool can_control_all)
       -> CommandOutcome;
+  [[nodiscard]] auto HandleFall(const FallToken& command, bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleAdvanceTime(const AdvanceTime& command,
                                        bool can_control_all) -> CommandOutcome;
   [[nodiscard]] auto HandleAoeDamage(const AoeDamage& command,

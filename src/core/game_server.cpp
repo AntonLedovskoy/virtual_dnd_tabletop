@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <string_view>
 #include <type_traits>
@@ -14,6 +15,7 @@
 #include "core/conditions.h"
 #include "core/dice.h"
 #include "core/levels.h"
+#include "core/movement.h"
 #include "core/player_name.h"
 #include "core/units.h"
 
@@ -58,6 +60,22 @@ auto JoinChanges(const std::vector<std::string>& parts) -> std::string {
     text += part;
   }
   return text;
+}
+
+// Русское склонение для числа костей хитов в строке отдыха.
+auto HitDiceWord(int count) -> std::string_view {
+  const int last_two = count % 100;
+  const int last = count % 10;
+  if (last_two >= 11 && last_two <= 14) {
+    return "костей";
+  }
+  if (last == 1) {
+    return "кость";
+  }
+  if (last >= 2 && last <= 4) {
+    return "кости";
+  }
+  return "костей";
 }
 
 auto IsValidKind(TokenKind kind) -> bool {
@@ -222,6 +240,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleHeal(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, RestParty>) {
           return HandleRest(cmd, can_control_all);
+        } else if constexpr (std::is_same_v<T, FallToken>) {
+          return HandleFall(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, AdvanceTime>) {
           return HandleAdvanceTime(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, AoeDamage>) {
@@ -327,10 +347,57 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   }
 
   const bool budgeted = state_.EncounterState().active && !can_control_all;
-  // Встать из положения «сбит с ног» стоит половину скорости (2024).
-  const bool prone = HasCondition(*token, "сбит с ног");
-  const int stand_cost =
-      prone && budgeted ? std::max(1, EffectiveSpeedCells(*token) / 2) : 0;
+  const bool prone = IsProne(*token);
+
+  // Прыжок по прямой до 10 футов (в модели нет Силы, это упрощение 2024):
+  // стену не перепрыгнуть, пропасть и воду — можно; приземляться в них
+  // нельзя, это проверит ApplyCommand.
+  if (command.jump) {
+    if (prone) {
+      return CommandOutcome{.reject_reason =
+                                "сначала встаньте из положения «сбит с ног»"};
+    }
+    const int distance = JumpDistanceCells(token->cell, command.target);
+    if (distance <= 0 || distance > kMaxJumpCells) {
+      return CommandOutcome{.reject_reason =
+                                "прыжок только по прямой до 10 футов"};
+    }
+    if (!IsJumpPathClear(state_.Map(), token->cell, command.target)) {
+      return CommandOutcome{.reject_reason = "стену не перепрыгнуть"};
+    }
+    if (budgeted && distance > RemainingMovementCells(*token)) {
+      return CommandOutcome{.reject_reason = "не хватает движения на прыжок"};
+    }
+    const std::optional<Event> jump_event = state_.ApplyCommand(command);
+    if (!jump_event.has_value()) {
+      return CommandOutcome{.reject_reason = "недопустимый прыжок"};
+    }
+    RecomputeFog();
+    CommandOutcome jump_outcome;
+    jump_outcome.accepted = true;
+    jump_outcome.events.emplace_back(*jump_event);
+    if (budgeted) {
+      const std::optional<Token> jumped =
+          state_.SpendMovement(command.id, distance, token->diagonal_parity);
+      if (jumped.has_value()) {
+        jump_outcome.events.emplace_back(TokenUpdated{.token = *jumped});
+      }
+    }
+    jump_outcome.events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = AuthorName(actor),
+                        .text = token->name + " прыгнул на " +
+                                std::to_string(distance * 5) + " футов",
+                        .timestamp = CurrentTimeSeconds()},
+    });
+    if (token->kind != TokenKind::kPlayer && IsPartyVisible(token->cell)) {
+      (void)JoinEncounterIfNeeded(command.id, jump_outcome.events);
+    }
+    return jump_outcome;
+  }
+
+  // Ползание не встаёт: каждый фут пути стоит вдвое. Обычный ход из
+  // положения «сбит с ног» сначала платит половину скорости за вставание.
+  const bool crawl = prone && command.crawl;
   std::optional<PathCost> path;
   if (!can_control_all) {
     path = PathCostCells(state_.Map(), token->cell, command.target,
@@ -339,12 +406,20 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
       return CommandOutcome{.reject_reason = "нет пути к клетке"};
     }
   }
+  const int path_cost = path.has_value() ? path->cost : 0;
+  const int move_cost = crawl ? CrawlCostCells(path_cost) : path_cost;
+  const int stand_cost =
+      prone && !crawl && budgeted ? StandUpCostCells(*token) : 0;
   if (budgeted) {
-    const int budget = EffectiveSpeedCells(*token) + token->movement_bonus;
-    if (token->movement_used + stand_cost + path->cost > budget) {
-      return CommandOutcome{.reject_reason =
-                                prone ? "не хватает движения, чтобы встать"
-                                      : "не хватает движения на ход"};
+    const int remaining = MovementBudgetCells(*token) - token->movement_used;
+    if (stand_cost + move_cost > remaining) {
+      const char* reason = "не хватает движения на ход";
+      if (prone && !crawl) {
+        reason = "не хватает движения, чтобы встать";
+      } else if (crawl) {
+        reason = "не хватает движения, чтобы проползти";
+      }
+      return CommandOutcome{.reject_reason = reason};
     }
   }
 
@@ -358,12 +433,13 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   outcome.accepted = true;
   outcome.events.emplace_back(*event);
   std::optional<Token> updated;
-  if (prone) {
-    updated = state_.RemoveTokenCondition(command.id, "сбит с ног");
+  if (prone && !crawl) {
+    updated = state_.RemoveTokenCondition(command.id, std::string(kProne));
   }
   if (budgeted) {
-    updated = state_.SpendMovement(command.id, path->cost + stand_cost,
-                                   path->diagonal_parity);
+    const int parity =
+        path.has_value() ? path->diagonal_parity : token->diagonal_parity;
+    updated = state_.SpendMovement(command.id, move_cost + stand_cost, parity);
   }
   if (updated.has_value()) {
     outcome.events.emplace_back(TokenUpdated{.token = std::move(*updated)});
@@ -956,19 +1032,43 @@ auto GameServer::HandleRest(const RestParty& command, bool can_control_all)
   if (!can_control_all) {
     return CommandOutcome{.reject_reason = "отдых объявляет только DM"};
   }
-  const bool has_players =
+  if (command.hit_dice < 0 || command.hit_dice > kMaxLevel) {
+    return CommandOutcome{.reject_reason = "некорректное число костей хитов"};
+  }
+  // Инициатива прерывает отдых: в бою стол не отдыхает.
+  if (state_.EncounterState().active) {
+    return CommandOutcome{.reject_reason =
+                              "в бою отдых прерывает инициатива: сначала бой"};
+  }
+  if (command.long_rest) {
+    if (const int ready_in = state_.LongRestReadyInSeconds(); ready_in > 0) {
+      return CommandOutcome{.reject_reason =
+                                "следующий длинный отдых не раньше чем через " +
+                                FormatConditionDuration(ready_in)};
+    }
+  }
+  const bool has_resting_players =
       std::ranges::any_of(state_.Tokens(), [](const Token& token) -> bool {
-        return token.kind == TokenKind::kPlayer;
+        return token.kind == TokenKind::kPlayer && token.hp > 0 &&
+               !HasCondition(token, kDead);
       });
-  if (!has_players) {
-    return CommandOutcome{.reject_reason = "в партии нет персонажей"};
+  if (!has_resting_players) {
+    return CommandOutcome{
+        .reject_reason = "лежачим на 0 HP отдых не помогает: сначала лечение"};
   }
   const std::vector<RestChange> changed =
-      state_.RestParty(command.long_rest, rng_);
+      state_.RestParty(command.long_rest, rng_, command.hit_dice);
   CommandOutcome outcome;
   outcome.accepted = true;
   for (const RestChange& change : changed) {
     outcome.events.emplace_back(TokenUpdated{.token = change.token});
+  }
+  std::vector<std::string> downed;
+  for (const Token& token : state_.Tokens()) {
+    if (token.kind == TokenKind::kPlayer && token.hp == 0 &&
+        !HasCondition(token, kDead)) {
+      downed.push_back(token.name);
+    }
   }
   std::string text;
   if (command.long_rest) {
@@ -980,12 +1080,8 @@ auto GameServer::HandleRest(const RestParty& command, bool can_control_all)
     if (exhaustion_removed > 0) {
       text += ", истощение -" + std::to_string(exhaustion_removed);
     }
-    const bool downed =
-        std::ranges::any_of(state_.Tokens(), [](const Token& token) -> bool {
-          return token.kind == TokenKind::kPlayer && token.hp == 0;
-        });
-    if (downed) {
-      text += "; персонажи на 0 HP не встают";
+    if (!downed.empty()) {
+      text += "; на 0 HP не отдыхают: " + JoinChanges(downed);
     }
   } else {
     std::vector<std::string> parts;
@@ -1000,14 +1096,74 @@ auto GameServer::HandleRest(const RestParty& command, bool can_control_all)
           std::to_string(HitDiceAvailable(level, change.token.hit_dice_spent)) +
           "/" + std::to_string(HitDiceMaximum(level)) + ")");
     }
-    text = "Короткий отдых (1 час): ";
+    text = "Короткий отдых (1 час";
+    if (command.hit_dice > 0) {
+      text += ", до " + std::to_string(command.hit_dice) + " " +
+              std::string(HitDiceWord(command.hit_dice));
+    }
+    text += "): ";
     text += parts.empty() ? "кости хитов не тратились" : JoinChanges(parts);
+    if (!downed.empty()) {
+      text += "; на 0 HP не отдыхают: " + JoinChanges(downed);
+    }
   }
   outcome.events.emplace_back(LogLineAdded{
       .line =
           LogLine{
               .author = "DM", .text = text, .timestamp = CurrentTimeSeconds()},
   });
+  return outcome;
+}
+
+auto GameServer::HandleFall(const FallToken& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "падение объявляет только DM"};
+  }
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (command.feet <= 0 || command.feet > kMaxFallFeet) {
+    return CommandOutcome{.reject_reason = "некорректная высота падения"};
+  }
+  const int dice = FallDamageDice(command.feet);
+  std::uniform_int_distribution<int> die(1, 6);
+  int damage = 0;
+  std::ostringstream breakdown;
+  breakdown << dice << "d6";
+  if (dice > 0) {
+    breakdown << " =";
+    for (int i = 0; i < dice; ++i) {
+      const int roll = die(rng_);
+      damage += roll;
+      breakdown << " " << roll;
+    }
+    breakdown << " = " << damage;
+  }
+  const std::string name = token->name;
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(LogLineAdded{
+      .line =
+          LogLine{.author = "DM",
+                  .text = name + " падает с " + std::to_string(command.feet) +
+                          " футов: " + breakdown.str(),
+                  .timestamp = CurrentTimeSeconds()},
+  });
+  // Сопротивление и иммунитет считаются до падения: если урона не осталось,
+  // персонаж не получает «сбит с ног».
+  const int dealt = AdjustedDamage(damage, DamageType::kBludgeoning,
+                                   EffectiveDamageProfile(*token));
+  if (dealt > 0) {
+    DamageAndLog(command.id, damage, false, DamageType::kBludgeoning, "DM",
+                 outcome.events);
+    const std::optional<Token> prone =
+        state_.AddTokenCondition(command.id, Condition{std::string(kProne)});
+    if (prone.has_value()) {
+      outcome.events.emplace_back(TokenUpdated{.token = *prone});
+    }
+  }
   return outcome;
 }
 

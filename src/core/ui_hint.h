@@ -37,6 +37,8 @@ enum class Hint : std::uint8_t {
   kActions,
   kColor,
   kMoveRange,
+  kCrawl,
+  kJump,
   kRuler,
   kAoe,
   kBestiary,
@@ -71,6 +73,8 @@ struct HintContext {
   bool can_claim = false;
   bool in_combat = false;
   bool log_scrolled = false;
+  // Выбранный токен «сбит с ног»: показываем, как ползти.
+  bool prone = false;
 };
 
 // Действия нижней подсказки в порядке показа: сначала общие клавиши, затем

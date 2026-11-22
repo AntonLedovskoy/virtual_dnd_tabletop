@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "core/movement.h"
 #include "core/units.h"
 
 namespace dnd {
@@ -143,8 +144,7 @@ auto AttackRollModesFor(const Token& attacker, const Token& target,
   // Атакующий: ослеплён, отравлен, испуган, сбит с ног, опутан.
   if (HasCondition(attacker, "ослеплён") ||
       HasCondition(attacker, "отравлен") || HasCondition(attacker, "испуган") ||
-      HasCondition(attacker, "сбит с ног") ||
-      HasCondition(attacker, "опутан")) {
+      HasCondition(attacker, kProne) || HasCondition(attacker, "опутан")) {
     disadvantage();
   }
   if (HasCondition(attacker, "невидим")) {
@@ -159,7 +159,7 @@ auto AttackRollModesFor(const Token& attacker, const Token& target,
   if (HasCondition(target, "невидим")) {
     disadvantage();
   }
-  if (HasCondition(target, "сбит с ног")) {
+  if (HasCondition(target, kProne)) {
     // Лежачего бьют с преимуществом только в 5 футах, иначе с помехой.
     if (distance_cells <= 1) {
       advantage();
