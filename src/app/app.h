@@ -152,6 +152,13 @@ class App {
   auto HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void;
   // Баннер обновления в меню: что показать и что делает кнопка.
   [[nodiscard]] auto MenuUpdateState() const -> MenuUpdate;
+  // Диалог несовпадения версий после отказа хоста: тексты и кнопки.
+  [[nodiscard]] auto MenuMismatchState() const -> MenuMismatch;
+  auto CloseMismatch() -> void;
+  // Кнопка диалога: обновление (если помогает) или страница релизов.
+  auto HandleMismatchAction() -> void;
+  // Версия хоста и последний известный релиз для отказа по протоколу.
+  [[nodiscard]] auto MismatchInfo() const -> VersionMismatch;
   // Баннер во время партии: подменять exe можно только из меню.
   [[nodiscard]] auto SessionUpdateText() const -> std::string;
   auto HandleUpdateAction() -> void;
@@ -373,6 +380,8 @@ class App {
   std::unique_ptr<UpdateService> update_service_;
   // «Позже» в баннере: до перезапуска игры больше не показываем.
   bool update_dismissed_ = false;
+  // Отказ хоста по протоколу: диалог версий в меню, пока его не закроют.
+  std::optional<VersionMismatch> version_mismatch_;
 
   EditorBrush editor_brush_ = EditorBrush::kWall;
   StatusMessage editor_status_;

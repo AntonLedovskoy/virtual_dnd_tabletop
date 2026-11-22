@@ -60,6 +60,9 @@ class UpdateService {
 
   [[nodiscard]] auto Status() const -> UpdateStatus;
   [[nodiscard]] auto BasePath() const -> const std::filesystem::path&;
+  // Выключена у developer build без DND_UPDATE_MANIFEST и с
+  // --no-update-check: диалог версий тогда ведёт на страницу релизов.
+  [[nodiscard]] auto Enabled() const -> bool { return enabled_; }
 
  private:
   auto JoinWorker() -> void;

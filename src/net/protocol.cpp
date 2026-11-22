@@ -12,6 +12,7 @@ namespace {
 constexpr std::uint32_t kMaxPlayerName = 64;
 constexpr std::uint32_t kMaxRejectReason = 256;
 constexpr std::uint32_t kMaxRosterEntries = 64;
+constexpr std::uint32_t kMaxVersionText = 32;
 
 }  // namespace
 
@@ -214,6 +215,54 @@ auto DecodeReject(const std::uint8_t* data, std::size_t size)
     return std::nullopt;
   }
   return reason;
+}
+
+auto EncodeVersionMismatch(const VersionMismatch& mismatch)
+    -> std::vector<std::uint8_t> {
+  ByteWriter writer;
+  writer.U8(static_cast<std::uint8_t>(MessageType::kVersionMismatch));
+  writer.U32(mismatch.host_protocol);
+  writer.String(FormatVersion(mismatch.host_version));
+  writer.U8(mismatch.latest_version.has_value() ? 1 : 0);
+  if (mismatch.latest_version.has_value()) {
+    writer.String(FormatVersion(*mismatch.latest_version));
+    writer.U32(mismatch.latest_protocol);
+  }
+  return writer.Data();
+}
+
+auto DecodeVersionMismatch(const std::uint8_t* data, std::size_t size)
+    -> std::optional<VersionMismatch> {
+  ByteReader reader(data, size);
+  std::uint8_t type = 0;
+  VersionMismatch mismatch;
+  std::string host_text;
+  std::uint8_t has_latest = 0;
+  if (!reader.U8(type) ||
+      type != static_cast<std::uint8_t>(MessageType::kVersionMismatch) ||
+      !reader.U32(mismatch.host_protocol) ||
+      !reader.String(host_text, kMaxVersionText) ||
+      !ParseVersion(host_text, mismatch.host_version) ||
+      !reader.U8(has_latest)) {
+    return std::nullopt;
+  }
+  if (has_latest > 1) {
+    return std::nullopt;
+  }
+  if (has_latest == 1) {
+    std::string latest_text;
+    Version latest;
+    if (!reader.String(latest_text, kMaxVersionText) ||
+        !ParseVersion(latest_text, latest) ||
+        !reader.U32(mismatch.latest_protocol)) {
+      return std::nullopt;
+    }
+    mismatch.latest_version = latest;
+  }
+  if (!reader.Done()) {
+    return std::nullopt;
+  }
+  return mismatch;
 }
 
 auto EncodeRoster(const std::vector<RosterEntry>& roster)

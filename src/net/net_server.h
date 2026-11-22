@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -67,6 +68,11 @@ class NetServer {
   auto SendEvent(PeerId peer, const Event& event) -> void;
   auto BroadcastEvent(const Event& event) -> void;
   auto Reject(PeerId peer, const std::string& reason) -> void;
+  // Версия хоста и последний известный релиз для диалога несовпадения версий.
+  // Приложение подставляет сюда результат проверки обновлений; без провайдера
+  // уходит только номер протокола хоста.
+  auto SetMismatchInfoProvider(std::function<VersionMismatch()> provider)
+      -> void;
 
  private:
   struct Peer {
@@ -103,6 +109,7 @@ class NetServer {
                    std::vector<PeerCommand>& commands) -> void;
   [[nodiscard]] auto Roster() const -> std::vector<RosterEntry>;
   auto BroadcastRoster() -> void;
+  [[nodiscard]] auto MismatchInfo() const -> VersionMismatch;
 
   TcpListener listener_;
   std::vector<Peer> peers_;
@@ -112,6 +119,8 @@ class NetServer {
   // сменой регистра.
   std::vector<std::string> banned_names_;
   bool roster_dirty_ = false;
+  // Заполняет приложение: версия хоста и версия из манифеста обновлений.
+  std::function<VersionMismatch()> mismatch_info_;
 };
 
 }  // namespace dnd

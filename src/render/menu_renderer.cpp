@@ -34,6 +34,10 @@ constexpr SDL_Color kError{
 constexpr float kPanelWidth = 640.0F;
 constexpr float kPanelHeight = 660.0F;
 constexpr float kFieldHeight = 44.0F;
+// Диалог несовпадения версий: шире кнопки, но уже панели меню.
+constexpr float kMismatchWidth = 560.0F;
+constexpr float kMismatchHeight = 280.0F;
+constexpr float kMismatchButtonHeight = 40.0F;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
@@ -59,6 +63,49 @@ auto DrawField(SDL_Renderer* renderer, TextRenderer* text,
   const float text_y = rect.y + ((rect.h - text->LineHeight()) / 2.0F);
   text->Draw(shown, rect.x + 12.0F, text_y, value.empty() ? kHint : kText,
              rect.w - 24.0F);
+}
+
+// Модальный диалог поверх меню: версии сторон, вердикт и кнопки. Рисуется
+// последним, чтобы шапка и поля меню под ним не перекрывали текст.
+auto DrawMismatch(SDL_Renderer* renderer, TextRenderer* text,
+                  const MenuLayout& layout, const MenuMismatch& mismatch)
+    -> void {
+  if (text == nullptr || !mismatch.visible) {
+    return;
+  }
+  SetDrawColor(renderer, kBackground);
+  SDL_RenderFillRect(renderer, &layout.mismatch_panel);
+  SetDrawColor(renderer, kActive);
+  SDL_RenderRect(renderer, &layout.mismatch_panel);
+
+  const float left = layout.mismatch_panel.x + 20.0F;
+  const float width = layout.mismatch_panel.w - 40.0F;
+  float y = layout.mismatch_panel.y + 18.0F;
+  text->Draw(mismatch.title, left, y, kText, width);
+  y += 40.0F;
+  constexpr float line_step = 24.0F;
+  text->Draw(mismatch.mine, left, y, kText, width);
+  y += line_step;
+  text->Draw(mismatch.host, left, y, kText, width);
+  y += line_step;
+  text->Draw(mismatch.latest, left, y, kHint, width);
+  y += line_step + 8.0F;
+  text->DrawWrapped(mismatch.advice, left, y, kHint, width);
+  text->Draw(std::string(strings::kMismatchHint), left,
+             layout.mismatch_action.y - 28.0F, kHint, width);
+
+  SetDrawColor(renderer, kButtonDisabled);
+  SDL_RenderFillRect(renderer, &layout.mismatch_close);
+  SetDrawColor(renderer, kBorder);
+  SDL_RenderRect(renderer, &layout.mismatch_close);
+  text->DrawCentered(mismatch.close, layout.mismatch_close, kText);
+  if (!mismatch.action.empty()) {
+    SetDrawColor(renderer, kButton);
+    SDL_RenderFillRect(renderer, &layout.mismatch_action);
+    SetDrawColor(renderer, kBorder);
+    SDL_RenderRect(renderer, &layout.mismatch_action);
+    text->DrawCentered(mismatch.action, layout.mismatch_action, kButtonText);
+  }
 }
 
 }  // namespace
@@ -90,6 +137,21 @@ auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
   layout.update_action =
       SDL_FRect{layout.update_dismiss.x - 8.0F - action_width, panel_y + 39.0F,
                 action_width, button_height};
+  // Диалог версий стоит по центру окна: он модальный и не зависит от вкладки.
+  const float mismatch_x =
+      (static_cast<float>(window_width) - kMismatchWidth) / 2.0F;
+  const float mismatch_y =
+      (static_cast<float>(window_height) - kMismatchHeight) / 2.0F;
+  layout.mismatch_panel =
+      SDL_FRect{mismatch_x, mismatch_y, kMismatchWidth, kMismatchHeight};
+  layout.mismatch_action =
+      SDL_FRect{mismatch_x + 20.0F,
+                mismatch_y + kMismatchHeight - 20.0F - kMismatchButtonHeight,
+                280.0F, kMismatchButtonHeight};
+  layout.mismatch_close =
+      SDL_FRect{mismatch_x + kMismatchWidth - 20.0F - 160.0F,
+                mismatch_y + kMismatchHeight - 20.0F - kMismatchButtonHeight,
+                160.0F, kMismatchButtonHeight};
   if (tab == MenuTab::kEditor) {
     layout.action_button =
         SDL_FRect{field_x, panel_y + 200.0F, field_width, 50.0F};
@@ -120,7 +182,7 @@ auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
 auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
               const MenuState& state,
               const std::vector<std::string>& local_addresses,
-              const MenuUpdate& update) -> void {
+              const MenuUpdate& update, const MenuMismatch& mismatch) -> void {
   int window_width = 0;
   int window_height = 0;
   if (text == nullptr || !RenderSize(renderer, window_width, window_height)) {
@@ -279,6 +341,8 @@ auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
 
   text->Draw(std::string(strings::kTabHint), panel_x + 40.0F,
              panel_y + kPanelHeight - 32.0F, kHint, field_width);
+
+  DrawMismatch(renderer, text, layout, mismatch);
 }
 
 }  // namespace dnd

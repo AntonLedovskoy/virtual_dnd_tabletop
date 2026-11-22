@@ -102,7 +102,8 @@ auto NetClient::Poll(NetClientUpdate& update) -> void {
         Disconnect();
         return;
       }
-      if (type != MessageType::kChallenge && type != MessageType::kReject) {
+      if (type != MessageType::kChallenge && type != MessageType::kReject &&
+          type != MessageType::kVersionMismatch) {
         continue;  // открытые данные до рукопожатия не принимаем
       }
     }
@@ -160,6 +161,12 @@ auto NetClient::Poll(NetClientUpdate& update) -> void {
           DecodeReject(frame.payload.data(), frame.payload.size());
       if (reason.has_value()) {
         update.reject = std::move(*reason);
+      }
+    } else if (type == MessageType::kVersionMismatch) {
+      std::optional<VersionMismatch> mismatch =
+          DecodeVersionMismatch(frame.payload.data(), frame.payload.size());
+      if (mismatch.has_value()) {
+        update.mismatch = *mismatch;
       }
     }
   }

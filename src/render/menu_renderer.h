@@ -26,6 +26,10 @@ struct MenuLayout {
   SDL_FRect update_banner;
   SDL_FRect update_action;
   SDL_FRect update_dismiss;
+  // Модальный диалог несовпадения версий поверх меню.
+  SDL_FRect mismatch_panel;
+  SDL_FRect mismatch_action;
+  SDL_FRect mismatch_close;
 };
 
 // Баннер обновления над вкладками. Пока он виден, подзаголовок меню уступает
@@ -38,12 +42,29 @@ struct MenuUpdate {
   bool action_enabled = true;
 };
 
+// Диалог несовпадения версий: появляется, когда хост отверг подключение по
+// протоколу, и закрывает меню, пока игрок не обновится или не закроет его.
+struct MenuMismatch {
+  bool visible = false;
+  std::string title;
+  // «У вас: …», «У хоста: …», «Последняя: …».
+  std::string mine;
+  std::string host;
+  std::string latest;
+  std::string advice;
+  // Пусто — обновление не поможет (обновиться должен хост).
+  std::string action;
+  // true — кнопка открывает страницу релизов, а не запускает обновление.
+  bool opens_releases = false;
+  std::string close;
+};
+
 auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
     -> MenuLayout;
 
 auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
               const MenuState& state,
               const std::vector<std::string>& local_addresses,
-              const MenuUpdate& update) -> void;
+              const MenuUpdate& update, const MenuMismatch& mismatch) -> void;
 
 }  // namespace dnd

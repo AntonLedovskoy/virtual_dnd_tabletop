@@ -153,6 +153,9 @@ auto NetServer::HandleFrame(Peer& peer, const ReceivedFrame& frame,
       return;
     }
     if (*version != kProtocolVersion) {
+      // Подробности идут отдельным кадром: старый клиент его молча
+      // пропустит и покажет текст отказа, новый — откроет диалог версий.
+      peer.connection->QueueFrame(EncodeVersionMismatch(MismatchInfo()));
       Reject(peer.id, "версия игры не совпадает: у хоста " +
                           std::to_string(kProtocolVersion) + ", у клиента " +
                           std::to_string(*version) + "; обновите игру");
@@ -279,6 +282,18 @@ auto NetServer::Reject(PeerId peer_id, const std::string& reason) -> void {
   if (peer != nullptr) {
     peer->connection->QueueFrame(EncodeReject(reason));
   }
+}
+
+auto NetServer::SetMismatchInfoProvider(
+    std::function<VersionMismatch()> provider) -> void {
+  mismatch_info_ = std::move(provider);
+}
+
+auto NetServer::MismatchInfo() const -> VersionMismatch {
+  if (mismatch_info_) {
+    return mismatch_info_();
+  }
+  return VersionMismatch{.host_protocol = kProtocolVersion};
 }
 
 auto NetServer::Peers() const -> std::vector<PeerInfo> {

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -33,6 +34,11 @@ inline constexpr std::string_view kUpdateManifestUrl =
     "https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases/latest/"
     "download/latest.json";
 
+// Страница всех релизов: сюда ведёт диалог несовпадения версий, когда
+// последнюю версию узнать не удалось.
+inline constexpr std::string_view kReleasesUrl =
+    "https://github.com/AntonLedovskoy/virtual_dnd_tabletop/releases";
+
 // Имя скачанного бинарника рядом с текущим exe и имя прежнего exe на время
 // подмены. Оба начинаются с имени игры: `virtual_dnd_tabletop`.
 inline constexpr std::string_view kExecutableName = "virtual_dnd_tabletop.exe";
@@ -56,6 +62,25 @@ inline constexpr std::string_view kPreviousExeName =
                                      const UpdateManifest& manifest,
                                      bool allow_developer_build = false)
     -> bool;
+
+// Вердикт для диалога несовпадения версий: кто отстал и поможет ли
+// обновление. Последняя версия известна только после проверки манифеста:
+// пусто — сети не было, и тогда советовать нечего, остаётся ссылка на релизы.
+enum class UpdateAdvice : std::uint8_t {
+  kUnknown = 0,
+  // Моя сборка старше хоста: обновление помогает.
+  kUpdateMine = 1,
+  // Хост старше: обновиться должен DM, клиенту это не поможет.
+  kUpdateHost = 2,
+  // Версии совпали, но в манифесте есть новее: игру не блокирует.
+  kNewerAvailable = 3,
+  // Версии совпали и новее нет: протоколы различаются только сборками.
+  kUpToDate = 4,
+};
+
+[[nodiscard]] auto AdviseUpdate(const Version& mine, const Version& host,
+                                const std::optional<Version>& latest)
+    -> UpdateAdvice;
 
 // Что делать на старте с файлами подмены, если прошлый запуск прервался между
 // шагами. exe всегда есть у запущенного процесса, остальные случаи — защита и

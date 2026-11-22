@@ -3088,6 +3088,43 @@ auto TestUpdateManifest() -> void {
          "DND_UPDATE_MANIFEST lets a developer build test the cycle");
 }
 
+auto TestUpdateAdvice() -> void {
+  const auto make = [](int minor) -> dnd::Version {
+    return dnd::Version{.major = 0, .minor = minor, .patch = 0};
+  };
+  using dnd::UpdateAdvice;
+  const dnd::Version older = make(35);
+  const dnd::Version current = make(36);
+  const dnd::Version newer = make(37);
+
+  Expect(
+      dnd::AdviseUpdate(older, current, current) == UpdateAdvice::kUpdateMine,
+      "a stale client is told to update");
+  Expect(
+      dnd::AdviseUpdate(current, older, current) == UpdateAdvice::kUpdateHost,
+      "a stale host is named as the one to update");
+  Expect(dnd::AdviseUpdate(current, current, newer) ==
+             UpdateAdvice::kNewerAvailable,
+         "equal versions with a newer release stay compatible");
+  Expect(
+      dnd::AdviseUpdate(current, current, current) == UpdateAdvice::kUpToDate,
+      "equal versions without a newer release are up to date");
+  Expect(dnd::AdviseUpdate(current, current, std::nullopt) ==
+             UpdateAdvice::kUnknown,
+         "no manifest means the player checks manually");
+  Expect(dnd::AdviseUpdate(older, current, std::nullopt) ==
+             UpdateAdvice::kUpdateMine,
+         "the host comparison needs no manifest");
+  Expect(dnd::AdviseUpdate(current, newer, newer) == UpdateAdvice::kUpdateMine,
+         "the host can be many releases ahead");
+  Expect(dnd::AdviseUpdate(newer, current, older) == UpdateAdvice::kUpdateHost,
+         "an older manifest does not change who is behind");
+  dnd::Version dirty = current;
+  dirty.dirty = true;
+  Expect(dnd::AdviseUpdate(dirty, current, current) == UpdateAdvice::kUpToDate,
+         "dirty does not change the verdict");
+}
+
 auto TestStartupRecovery() -> void {
   using dnd::StartupAction;
   Expect(dnd::PlanStartupRecovery(true, false, false) == StartupAction::kNone,
@@ -6899,6 +6936,7 @@ auto main() -> int {
     TestPlayerNames();
     TestVersion();
     TestUpdateManifest();
+    TestUpdateAdvice();
     TestStartupRecovery();
     TestCaseInsensitiveOwnership();
     TestTokenManagement();

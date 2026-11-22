@@ -17,6 +17,8 @@ namespace dnd {
 struct NetClientUpdate {
   std::optional<Welcome> welcome;
   std::optional<std::string> reject;
+  // Версии сторон при отказе по протоколу: диалог «обновитесь» в меню.
+  std::optional<VersionMismatch> mismatch;
   std::optional<std::vector<RosterEntry>> roster;
   std::vector<Event> events;
   bool disconnected = false;

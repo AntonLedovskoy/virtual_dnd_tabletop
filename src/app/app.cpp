@@ -34,6 +34,7 @@
 #include "core/scene_io.h"
 #include "core/ui_hint.h"
 #include "core/units.h"
+#include "core/update.h"
 #include "core/utf8.h"
 #include "net/tcp_socket.h"
 #include "render/grid_renderer.h"
@@ -284,6 +285,13 @@ auto PointInside(const SDL_FRect& rect, float x, float y) -> bool {
          y < rect.y + rect.h;
 }
 
+// «0.3.0 (протокол 42)»: в диалоге версий нужны оба числа.
+auto VersionWithProtocol(const Version& version, std::uint32_t protocol)
+    -> std::string {
+  return FormatVersion(version) + " (" + std::string(strings::kProtocolLabel) +
+         std::to_string(protocol) + ")";
+}
+
 }  // namespace
 
 App::App(AppOptions options)
@@ -357,6 +365,10 @@ auto App::Initialize() -> bool {
       BaseDirectory(), current_version, kProtocolVersion, update_enabled,
       std::move(manifest_override));
   update_service_->StartCheck();
+  // Отказ по протоколу несёт и версию хоста, и последний релиз: клиент сразу
+  // видит, поможет ли ему обновление.
+  net_server_.SetMismatchInfoProvider(
+      [this]() -> VersionMismatch { return MismatchInfo(); });
 
   RefreshCampaignLibrary();
   if (!LoadSelectedCampaign()) {
@@ -513,6 +525,7 @@ auto App::StartClient() -> bool {
   client_connected_ = false;
   claimed_once_ = false;
   in_game_ = false;
+  version_mismatch_.reset();
   help_active_ = false;
   log_scroll_.ToNewest();
   log_top_ = 0.0F;
@@ -1383,6 +1396,9 @@ auto App::FocusNextMenuField(int direction) -> void {
 }
 
 auto App::HandleMenuTextInput(const char* text) -> void {
+  if (version_mismatch_.has_value()) {
+    return;  // под диалогом версий поля меню не редактируются
+  }
   std::string* buffer = MenuTextBuffer();
   if (buffer == nullptr || text == nullptr) {
     return;
@@ -1391,6 +1407,15 @@ auto App::HandleMenuTextInput(const char* text) -> void {
 }
 
 auto App::HandleMenuKeyDown(const SDL_KeyboardEvent& key) -> void {
+  // Диалог версий модальный: остальные клавиши до полей меню не доходят.
+  if (version_mismatch_.has_value()) {
+    if (key.key == SDLK_ESCAPE) {
+      CloseMismatch();
+    } else if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
+      HandleMismatchAction();
+    }
+    return;
+  }
   // Стрелки и цифровой блок одинаково листают библиотеку кампаний.
   const bool up = key.key == SDLK_UP || key.key == SDLK_KP_8 ||
                   key.scancode == SDL_SCANCODE_UP;
@@ -1437,6 +1462,19 @@ auto App::HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void {
   }
   const MenuLayout layout =
       ComputeMenuLayout(window_width, window_height, menu_.tab);
+  const MenuMismatch mismatch = MenuMismatchState();
+  if (mismatch.visible) {
+    if (!mismatch.action.empty() &&
+        PointInside(layout.mismatch_action, button.x, button.y)) {
+      HandleMismatchAction();
+      return;
+    }
+    if (PointInside(layout.mismatch_close, button.x, button.y)) {
+      CloseMismatch();
+    }
+    // Клики мимо кнопок в меню не проходят: диалог модальный.
+    return;
+  }
   const MenuUpdate update = MenuUpdateState();
   if (update.visible) {
     if (PointInside(layout.update_action, button.x, button.y)) {
@@ -1544,6 +1582,143 @@ auto App::MenuUpdateState() const -> MenuUpdate {
       break;
   }
   return update;
+}
+
+auto App::MismatchInfo() const -> VersionMismatch {
+  VersionMismatch info;
+  info.host_protocol = kProtocolVersion;
+  (void)ParseVersion(DND_VERSION, info.host_version);
+  if (update_service_ != nullptr) {
+    const UpdateStatus status = update_service_->Status();
+    // Манифеста ещё нет, пока проверка не дошла до сети: пусто — клиенту
+    // честно скажем, что последняя версия неизвестна.
+    if (!status.manifest.url.empty()) {
+      info.latest_version = status.manifest.version;
+      info.latest_protocol =
+          static_cast<std::uint32_t>(std::max(status.manifest.protocol, 0));
+    }
+  }
+  return info;
+}
+
+auto App::MenuMismatchState() const -> MenuMismatch {
+  MenuMismatch dialog;
+  if (!version_mismatch_.has_value()) {
+    return dialog;
+  }
+  const VersionMismatch& mismatch = *version_mismatch_;
+  Version mine;
+  const bool mine_known = ParseVersion(DND_VERSION, mine);
+  std::optional<Version> latest = mismatch.latest_version;
+  std::uint32_t latest_protocol = mismatch.latest_protocol;
+  const UpdateStatus status =
+      update_service_ != nullptr ? update_service_->Status() : UpdateStatus{};
+  // Если хост не успел проверить манифест, подойдёт и результат своей
+  // проверки: версия из релиза у обеих сторон одна и та же.
+  if (!latest.has_value() && !status.manifest.url.empty()) {
+    latest = status.manifest.version;
+    latest_protocol =
+        static_cast<std::uint32_t>(std::max(status.manifest.protocol, 0));
+  }
+  const UpdateAdvice advice =
+      mine_known ? AdviseUpdate(mine, mismatch.host_version, latest)
+                 : UpdateAdvice::kUnknown;
+
+  dialog.visible = true;
+  dialog.title = std::string(strings::kMismatchTitle);
+  dialog.mine = std::string(strings::kMismatchMine);
+  if (mine_known) {
+    dialog.mine += VersionWithProtocol(mine, kProtocolVersion);
+  } else {
+    dialog.mine += "? (" + std::string(strings::kProtocolLabel) +
+                   std::to_string(kProtocolVersion) + ")";
+  }
+  dialog.host =
+      std::string(strings::kMismatchHost) +
+      VersionWithProtocol(mismatch.host_version, mismatch.host_protocol);
+  dialog.latest = std::string(strings::kMismatchLatest);
+  if (latest.has_value()) {
+    dialog.latest += VersionWithProtocol(*latest, latest_protocol);
+  } else {
+    dialog.latest += std::string(strings::kMismatchLatestUnknown);
+  }
+  dialog.close = std::string(strings::kMismatchClose);
+
+  switch (advice) {
+    case UpdateAdvice::kUpdateMine:
+      dialog.advice = std::string(strings::kMismatchAdviceUpdateMine);
+      if (update_service_ == nullptr || !update_service_->Enabled()) {
+        // Отключать обновления умеет developer build: только страница релизов.
+        dialog.action = std::string(strings::kMismatchReleases);
+        dialog.opens_releases = true;
+      } else if (status.manual_only) {
+        dialog.action = std::string(strings::kUpdateManual);
+      } else if (status.stage == UpdateStage::kReady) {
+        dialog.action = std::string(strings::kUpdateRestart);
+      } else {
+        dialog.action = std::string(strings::kUpdateAction);
+      }
+      break;
+    case UpdateAdvice::kUpdateHost:
+      dialog.advice = std::string(strings::kMismatchAdviceUpdateHost);
+      break;
+    case UpdateAdvice::kNewerAvailable:
+      dialog.advice = std::string(strings::kMismatchAdviceNewer);
+      if (update_service_ == nullptr || !update_service_->Enabled()) {
+        dialog.action = std::string(strings::kMismatchReleases);
+        dialog.opens_releases = true;
+      } else if (status.manual_only) {
+        dialog.action = std::string(strings::kUpdateManual);
+      } else if (status.stage == UpdateStage::kReady) {
+        dialog.action = std::string(strings::kUpdateRestart);
+      } else {
+        dialog.action = std::string(strings::kUpdateAction);
+      }
+      break;
+    case UpdateAdvice::kUpToDate:
+      dialog.advice = std::string(strings::kMismatchAdviceUpToDate);
+      dialog.action = std::string(strings::kMismatchReleases);
+      dialog.opens_releases = true;
+      break;
+    case UpdateAdvice::kUnknown:
+      dialog.advice = std::string(strings::kMismatchAdviceUnknown);
+      dialog.action = std::string(strings::kMismatchReleases);
+      dialog.opens_releases = true;
+      break;
+  }
+  return dialog;
+}
+
+auto App::CloseMismatch() -> void { version_mismatch_.reset(); }
+
+auto App::HandleMismatchAction() -> void {
+  const MenuMismatch dialog = MenuMismatchState();
+  if (!dialog.visible || dialog.action.empty()) {
+    return;
+  }
+  if (dialog.opens_releases) {
+    if (!SDL_OpenURL(std::string(kReleasesUrl).c_str())) {
+      SDL_Log("SDL_OpenURL failed: %s", SDL_GetError());
+    }
+    return;
+  }
+  if (update_service_ == nullptr) {
+    return;
+  }
+  const UpdateStatus status = update_service_->Status();
+  if (status.stage == UpdateStage::kReady) {
+    ApplyUpdate();
+    return;
+  }
+  if (status.stage == UpdateStage::kUpdateAvailable) {
+    // Дальше прогресс показывает обычный баннер меню, диалог уже не нужен.
+    version_mismatch_.reset();
+    HandleUpdateAction();
+    return;
+  }
+  // Проверка ещё идёт или сорвалась: повторяем, диалог остаётся открытым и
+  // сам покажет новый совет.
+  update_service_->StartCheck();
 }
 
 auto App::SessionUpdateText() const -> std::string {
@@ -3893,6 +4068,7 @@ auto App::PumpClient() -> void {
     in_game_ = true;
     menu_.busy = false;
     menu_.status.clear();
+    version_mismatch_.reset();
     CenterCamera();
     if (reconnected) {
       view_.AddLocalLine(std::string(strings::kConnectionRestored));
@@ -3910,17 +4086,36 @@ auto App::PumpClient() -> void {
   if (update.roster.has_value()) {
     UpdatePlayersFromRoster(*update.roster);
   }
+  if (update.mismatch.has_value()) {
+    version_mismatch_ = *update.mismatch;
+    // Диалог сам объясняет отказ: строка «Подключение...» под ним только
+    // путает.
+    menu_.status.clear();
+    std::string latest = "нет";
+    if (update.mismatch->latest_version.has_value()) {
+      latest = FormatVersion(*update.mismatch->latest_version);
+    }
+    SDL_Log("host protocol %u (version %s), latest release %s",
+            static_cast<unsigned>(update.mismatch->host_protocol),
+            FormatVersion(update.mismatch->host_version).c_str(),
+            latest.c_str());
+  }
   if (update.reject.has_value()) {
     if (in_game_ && net_client_.Welcomed()) {
       view_.AddLocalLine(std::string(strings::kRejected) + *update.reject);
     } else if (in_game_) {
-      menu_.status = std::string(strings::kRejected) + *update.reject;
+      // Меню под диалогом версий показывать нечего: текст отказа не нужен.
+      if (!version_mismatch_.has_value()) {
+        menu_.status = std::string(strings::kRejected) + *update.reject;
+      }
       menu_.busy = false;
       client_connecting_ = false;
       in_game_ = false;
       net_client_.Disconnect();
     } else {
-      menu_.status = std::string(strings::kRejected) + *update.reject;
+      if (!version_mismatch_.has_value()) {
+        menu_.status = std::string(strings::kRejected) + *update.reject;
+      }
       menu_.busy = false;
       client_connecting_ = false;
       net_client_.Disconnect();
@@ -4693,8 +4888,8 @@ auto App::Iterate() -> void {
     menu_.campaign_file = campaign_files_.empty()
                               ? std::string{}
                               : campaign_files_[campaign_index_];
-    DrawMenu(renderer_, text_.get(), menu_, local_addresses_,
-             MenuUpdateState());
+    DrawMenu(renderer_, text_.get(), menu_, local_addresses_, MenuUpdateState(),
+             MenuMismatchState());
     SDL_RenderPresent(renderer_);
     return;
   }

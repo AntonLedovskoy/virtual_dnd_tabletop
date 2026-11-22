@@ -435,6 +435,24 @@ auto IsUpdateAvailable(const Version& current, const UpdateManifest& manifest,
   return CompareVersion(manifest.version, current) > 0;
 }
 
+auto AdviseUpdate(const Version& mine, const Version& host,
+                  const std::optional<Version>& latest) -> UpdateAdvice {
+  // Сначала стороны: кто отстал, решает только сравнение с хостом, а
+  // наличие более новой версии важно лишь когда версии совпали.
+  const int against_host = CompareVersion(mine, host);
+  if (against_host < 0) {
+    return UpdateAdvice::kUpdateMine;
+  }
+  if (against_host > 0) {
+    return UpdateAdvice::kUpdateHost;
+  }
+  if (!latest.has_value()) {
+    return UpdateAdvice::kUnknown;
+  }
+  return CompareVersion(*latest, mine) > 0 ? UpdateAdvice::kNewerAvailable
+                                           : UpdateAdvice::kUpToDate;
+}
+
 auto PlanStartupRecovery(bool have_exe, bool have_old, bool have_update)
     -> StartupAction {
   if (have_exe) {

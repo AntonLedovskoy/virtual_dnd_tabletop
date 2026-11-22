@@ -200,6 +200,26 @@ inline constexpr std::string_view kUpdateBusy = "Загрузка...";
 inline constexpr std::string_view kUpdateFailed = "Ошибка обновления";
 inline constexpr std::string_view kUpdateSession =
     " — обновление после выхода в меню";
+
+// Диалог несовпадения версий: хост отверг подключение по протоколу.
+inline constexpr std::string_view kMismatchTitle = "Версии не совпадают";
+inline constexpr std::string_view kMismatchMine = "У вас: ";
+inline constexpr std::string_view kMismatchHost = "У хоста: ";
+inline constexpr std::string_view kMismatchLatest = "Последняя версия: ";
+inline constexpr std::string_view kMismatchLatestUnknown = "неизвестна";
+inline constexpr std::string_view kMismatchAdviceUpdateMine =
+    "Обновите игру: ваша сборка старше хоста.";
+inline constexpr std::string_view kMismatchAdviceUpdateHost =
+    "Хост на старой версии — попросите DM обновиться.";
+inline constexpr std::string_view kMismatchAdviceNewer =
+    "Есть более новая версия — обновите игру.";
+inline constexpr std::string_view kMismatchAdviceUpToDate =
+    "Номера версий совпали, а протоколы разные: сборки отличаются.";
+inline constexpr std::string_view kMismatchAdviceUnknown =
+    "Последнюю версию узнать не удалось — проверьте вручную.";
+inline constexpr std::string_view kMismatchReleases = "Страница релизов";
+inline constexpr std::string_view kMismatchClose = "Закрыть";
+inline constexpr std::string_view kMismatchHint = "Esc — закрыть";
 inline constexpr std::string_view kAlreadyRunning =
     "Игра уже запущена из этой папки. Закройте её и попробуйте снова.";
 

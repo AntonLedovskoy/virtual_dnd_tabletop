@@ -466,7 +466,38 @@ auto TestVersionMismatchReject() -> void {
   Expect(!dnd::DecodeHelloVersion(hello.data(), 3).has_value(),
          "truncated hello header is rejected");
 
+  // Сведения для диалога версий: обе стороны и последний релиз.
+  const dnd::VersionMismatch info{
+      .host_protocol = dnd::kProtocolVersion,
+      .host_version = dnd::Version{.major = 0, .minor = 3, .patch = 0},
+      .latest_version = dnd::Version{.major = 0, .minor = 4, .patch = 1},
+      .latest_protocol = 42};
+  const std::vector<std::uint8_t> encoded = dnd::EncodeVersionMismatch(info);
+  const std::optional<dnd::VersionMismatch> decoded =
+      dnd::DecodeVersionMismatch(encoded.data(), encoded.size());
+  Expect(decoded.has_value() && decoded->host_protocol == info.host_protocol &&
+             decoded->host_version.minor == 3 &&
+             decoded->latest_version.has_value() &&
+             decoded->latest_version->minor == 4 &&
+             decoded->latest_protocol == 42,
+         "version mismatch carries both sides and the latest release");
+  Expect(!dnd::DecodeVersionMismatch(encoded.data(), 5).has_value(),
+         "a truncated version mismatch is rejected");
+  dnd::VersionMismatch no_latest = info;
+  no_latest.latest_version.reset();
+  no_latest.latest_protocol = 0;
+  const std::vector<std::uint8_t> no_latest_encoded =
+      dnd::EncodeVersionMismatch(no_latest);
+  const std::optional<dnd::VersionMismatch> no_latest_decoded =
+      dnd::DecodeVersionMismatch(no_latest_encoded.data(),
+                                 no_latest_encoded.size());
+  Expect(no_latest_decoded.has_value() &&
+             !no_latest_decoded->latest_version.has_value(),
+         "a host without a manifest sends no latest release");
+
   dnd::NetServer server;
+  server.SetMismatchInfoProvider(
+      [&info]() -> dnd::VersionMismatch { return info; });
   Expect(server.Start(0), "version test server listens");
   const std::uint16_t port = server.Port();
   if (port == 0) {
@@ -495,19 +526,24 @@ auto TestVersionMismatchReject() -> void {
   std::vector<dnd::PeerId> dropped;
   std::vector<dnd::ReceivedFrame> frames;
   std::optional<std::string> reason;
+  std::optional<dnd::VersionMismatch> mismatch;
   const auto deadline = Now() + std::chrono::seconds(3);
-  while (!reason.has_value() && Now() < deadline) {
+  while ((!reason.has_value() || !mismatch.has_value()) && Now() < deadline) {
     server.Poll(joined, commands, dropped);
     if (connection->Poll(frames)) {
       for (const dnd::ReceivedFrame& frame : frames) {
-        if (frame.payload.empty() || frame.sealed ||
-            static_cast<dnd::MessageType>(frame.payload[0]) !=
-                dnd::MessageType::kReject) {
+        if (frame.payload.empty() || frame.sealed) {
           continue;
         }
-        if (const std::optional<std::string> decoded =
-                dnd::DecodeReject(frame.payload.data(), frame.payload.size())) {
-          reason = decoded;
+        const auto frame_type = static_cast<dnd::MessageType>(frame.payload[0]);
+        if (frame_type == dnd::MessageType::kReject) {
+          if (const std::optional<std::string> value = dnd::DecodeReject(
+                  frame.payload.data(), frame.payload.size())) {
+            reason = value;
+          }
+        } else if (frame_type == dnd::MessageType::kVersionMismatch) {
+          mismatch = dnd::DecodeVersionMismatch(frame.payload.data(),
+                                                frame.payload.size());
         }
       }
       frames.clear();
@@ -527,6 +563,12 @@ auto TestVersionMismatchReject() -> void {
     Expect(reason->find("обновите игру") != std::string::npos,
            "reject tells the player what to do");
   }
+  Expect(mismatch.has_value() &&
+             mismatch->host_protocol == dnd::kProtocolVersion &&
+             mismatch->host_version.minor == 3 &&
+             mismatch->latest_version.has_value() &&
+             mismatch->latest_version->minor == 4,
+         "reject carries the host and latest versions for the dialog");
 }
 
 auto TestChallengeHandshake() -> void {

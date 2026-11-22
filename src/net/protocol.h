@@ -10,6 +10,7 @@
 #include "core/event.h"
 #include "core/password.h"
 #include "core/snapshot.h"
+#include "core/version.h"
 #include "core/visibility.h"
 #include "core/x25519.h"
 
@@ -27,6 +28,9 @@ enum class MessageType : std::uint8_t {
   kRoster = 7,
   kChallenge = 8,
   kSessionReady = 9,
+  // Подробности отказа по протоколу: идёт сразу после текстового Reject и
+  // только клиентам этой версии. Старые сборки такой тип пропускают.
+  kVersionMismatch = 10,
 };
 
 // Запрос хоста: случайный nonce привязывает отпечаток пароля к сессии, а
@@ -95,6 +99,21 @@ auto DecodeEventMessage(const std::uint8_t* data, std::size_t size)
 auto EncodeReject(const std::string& reason) -> std::vector<std::uint8_t>;
 auto DecodeReject(const std::uint8_t* data, std::size_t size)
     -> std::optional<std::string>;
+
+// Отказ по протоколу: текст Reject знает любая версия, а версии сторон и
+// последний релиз нужны диалогу, чтобы предложить обновление, только если оно
+// помогает. latest_version пусто — хост ещё не проверил манифест.
+struct VersionMismatch {
+  std::uint32_t host_protocol = 0;
+  Version host_version;
+  std::optional<Version> latest_version;
+  std::uint32_t latest_protocol = 0;
+};
+
+auto EncodeVersionMismatch(const VersionMismatch& mismatch)
+    -> std::vector<std::uint8_t>;
+auto DecodeVersionMismatch(const std::uint8_t* data, std::size_t size)
+    -> std::optional<VersionMismatch>;
 
 auto EncodeRoster(const std::vector<RosterEntry>& roster)
     -> std::vector<std::uint8_t>;
