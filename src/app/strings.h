@@ -35,7 +35,7 @@ inline constexpr std::string_view kRenameDmOnly =
     "Переименовывает токен только DM";
 inline constexpr std::string_view kYourToken = "это ваш персонаж";
 inline constexpr std::string_view kDmSpawnHint =
-    "P — персонаж, N — монстр, B — бестиарий, Del дважды — удалить";
+    "P — персонаж, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
     "/rename | /owner | /maxhp | /damage | /heal | /rest | /aoe | /map | "
     "/portrait | /reveal | /unreveal | /xp | /time | /kick";
@@ -59,7 +59,7 @@ inline constexpr std::string_view kHintRuler = "Alt+ЛКМ — линейка";
 inline constexpr std::string_view kHintAoe = "F — шаблон области";
 inline constexpr std::string_view kHintBestiary = "B — бестиарий";
 inline constexpr std::string_view kHintScenes = "Tab — сцены";
-inline constexpr std::string_view kHintSpawn = "P — персонаж, N — монстр";
+inline constexpr std::string_view kHintSpawn = "P — персонаж";
 inline constexpr std::string_view kHintAdjust = "+/- — HP, [ ] — инициатива";
 inline constexpr std::string_view kHintDelete = "Del дважды — удалить";
 inline constexpr std::string_view kHintCombat = "T — бой";
@@ -132,7 +132,7 @@ inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "/portrait файл.png — портрет своего персонажа",
 };
 inline constexpr std::array<std::string_view, 17> kHelpDm = {
-    "P / N — персонаж / монстр под курсором",
+    "P — персонаж под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
     "B — бестиарий (Shift+цифра — группа)",

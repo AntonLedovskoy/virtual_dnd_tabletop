@@ -1605,9 +1605,6 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
   };
 
   switch (key) {
-    case SDLK_N:
-      spawn_at_cursor(TokenKind::kMonster);
-      break;
     case SDLK_P:
       spawn_at_cursor(TokenKind::kPlayer);
       break;
