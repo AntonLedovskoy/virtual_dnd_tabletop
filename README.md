@@ -103,6 +103,13 @@ virtual_dnd_tabletop [--menu] [--host] [--editor] [--port N]
 | `/scene`, `/scene NAME`, `/scene new`, `/scene rename OLD NEW` | DM | сцены |
 | `/kick NAME` | DM | выгнать игрока и забанить до перезапуска хоста |
 
+## Правила
+
+- `docs/rules/SRD_CC_v5.2.1.pdf` — официальный System Reference Document 5.2.1
+  для D&D 2024 (5.5e), лицензия CC-BY-4.0.
+- `docs/rules/cheatsheet-ru.md` — русская шпаргалка по базовым проверкам, бою,
+  укрытиям, видимости, местности, отдыху и состояниям.
+
 ## Файлы рядом с `.exe`
 
 - `*.dndcamp` — кампания (сцены), выбирается в меню хоста и пишется
