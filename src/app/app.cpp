@@ -546,7 +546,6 @@ auto App::StartHost() -> bool {
   server_.ClearClaimHistory();
   ClearUndo();
   delete_token_.Clear();
-  delete_scene_.Clear();
   new_party_confirm_.Clear();
   in_game_ = true;
   in_editor_ = false;
@@ -643,6 +642,7 @@ auto App::StartEditor() -> void {
   delete_editor_token_.Clear();
   editor_drag_token_ = 0;
   CancelEditorTokenRename();
+  CancelEditorBackgroundEdit();
   CloseSheet();
   editor_panel_visible_ = true;
   // Редактор начинает с активной сцены кампании; F5 пишет именно её.
@@ -787,6 +787,7 @@ auto App::LoadScene() -> void {
   delete_editor_token_.Clear();
   editor_drag_token_ = 0;
   CancelEditorTokenRename();
+  CancelEditorBackgroundEdit();
   CloseSheet();
   editor_status_.Set(std::string(strings::kEditorSceneLoaded));
   CenterCamera();
@@ -1099,10 +1100,78 @@ auto App::HandleEditorTokenEditKeyDown(const SDL_KeyboardEvent& key) -> void {
   }
 }
 
+auto App::HandleEditorBackgroundTextInput(const char* text) -> void {
+  if (!editor_background_edit_ || text == nullptr) {
+    return;
+  }
+  // Первый TEXT_INPUT — это сама клавиша M, её не вводим.
+  if (editor_background_ignore_text_) {
+    editor_background_ignore_text_ = false;
+    return;
+  }
+  AppendUtf8(editor_background_buffer_, text, kMaxImageNameLength);
+}
+
+auto App::HandleEditorBackgroundKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (!editor_background_edit_) {
+    return;
+  }
+  if (key.key == SDLK_ESCAPE) {
+    CancelEditorBackgroundEdit();
+    editor_status_.Clear();
+  } else if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
+    CommitEditorBackgroundEdit();
+  } else if (key.key == SDLK_BACKSPACE) {
+    EraseLastCodePoint(editor_background_buffer_);
+  }
+}
+
+auto App::BeginEditorBackgroundEdit() -> void {
+  editor_background_edit_ = true;
+  editor_background_buffer_.clear();
+  editor_background_ignore_text_ = true;
+  editor_status_.Set(std::string(strings::kEditorBackgroundHint));
+}
+
+auto App::CancelEditorBackgroundEdit() -> void {
+  editor_background_edit_ = false;
+  editor_background_buffer_.clear();
+  editor_background_ignore_text_ = false;
+}
+
+auto App::CommitEditorBackgroundEdit() -> void {
+  if (!editor_background_edit_) {
+    return;
+  }
+  const std::string text(TrimText(editor_background_buffer_));
+  MapBackground next = scene_.background;
+  if (text.empty() || text == "off") {
+    next = MapBackground{};
+  } else {
+    // Привычную команду «/map ...» принимаем и здесь, с префиксом или без.
+    const ChatCommand command =
+        ParseChatCommand(text.starts_with("/map") ? text : "/map " + text);
+    if (!ApplyMapCommand(next, command)) {
+      editor_status_.Set(std::string(strings::kEditorBackgroundInvalid));
+      return;
+    }
+  }
+  scene_.background = std::move(next);
+  editor_status_.Set(scene_.background.image.empty()
+                         ? std::string(strings::kEditorBackgroundCleared)
+                         : std::string(strings::kEditorBackgroundSet) +
+                               scene_.background.image + " (" +
+                               std::to_string(scene_.background.opacity) +
+                               "%, " + std::to_string(scene_.background.scale) +
+                               "%)");
+  CancelEditorBackgroundEdit();
+}
+
 auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
   switch (key.key) {
     case SDLK_ESCAPE:
       CancelEditorTokenRename();
+      CancelEditorBackgroundEdit();
       editor_drag_token_ = 0;
       in_editor_ = false;
       menu_.tab = MenuTab::kHost;
@@ -1173,6 +1242,9 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
       return;
     case SDLK_B:
       OpenBestiary();
+      return;
+    case SDLK_M:
+      BeginEditorBackgroundEdit();
       return;
     case SDLK_HOME:
       CenterCamera();
@@ -1407,6 +1479,7 @@ auto App::SwitchEditorScene(std::size_t index) -> void {
   delete_editor_token_.Clear();
   editor_drag_token_ = 0;
   CancelEditorTokenRename();
+  CancelEditorBackgroundEdit();
   CloseSheet();
   CenterCamera();
   SaveCampaign();
@@ -2202,9 +2275,6 @@ auto App::HandleEvent(SDL_Event event) -> void {
 
   if (scenes_active_) {
     switch (event.type) {
-      case SDL_EVENT_TEXT_INPUT:
-        HandleScenesTextInput(event.text.text);
-        break;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         HandleScenesMouseDown(event.button);
         break;
@@ -2218,6 +2288,19 @@ auto App::HandleEvent(SDL_Event event) -> void {
   }
 
   if (in_editor_) {
+    if (editor_background_edit_) {
+      switch (event.type) {
+        case SDL_EVENT_TEXT_INPUT:
+          HandleEditorBackgroundTextInput(event.text.text);
+          break;
+        case SDL_EVENT_KEY_DOWN:
+          HandleEditorBackgroundKeyDown(event.key);
+          break;
+        default:
+          break;
+      }
+      return;
+    }
     if (editor_token_edit_) {
       switch (event.type) {
         case SDL_EVENT_TEXT_INPUT:
@@ -2734,32 +2817,6 @@ auto App::DrawBackground(const GridMap& map, const MapBackground& background)
               camera_.x + 8.0F, camera_.y + 8.0F,
               SDL_Color{.r = 0xff, .g = 0x90, .b = 0x90, .a = SDL_ALPHA_OPAQUE},
               640.0F);
-}
-
-auto App::SubmitMapCommand(const ChatCommand& command) -> void {
-  if (options_.mode != AppMode::kHost) {
-    view_.AddLocalLine(std::string(strings::kMapDmOnly));
-    return;
-  }
-
-  MapBackground next = server_.State().Background();
-  switch (command.kind) {
-    case ChatCommandKind::kMapOff:
-      next = MapBackground{};
-      break;
-    case ChatCommandKind::kMapOpacity:
-      next.opacity = command.value;
-      break;
-    case ChatCommandKind::kMapScale:
-      next.scale = command.value;
-      break;
-    case ChatCommandKind::kMapImage:
-      next.image = command.text;
-      break;
-    default:
-      return;
-  }
-  SendCommand(SetMapBackground{.background = std::move(next)});
 }
 
 auto App::SendCommand(const Command& command) -> void {
@@ -3883,7 +3940,8 @@ auto App::SubmitChat() -> void {
     case ChatCommandKind::kMapOpacity:
     case ChatCommandKind::kMapScale:
     case ChatCommandKind::kMapImage:
-      SubmitMapCommand(command);
+      // Подложка — авторская часть сцены: в игре её не меняют.
+      view_.AddLocalLine(std::string(strings::kMapEditorOnly));
       return;
     case ChatCommandKind::kKick:
       if (options_.mode != AppMode::kHost) {
@@ -3906,10 +3964,10 @@ auto App::SubmitChat() -> void {
       }
       if (command.kind == ChatCommandKind::kSceneList) {
         OpenScenes();
-      } else if (command.kind == ChatCommandKind::kSceneNew) {
-        CreateScene();
-      } else if (command.kind == ChatCommandKind::kSceneRename) {
-        RenameSceneByCommand(command.text);
+      } else if (command.kind == ChatCommandKind::kSceneNew ||
+                 command.kind == ChatCommandKind::kSceneRename) {
+        // В игре сцены только загружаются: структуру правит редактор карт.
+        view_.AddLocalLine(std::string(strings::kScenesEditorOnly));
       } else {
         SwitchSceneByName(command.text);
       }
@@ -4891,7 +4949,6 @@ auto App::ApplyWorld(GameSnapshot snapshot, bool reset_encounter) -> void {
   conditions_read_only_ = false;
   bestiary_active_ = false;
   delete_token_.Clear();
-  delete_scene_.Clear();
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   CenterCamera();
   BroadcastWorld();
@@ -4935,24 +4992,6 @@ auto App::RequestDeleteSelectedToken() -> void {
   view_.AddLocalLine(std::string(strings::kDeleteConfirm));
 }
 
-auto App::RequestDeleteActiveScene() -> void {
-  if (options_.mode != AppMode::kHost) {
-    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
-    return;
-  }
-  if (campaign_.scenes.size() <= 1) {
-    scenes_status_.Set("Нельзя удалить последнюю сцену");
-    return;
-  }
-  if (delete_scene_.Request(campaign_.active,
-                            std::chrono::steady_clock::now())) {
-    scenes_status_.Clear();
-    DeleteActiveScene();
-    return;
-  }
-  scenes_status_.Set(std::string(strings::kDeleteConfirm));
-}
-
 auto App::SwitchScene(std::size_t index) -> void {
   if (options_.mode != AppMode::kHost) {
     view_.AddLocalLine(std::string(strings::kScenesDmOnly));
@@ -4986,64 +5025,6 @@ auto App::SwitchSceneByName(std::string_view name) -> void {
   view_.AddLocalLine(std::string(strings::kScenesEmpty));
 }
 
-auto App::CreateScene() -> void {
-  if (options_.mode != AppMode::kHost) {
-    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
-    return;
-  }
-  if (campaign_.scenes.size() >= kMaxCampaignScenes) {
-    view_.AddLocalLine("Достигнут предел числа сцен");
-    return;
-  }
-  StoreActiveScene();
-  ClearUndo();
-  // Новая сцена — копия текущей: DM сразу расставляет в ней монстров.
-  std::string name = NextSceneName(campaign_);
-  if (!dnd::IsSceneNameAvailable(campaign_, name)) {
-    view_.AddLocalLine(std::string(strings::kSceneNameTaken));
-    return;
-  }
-  const SceneId id = NextOverlaySceneId(overlay_);
-  GameSnapshot snapshot = campaign_.scenes[campaign_.active].snapshot;
-  const std::string display_name = name;
-  if (!AddScene(overlay_, id, name, snapshot)) {
-    view_.AddLocalLine("Не удалось создать сцену");
-    return;
-  }
-  Scene scene{
-      .id = id, .name = std::move(name), .snapshot = std::move(snapshot)};
-  campaign_.scenes.push_back(std::move(scene));
-  campaign_.active = campaign_.scenes.size() - 1;
-  SetActive(overlay_, id);
-  scenes_selected_ = campaign_.active;
-  RequestOverlaySave();
-  Announce("Новая сцена: " + display_name);
-}
-
-auto App::DeleteActiveScene() -> void {
-  if (options_.mode != AppMode::kHost) {
-    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
-    return;
-  }
-  if (campaign_.scenes.size() <= 1) {
-    view_.AddLocalLine("Нельзя удалить последнюю сцену");
-    return;
-  }
-  const std::size_t removed = campaign_.active;
-  const std::string name = campaign_.scenes[removed].name;
-  // Соседняя сцена становится активной, её id сразу уходит в оверлей.
-  if (!DeletePartyScene(campaign_, overlay_, removed)) {
-    view_.AddLocalLine("Не удалось удалить сцену");
-    return;
-  }
-  const std::size_t next = campaign_.active;
-  scenes_selected_ = next;
-  ResetWorld(campaign_.scenes[next].snapshot);
-  SDL_Log("scene '%s' deleted", name.c_str());
-  Announce("Сцена удалена: " + name);
-  RequestOverlaySave();
-}
-
 auto App::OpenScenes() -> void {
   if (options_.mode != AppMode::kHost) {
     view_.AddLocalLine(std::string(strings::kScenesDmOnly));
@@ -5051,9 +5032,6 @@ auto App::OpenScenes() -> void {
   }
   scenes_active_ = true;
   scenes_selected_ = campaign_.active;
-  scenes_edit_ = SceneEditField::kNone;
-  scenes_edit_buffer_.clear();
-  scenes_status_.Clear();
   bestiary_active_ = false;
   sheet_active_ = false;
   sheet_read_only_ = false;
@@ -5064,15 +5042,10 @@ auto App::OpenScenes() -> void {
   chat_.Close();
 }
 
-auto App::CloseScenes() -> void {
-  scenes_active_ = false;
-  CancelSceneEdit();
-  scenes_status_.Clear();
-}
+auto App::CloseScenes() -> void { scenes_active_ = false; }
 
 auto App::HandleScenesMouseDown(const SDL_MouseButtonEvent& button) -> void {
-  if (button.button != SDL_BUTTON_LEFT ||
-      scenes_edit_ != SceneEditField::kNone) {
+  if (button.button != SDL_BUTTON_LEFT) {
     return;
   }
   const std::size_t index = SceneRowAt(renderer_, text_.get(), campaign_.scenes,
@@ -5081,7 +5054,6 @@ auto App::HandleScenesMouseDown(const SDL_MouseButtonEvent& button) -> void {
     return;
   }
   scenes_selected_ = index;
-  scenes_status_.Clear();
   if (button.clicks >= 2) {
     CloseScenes();
     SwitchScene(index);
@@ -5089,17 +5061,6 @@ auto App::HandleScenesMouseDown(const SDL_MouseButtonEvent& button) -> void {
 }
 
 auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
-  if (scenes_edit_ != SceneEditField::kNone) {
-    if (key.key == SDLK_ESCAPE) {
-      CancelSceneEdit();
-    } else if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
-      CommitSceneEdit();
-    } else if (key.key == SDLK_BACKSPACE) {
-      EraseLastCodePoint(scenes_edit_buffer_);
-      scenes_status_.Clear();
-    }
-    return;
-  }
   switch (key.key) {
     case SDLK_ESCAPE:
     case SDLK_TAB:
@@ -5120,18 +5081,6 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       SwitchScene(index);
       return;
     }
-    case SDLK_R:
-      BeginSceneEdit(SceneEditField::kName);
-      return;
-    case SDLK_E:
-      BeginSceneEdit(SceneEditField::kNote);
-      return;
-    case SDLK_N:
-      CreateScene();
-      return;
-    case SDLK_DELETE:
-      RequestDeleteActiveScene();
-      return;
     default:
       break;
   }
@@ -5146,113 +5095,11 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
   }
 }
 
-auto App::HandleScenesTextInput(const char* text) -> void {
-  if (scenes_edit_ == SceneEditField::kNone || text == nullptr) {
-    return;
-  }
-  if (scenes_edit_ignore_text_) {
-    scenes_edit_ignore_text_ = false;
-    return;
-  }
-  AppendUtf8(scenes_edit_buffer_, text,
-             scenes_edit_ == SceneEditField::kName ? kMaxSceneNameLength
-                                                   : kMaxSceneNoteLength);
-  scenes_status_.Clear();
-}
-
-auto App::RenameSceneAt(std::size_t index, std::string name) -> bool {
-  if (options_.mode != AppMode::kHost) {
-    view_.AddLocalLine(std::string(strings::kScenesDmOnly));
-    return false;
-  }
-  if (index >= campaign_.scenes.size()) {
-    view_.AddLocalLine(std::string(strings::kScenesEmpty));
-    return false;
-  }
-  if (name.empty()) {
-    view_.AddLocalLine(std::string(strings::kSceneNameEmpty));
-    return false;
-  }
-  TruncateUtf8(name, kMaxSceneNameLength);
-  const std::string old_name = campaign_.scenes[index].name;
-  if (!dnd::RenameScene(campaign_, index, std::move(name))) {
-    view_.AddLocalLine(std::string(strings::kSceneNameTaken));
-    return false;
-  }
-  scenes_selected_ = index;
-  (void)SetSceneName(overlay_, campaign_.scenes[index].id,
-                     campaign_.scenes[index].name);
-  RequestOverlaySave();
-  Announce("Сцена переименована: " + old_name + " → " +
-           campaign_.scenes[index].name);
-  return true;
-}
-
-auto App::RenameSceneByCommand(std::string_view args) -> void {
-  const std::optional<SceneRenameRequest> request =
-      ParseSceneRename(campaign_, args);
-  if (!request.has_value()) {
-    view_.AddLocalLine(TrimText(args).empty()
-                           ? std::string(strings::kSceneRenameUsage)
-                           : std::string(strings::kScenesEmpty));
-    return;
-  }
-  (void)RenameSceneAt(request->index, request->new_name);
-}
-
-auto App::BeginSceneEdit(SceneEditField field) -> void {
-  if (field == SceneEditField::kNone ||
-      scenes_selected_ >= campaign_.scenes.size()) {
-    return;
-  }
-  const Scene& scene = campaign_.scenes[scenes_selected_];
-  scenes_edit_ = field;
-  // Имя набирается с нуля: так переименование не требует стирать старое.
-  scenes_edit_buffer_ =
-      field == SceneEditField::kName ? std::string{} : scene.note;
-  scenes_edit_ignore_text_ = true;
-  scenes_status_.Clear();
-}
-
-auto App::CancelSceneEdit() -> void {
-  scenes_edit_ = SceneEditField::kNone;
-  scenes_edit_buffer_.clear();
-  scenes_edit_ignore_text_ = false;
-}
-
-auto App::CommitSceneEdit() -> void {
-  if (scenes_selected_ >= campaign_.scenes.size()) {
-    CancelSceneEdit();
-    return;
-  }
-  if (scenes_edit_ == SceneEditField::kName) {
-    std::string name(TrimText(scenes_edit_buffer_));
-    if (name.empty()) {
-      scenes_status_.Set(std::string(strings::kSceneNameEmpty));
-      return;
-    }
-    if (!RenameSceneAt(scenes_selected_, std::move(name))) {
-      scenes_status_.Set(std::string(strings::kSceneNameTaken));
-      return;
-    }
-  } else if (scenes_edit_ == SceneEditField::kNote) {
-    std::string note(TrimText(scenes_edit_buffer_));
-    TruncateUtf8(note, kMaxSceneNoteLength);
-    campaign_.scenes[scenes_selected_].note = std::move(note);
-    (void)SetSceneNote(overlay_, campaign_.scenes[scenes_selected_].id,
-                       campaign_.scenes[scenes_selected_].note);
-    RequestOverlaySave();
-  }
-  CancelSceneEdit();
-  scenes_status_.Clear();
-}
-
 auto App::Iterate() -> void {
   // Статусы панелей гаснут сами: подсказка возвращается через 3 секунды.
   const auto status_now = std::chrono::steady_clock::now();
   editor_status_.Expire(status_now);
   editor_scenes_status_.Expire(status_now);
-  scenes_status_.Expire(status_now);
 
   if (text_ != nullptr) {
     text_->BeginFrame();
@@ -5275,13 +5122,19 @@ auto App::Iterate() -> void {
       const std::string map_name = editor_scene_ < campaign_.scenes.size()
                                        ? campaign_.scenes[editor_scene_].name
                                        : std::string{};
-      const std::string edit_label =
-          editor_token_edit_ ? std::string(strings::kEditorTokenNameLabel)
-                             : std::string{};
+      std::string edit_label;
+      std::string edit_buffer;
+      if (editor_background_edit_) {
+        edit_label = std::string(strings::kEditorBackgroundLabel);
+        edit_buffer = editor_background_buffer_;
+      } else if (editor_token_edit_) {
+        edit_label = std::string(strings::kEditorTokenNameLabel);
+        edit_buffer = editor_token_edit_buffer_;
+      }
       DrawEditorPanel(renderer_, text_.get(), scene_, editor_brush_,
                       editor_scene_, campaign_.scenes.size(), map_name,
                       editor_status_.Text(), selected_id_, edit_label,
-                      editor_token_edit_buffer_);
+                      edit_buffer);
     }
     if (editor_scenes_active_) {
       const std::string edit_label = editor_scene_edit_
@@ -5452,15 +5305,8 @@ auto App::Iterate() -> void {
     DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
   }
   if (scenes_active_) {
-    std::string edit_label;
-    if (scenes_edit_ == SceneEditField::kName) {
-      edit_label = std::string(strings::kSceneNameLabel);
-    } else if (scenes_edit_ == SceneEditField::kNote) {
-      edit_label = std::string(strings::kSceneNoteLabel);
-    }
     DrawScenesPanel(renderer_, text_.get(), campaign_.scenes, campaign_.active,
-                    scenes_selected_, edit_label, scenes_edit_buffer_,
-                    scenes_status_.Text(), strings::kScenesHint);
+                    scenes_selected_, {}, {}, {}, strings::kScenesHint);
   }
   if (conditions_active_) {
     const Token* condition_token = nullptr;

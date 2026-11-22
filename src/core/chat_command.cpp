@@ -172,7 +172,8 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
       command.kind = ChatCommandKind::kSceneNew;
       command.text.clear();
     } else if (args == "rename" || args.starts_with("rename ")) {
-      // Хвост разбирает ParseSceneRename: имя сцены может быть из двух слов.
+      // Хвост («СТАРОЕ НОВОЕ») приложение отклоняет: в игре сцены только
+      // загружаются, структуру меняет редактор карт.
       command.kind = ChatCommandKind::kSceneRename;
       command.text = std::string(args.substr(6));
     } else {

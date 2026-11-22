@@ -23,7 +23,7 @@ constexpr SDL_Color kHint{
 constexpr int kPanelX = 12;
 constexpr int kPanelY = 12;
 constexpr int kPanelWidth = 350;
-constexpr int kPanelHeight = 460;
+constexpr int kPanelHeight = 520;
 constexpr int kPadding = 12;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
@@ -128,8 +128,12 @@ auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
       6.0F;
 
   if (!edit_label.empty()) {
-    text->DrawWrapped(edit_label + edit_text + "_", text_x, y, kTitleText,
-                      max_text_width);
+    y = text->DrawWrapped(edit_label + edit_text + "_", text_x, y, kTitleText,
+                          max_text_width) +
+        4.0F;
+    if (!status.empty()) {
+      text->DrawWrapped(status, text_x, y, kHint, max_text_width);
+    }
   } else if (!status.empty()) {
     text->DrawWrapped(status, text_x, y, kTitleText, max_text_width);
   }

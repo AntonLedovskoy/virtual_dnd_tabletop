@@ -517,6 +517,10 @@ P1–P2 «Отдых, время и движение» закрыты,
 - [x] Проверка дубликатов: `IsSceneNameAvailable`/`RenameScene`; панель и
       команда отказывают занятому или пустому имени, `NextSceneName` его
       обходит.
+- [x] Позже структура кампании стала авторской: в игре `Tab` и `/scene`
+      только загружают карту, правка имени и заметки осталась за редактором
+      (`R` в его панели), а `R`/`E`/`N`/`Del` и `/scene new`/`/scene rename`
+      из игры убраны.
 
 Файлы: `src/core/campaign.h`, `src/core/campaign.cpp`,
 `src/core/campaign_io.cpp`, `src/app/app.cpp`, `src/render/ui_renderer.cpp`.
@@ -572,9 +576,8 @@ P1–P2 «Отдых, время и движение» закрыты,
       — применить, `Esc` — отмена. Проверки те же, что у сцен DM:
       `TrimText`, `kMaxSceneNameLength`, `IsSceneNameAvailable` /
       `RenameScene`, ошибки «Имя не может быть пустым» / «Имя уже занято» в
-      `editor_scenes_status_`. `App::RenameSceneAt` не переиспользуем: он
-      проверяет режим хоста и пишет в `view_`, которого в редакторе нет —
-      берём `dnd::RenameScene` напрямую. `campaign_.active` и `editor_scene_`
+      `editor_scenes_status_`. Берём `dnd::RenameScene` напрямую: панель сцен
+      игры проверяет режим хоста и пишет в `view_`, которых в редакторе нет. `campaign_.active` и `editor_scene_`
       едут за переименованием, затем `SaveCampaign()`.
 - [x] **Удаление (S).** `Del` в панели удаляет выбранную карту после второго
       `Del` в течение 3 с (`core/delete_confirm`, свой `delete_editor_scene_`);
@@ -845,9 +848,12 @@ DM-ом, лог читается как протокол боя.
       хранение в сцене. Сцена хранит только имя файла: клиент ищет его рядом
       со своим `.exe`, а без файла остаётся сетка с подписью. Картинка
       передаётся по сети как имя, а не как байты, поэтому снимок остаётся
-      маленьким. DM: `/map карта.png`, `/map off`, `/map opacity 60`,
-      `/map scale 150`; событие `MapBackgroundUpdated`. Версия протокола — 23,
-      сохранения — 17, кампании — 5; тест — `TestMapBackground`.
+      маленьким. Тогда DM ставил `/map карта.png`, `/map off`,
+      `/map opacity 60`, `/map scale 150`; событие `MapBackgroundUpdated`.
+      Версия протокола — 23, сохранения — 17, кампании — 5; тест —
+      `TestMapBackground`. Позже подложку сделали авторской: в игре `/map`
+      отклоняется, а редактор задаёт её клавишей `M` (тот же разбор директив,
+      `ApplyMapCommand`).
 - [x] Изображения токенов: круглые портреты или цвет с именем, если картинки
       нет. `Token::portrait` хранит только имя файла рядом с `.exe`; DM или
       владелец ставит `/portrait файл.png`, снимает `/portrait off`. Токены
@@ -1188,9 +1194,10 @@ DNDO, версия, размер
       кампания + оверлей. Ошибка чтения оверлея — статус, стол не стартует.
 - [x] `SaveCampaign()` остаётся только у редактора; `SaveOverlay()` и
       `RequestOverlaySave()` — у игры. Все игровые вызовы (`StartHost`,
-      `ExitToMenu`, `CheckAutosave`, `SwitchScene`, `CreateScene`,
-      `DeleteActiveScene`, `RenameSceneAt`, заметка сцены, `SaveGame`)
-      переведены на оверлей, иначе кампания снова начнёт меняться.
+      `ExitToMenu`, `CheckAutosave`, `SwitchScene`, `SaveGame`) переведены на
+      оверлей, иначе кампания снова начнёт меняться. Правку структуры сцен
+      (`CreateScene`, `DeleteActiveScene`, переименование и заметка) из игры
+      позже убрали совсем: это делает только редактор.
 - [x] `StoreActiveScene` пишет снимок в runtime и в запись оверлея;
       `scene_` по-прежнему то, что видит `ClientView`.
 - [x] Пустой слот: первый старт хоста один раз создаёт и записывает кампанию

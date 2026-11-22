@@ -4609,19 +4609,6 @@ auto TestCampaign() -> void {
          "rename rejects a duplicate name");
   Expect(dnd::RenameScene(campaign, 1, "Подземелье"),
          "rename accepts a free name");
-  const std::optional<dnd::SceneRenameRequest> spaced =
-      dnd::ParseSceneRename(campaign, "Сцена 1 Пещера");
-  Expect(
-      spaced.has_value() && spaced->index == 0 && spaced->new_name == "Пещера",
-      "scene rename parses names with spaces");
-  const std::optional<dnd::SceneRenameRequest> plain =
-      dnd::ParseSceneRename(campaign, "Подземелье Логово");
-  Expect(plain.has_value() && plain->index == 1 && plain->new_name == "Логово",
-         "scene rename parses a one-word scene name");
-  Expect(!dnd::ParseSceneRename(campaign, "Нет такой").has_value(),
-         "scene rename rejects an unknown scene");
-  Expect(!dnd::ParseSceneRename(campaign, "Сцена 1").has_value(),
-         "scene rename needs a new name");
   campaign.scenes.front().note = "Герои спустились в подземелье";
 
   const std::filesystem::path path =
@@ -5769,6 +5756,28 @@ auto TestMapBackground() -> void {
   Expect(
       !dnd::IsValidMapBackground(dnd::MapBackground{.image = "../dungeon.png"}),
       "an unsafe image name makes the background invalid");
+
+  // Директивы редактора повторяют хвост /map: тот же разбор и та же подложка.
+  dnd::MapBackground edited;
+  Expect(dnd::ApplyMapCommand(edited, dnd::ParseChatCommand("/map cave.png")) &&
+             edited.image == "cave.png",
+         "the editor applies an image name");
+  Expect(
+      dnd::ApplyMapCommand(edited, dnd::ParseChatCommand("/map opacity 60")) &&
+          edited.opacity == 60 && edited.image == "cave.png",
+      "the editor changes opacity and keeps the image");
+  Expect(
+      dnd::ApplyMapCommand(edited, dnd::ParseChatCommand("/map scale 150")) &&
+          edited.scale == 150,
+      "the editor changes scale");
+  Expect(dnd::ApplyMapCommand(edited, dnd::ParseChatCommand("/map off")) &&
+             edited.image.empty() && edited.opacity == 100 &&
+             edited.scale == 100,
+         "off resets the whole background");
+  Expect(!dnd::ApplyMapCommand(edited, dnd::ParseChatCommand("/map ../x.png")),
+         "an unsafe image is refused");
+  Expect(!dnd::ApplyMapCommand(edited, dnd::ParseChatCommand("/roll d20")),
+         "a non-map command changes nothing");
 
   const dnd::GameSnapshot snapshot{.map = dnd::GridMap(8, 6),
                                    .next_token_id = 1};

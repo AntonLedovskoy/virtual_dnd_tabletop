@@ -142,7 +142,7 @@ inline constexpr std::array<std::string_view, 19> kHelpDm = {
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
     "B — бестиарий (Shift+цифра — группа)",
-    "Tab — сцены (R имя, E заметка)",
+    "Tab — сцены (только загрузка карт)",
     "T — бой, G — следующий ход",
     "Shift+T — состав боя: кто в инициативе, а кто вне её",
     "F — шаблон области, Shift+F — убрать",
@@ -152,7 +152,7 @@ inline constexpr std::array<std::string_view, 19> kHelpDm = {
     "/fall N — падение с высоты N футов",
     "Enter в режиме F и /aoe 2d6 15 — урон по шаблону",
     "Ctrl+Z — отменить последнее действие DM",
-    "/map карта.png — подложка, /map off — убрать",
+    "/map — подложку карты задают в редакторе (M)",
     "/portrait файл.png — портрет выбранного токена",
     "/reveal и /unreveal — область под курсором, /reveal off — всё",
     "/xp 300 — опыт выбранному, /xp 300 all — всей партии",
@@ -289,8 +289,8 @@ inline constexpr std::string_view kEditorMouseHint =
     "СКМ — панорама | колесо — зум";
 inline constexpr std::string_view kEditorKeyHint =
     "1–6 — кисть | P — персонаж | B — бестиарий | V — цвет | L — лист | "
-    "R — имя токена | Tab — карты | F2 — панель | F5 — сохранить | "
-    "F9 — загрузить | Enter — играть | Esc — меню";
+    "R — имя токена | M — подложка | Tab — карты | F2 — панель | "
+    "F5 — сохранить | F9 — загрузить | Enter — играть | Esc — меню";
 inline constexpr std::string_view kEditorScenesHint =
     "↑ ↓ — выбрать | Enter — открыть | 1–9 — карта | N — новая из этой "
     "карты | R — переименовать | Del — удалить | F5 — сохранить | "
@@ -311,6 +311,13 @@ inline constexpr std::string_view kEditorTokenRenamed = "Токен переим
 inline constexpr std::string_view kEditorTokenColorChanged =
     "Цвет токена изменён";
 inline constexpr std::string_view kEditorSheetSaved = "Лист сохранён: ";
+inline constexpr std::string_view kEditorBackgroundLabel = "Подложка: ";
+inline constexpr std::string_view kEditorBackgroundHint =
+    "файл.png, off, opacity 60 или scale 150";
+inline constexpr std::string_view kEditorBackgroundInvalid =
+    "Не понял: файл.png, off, opacity 60 или scale 150";
+inline constexpr std::string_view kEditorBackgroundSet = "Подложка: ";
+inline constexpr std::string_view kEditorBackgroundCleared = "Подложка убрана";
 inline constexpr std::string_view kEditorSceneSaved = "Сцена сохранена";
 inline constexpr std::string_view kEditorSceneLoaded = "Сцена загружена";
 inline constexpr std::string_view kEditorSceneMissing =
@@ -410,9 +417,10 @@ inline constexpr std::string_view kBestiaryDmOnly =
 
 inline constexpr std::string_view kScenesTitle = "Сцены";
 inline constexpr std::string_view kScenesHint =
-    "1–9 — переключить | ↑ ↓ и Enter — выбрать | R — имя | E — заметка | "
-    "N — новая копия | Del дважды — удалить | Esc — закрыть";
+    "1–9 — загрузить | ↑ ↓ и Enter — выбрать | Esc — закрыть";
 inline constexpr std::string_view kScenesDmOnly = "Сцены переключает только DM";
+inline constexpr std::string_view kScenesEditorOnly =
+    "Структуру кампании меняет только редактор карт";
 inline constexpr std::string_view kScenesEmpty = "Сцена не найдена";
 
 // Состав боя: DM решает, кто в нём участвует, остальные вне порядка хода.
@@ -425,20 +433,17 @@ inline constexpr std::string_view kCombatNoEncounter =
     "Сначала начните бой (T)";
 inline constexpr std::string_view kCombatDmOnly = "Состав боя правит только DM";
 inline constexpr std::string_view kSceneNameLabel = "Новое имя: ";
-inline constexpr std::string_view kSceneNoteLabel = "Заметка: ";
 inline constexpr std::string_view kSceneNameEmpty =
     "Имя сцены не может быть пустым";
 inline constexpr std::string_view kSceneNameTaken = "Имя сцены уже занято";
-inline constexpr std::string_view kSceneRenameUsage =
-    "Использование: /scene rename СТАРОЕ НОВОЕ";
 inline constexpr std::string_view kDeleteConfirm =
     "Нажмите Del ещё раз в течение 3 секунд";
 inline constexpr std::string_view kUndoDone = "Действие отменено";
 inline constexpr std::string_view kUndoEmpty = "Нечего отменять";
 inline constexpr std::string_view kUndoDmOnly = "Отмена доступна только DM";
 
-inline constexpr std::string_view kMapDmOnly =
-    "Подложку карты меняет только DM";
+inline constexpr std::string_view kMapEditorOnly =
+    "Подложку карты меняет только редактор карт";
 inline constexpr std::string_view kMapUsage =
     "Использование: /map карта.png | /map off | /map opacity 60 | "
     "/map scale 150";

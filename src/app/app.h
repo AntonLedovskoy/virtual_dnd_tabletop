@@ -50,9 +50,6 @@ struct MenuUpdate;
 
 enum class AppMode : std::uint8_t { kHost, kClient };
 
-// Что DM правит прямо в панели сцен.
-enum class SceneEditField : std::uint8_t { kNone, kName, kNote };
-
 struct AppOptions {
   AppMode mode = AppMode::kHost;
   std::string connect_host = "127.0.0.1";
@@ -125,6 +122,12 @@ class App {
   auto CommitEditorTokenRename() -> void;
   auto HandleEditorTokenTextInput(const char* text) -> void;
   auto HandleEditorTokenEditKeyDown(const SDL_KeyboardEvent& key) -> void;
+  // Подложка карты в редакторе: M открывает строку, Enter применяет.
+  auto BeginEditorBackgroundEdit() -> void;
+  auto CancelEditorBackgroundEdit() -> void;
+  auto CommitEditorBackgroundEdit() -> void;
+  auto HandleEditorBackgroundTextInput(const char* text) -> void;
+  auto HandleEditorBackgroundKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto AddEditorToken(Cell cell, TokenKind kind) -> void;
   // Бестиарий в редакторе: шаблон копируется в токен прямо в сцене.
   auto SpawnEditorBestiary(int index, bool group) -> void;
@@ -319,36 +322,24 @@ class App {
   auto PushUndo(GameSnapshot snapshot) -> void;
   auto UndoLastAction() -> void;
   auto ClearUndo() -> void;
-  // Удаление токена и сцены требует повторного Del в течение 3 секунд.
+  // Удаление токена требует повторного Del в течение 3 секунд.
   auto RequestDeleteSelectedToken() -> void;
-  auto RequestDeleteActiveScene() -> void;
   // Пишет строку лога всем за столом (смена сцены и подобное).
   auto Announce(std::string text) -> void;
+  // В игре сцены только загружаются: структуру кампании правит редактор.
   auto SwitchScene(std::size_t index) -> void;
-  auto CreateScene() -> void;
-  auto DeleteActiveScene() -> void;
   auto OpenScenes() -> void;
   auto CloseScenes() -> void;
   auto HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void;
   // Клик по сцене выбирает её, двойной — открывает.
   auto HandleScenesMouseDown(const SDL_MouseButtonEvent& button) -> void;
-  auto HandleScenesTextInput(const char* text) -> void;
   auto SwitchSceneByName(std::string_view name) -> void;
-  // Переименовывает сцену по индексу; false, если имя пустое или занято.
-  auto RenameSceneAt(std::size_t index, std::string name) -> bool;
-  // Разбирает хвост команды «/scene rename СТАРОЕ НОВОЕ».
-  auto RenameSceneByCommand(std::string_view args) -> void;
-  auto BeginSceneEdit(SceneEditField field) -> void;
-  auto CancelSceneEdit() -> void;
-  auto CommitSceneEdit() -> void;
   // Подложка карты: текстура из файла рядом с .exe и её отрисовка под сеткой.
   auto BackgroundTexture(std::string_view image) -> SDL_Texture*;
   auto DrawBackground(const GridMap& map, const MapBackground& background)
       -> void;
   // Портреты токенов: одна текстура на имя файла, nullptr — файла нет.
   auto PortraitTexture(const std::string& image) -> SDL_Texture*;
-  // Ставит подложку по разобранной команде «/map ...».
-  auto SubmitMapCommand(const ChatCommand& command) -> void;
   auto LoadFont() -> void;
 
   [[nodiscard]] auto CellFromPixel(float x, float y) const -> Cell;
@@ -421,6 +412,10 @@ class App {
   std::string editor_token_edit_buffer_;
   // Первый TEXT_INPUT после R — сама клавиша, её не вводим.
   bool editor_token_edit_ignore_text_ = false;
+  // Подложка карты: M открывает строку «файл, off, opacity N, scale N».
+  bool editor_background_edit_ = false;
+  std::string editor_background_buffer_;
+  bool editor_background_ignore_text_ = false;
 
   bool sheet_active_ = false;
   bool sheet_read_only_ = false;
@@ -463,11 +458,6 @@ class App {
 
   bool scenes_active_ = false;
   std::size_t scenes_selected_ = 0;
-  SceneEditField scenes_edit_ = SceneEditField::kNone;
-  std::string scenes_edit_buffer_;
-  StatusMessage scenes_status_;
-  // Первый TEXT_INPUT после R/E — это сама горячая клавиша, её не вводим.
-  bool scenes_edit_ignore_text_ = false;
 
   bool show_movement_range_ = false;
   bool aoe_mode_ = false;
@@ -535,7 +525,6 @@ class App {
 
   std::deque<GameSnapshot> undo_stack_;
   DeleteConfirm delete_token_;
-  DeleteConfirm delete_scene_;
 
   TokenId selected_id_ = 0;
   bool dragging_ = false;

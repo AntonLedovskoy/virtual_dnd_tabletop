@@ -75,15 +75,4 @@ auto NextSceneName(const Campaign& campaign) -> std::string;
 // DM, ни редактор.
 [[nodiscard]] auto CanDeleteScene(const Campaign& campaign) -> bool;
 
-// Разбор «СТАРОЕ НОВОЕ» для /scene rename: имя сцены может содержать
-// пробелы, поэтому берётся самая длинная подходящая сцена.
-struct SceneRenameRequest {
-  std::size_t index = 0;
-  std::string new_name;
-};
-
-[[nodiscard]] auto ParseSceneRename(const Campaign& campaign,
-                                    std::string_view args)
-    -> std::optional<SceneRenameRequest>;
-
 }  // namespace dnd

@@ -25,4 +25,12 @@ struct MapBackground {
 [[nodiscard]] auto IsValidMapBackground(const MapBackground& background)
     -> bool;
 
+struct ChatCommand;
+
+// Применяет разобранную директиву /map к подложке: off, opacity N, scale N
+// или имя файла. false — команда не про подложку или разбор не удался.
+// Общая логика игры (до запрета) и редактора карт.
+auto ApplyMapCommand(MapBackground& background, const ChatCommand& command)
+    -> bool;
+
 }  // namespace dnd

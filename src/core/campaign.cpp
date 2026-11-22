@@ -8,16 +8,6 @@ namespace {
 
 constexpr std::size_t kMaxNameAttempts = 1000;
 
-auto TrimText(std::string_view text) -> std::string_view {
-  while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
-    text.remove_prefix(1);
-  }
-  while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) {
-    text.remove_suffix(1);
-  }
-  return text;
-}
-
 }  // namespace
 
 auto MakeCampaign(GameSnapshot snapshot, std::string name) -> Campaign {
@@ -101,28 +91,6 @@ auto RenameScene(Campaign& campaign, std::size_t index, std::string name)
 
 auto CanDeleteScene(const Campaign& campaign) -> bool {
   return campaign.scenes.size() > 1;
-}
-
-auto ParseSceneRename(const Campaign& campaign, std::string_view args)
-    -> std::optional<SceneRenameRequest> {
-  args = TrimText(args);
-  std::size_t best = kNoScene;
-  std::size_t best_length = 0;
-  for (std::size_t index = 0; index < campaign.scenes.size(); ++index) {
-    const std::string& name = campaign.scenes[index].name;
-    if (name.size() > best_length && args.size() > name.size() &&
-        args.starts_with(name) && args[name.size()] == ' ') {
-      best = index;
-      best_length = name.size();
-    }
-  }
-  if (best == kNoScene) {
-    return std::nullopt;
-  }
-  return SceneRenameRequest{
-      .index = best,
-      .new_name = std::string(TrimText(args.substr(best_length + 1))),
-  };
 }
 
 }  // namespace dnd
