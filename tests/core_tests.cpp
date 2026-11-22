@@ -44,6 +44,8 @@
 #include "core/menu_model.h"
 #include "core/movement.h"
 #include "core/navigation.h"
+#include "core/overlay.h"
+#include "core/overlay_io.h"
 #include "core/password.h"
 #include "core/player_name.h"
 #include "core/scene_io.h"
@@ -4518,10 +4520,7 @@ auto TestReadsPreviousVersions() -> void {
          "a save from a newer version is rejected");
   std::filesystem::remove(save_path);
 
-  const dnd::Campaign campaign{
-      .scenes = {dnd::Scene{.name = "Пролог", .snapshot = original}},
-      .active = 0,
-  };
+  const dnd::Campaign campaign = dnd::MakeCampaign(original, "Пролог");
   const std::filesystem::path campaign_path =
       std::filesystem::temp_directory_path() /
       "dnd_core_tests_old_campaign.dndcamp";
@@ -4538,6 +4537,8 @@ auto TestReadsPreviousVersions() -> void {
     Expect(
         loaded->scenes.size() == 1 && loaded->scenes.front().name == "Пролог",
         "scene names survive previous campaign versions");
+    Expect(loaded->scenes.front().id == 1 && loaded->next_scene_id == 2,
+           "campaign scene ids are derived for old files and kept for new");
     const dnd::Token& token = loaded->scenes.front().snapshot.tokens.front();
     Expect(
         token.conditions.size() == 1 && token.conditions.front().save_dc == 12,
@@ -4592,7 +4593,8 @@ auto TestCampaign() -> void {
   Expect(dnd::NextSceneName(campaign) == "Сцена 2",
          "next scene name avoids used ones");
 
-  campaign.scenes.push_back(dnd::Scene{.name = "Сцена 2", .snapshot = second});
+  campaign.scenes.push_back(dnd::Scene{
+      .id = dnd::NextSceneId(campaign), .name = "Сцена 2", .snapshot = second});
   campaign.active = 1;
   Expect(dnd::NextSceneName(campaign) == "Сцена 3",
          "next scene name counts existing scenes");
@@ -4629,6 +4631,9 @@ auto TestCampaign() -> void {
   if (loaded.has_value()) {
     Expect(loaded->scenes.size() == 2, "scene count survives the roundtrip");
     Expect(loaded->active == 1, "active scene survives the roundtrip");
+    Expect(loaded->scenes.front().id == 1 && loaded->scenes.back().id == 2 &&
+               loaded->next_scene_id == 3,
+           "scene ids and the id counter survive the roundtrip");
     Expect(loaded->scenes.front().name == "Сцена 1" &&
                loaded->scenes.back().name == "Подземелье",
            "scene names survive the roundtrip");
@@ -4688,8 +4693,9 @@ auto TestCampaignSaver() -> void {
       .next_token_id = 1,
   };
   dnd::Campaign campaign = dnd::MakeCampaign(map_snapshot, "Фон");
-  campaign.scenes.push_back(
-      dnd::Scene{.name = "Вторая", .snapshot = map_snapshot});
+  campaign.scenes.push_back(dnd::Scene{.id = dnd::NextSceneId(campaign),
+                                       .name = "Вторая",
+                                       .snapshot = map_snapshot});
   campaign.active = 1;
 
   const std::filesystem::path path =
@@ -4738,6 +4744,279 @@ auto TestCampaignSaver() -> void {
   Expect(dnd::ReadCampaign(path).has_value(),
          "the destructor finishes a queued write");
   std::filesystem::remove(path, cleanup_error);
+}
+
+// Стабильные id сцен: имя и индекс меняются, а оверлей партии ссылается на id.
+auto TestSceneIds() -> void {
+  dnd::Campaign campaign = dnd::MakeCampaign(dnd::GameSnapshot{}, "Первая");
+  Expect(campaign.scenes.front().id == 1 && campaign.next_scene_id == 2,
+         "a new campaign numbers its first scene");
+  const std::optional<dnd::Scene> copy = dnd::CopyScene(campaign, 0);
+  Expect(copy.has_value() && copy->id == 2 && copy->name == "Первая" &&
+             !copy->overlay_only,
+         "a scene copy gets a new id and keeps the name");
+  if (!copy.has_value()) {
+    return;
+  }
+  campaign.scenes.push_back(*copy);
+  Expect(campaign.next_scene_id == 3, "the scene id counter moves forward");
+  Expect(dnd::FindSceneIndex(campaign, 2) == 1, "a scene is found by id");
+  Expect(dnd::FindSceneIndex(campaign, 99) == dnd::kNoScene,
+         "an unknown scene id is not found");
+  Expect(!dnd::CopyScene(campaign, 5).has_value(),
+         "copying a missing scene is refused");
+  campaign.scenes.erase(campaign.scenes.begin() + 1);
+  Expect(dnd::NextSceneId(campaign) == 3, "a deleted scene id is not reused");
+
+  dnd::Overlay overlay;
+  const dnd::SceneId first = dnd::NextOverlaySceneId(overlay);
+  const dnd::SceneId second = dnd::NextOverlaySceneId(overlay);
+  Expect(first == dnd::kOverlaySceneIdBase &&
+             second == dnd::kOverlaySceneIdBase + 1,
+         "party scene ids live in their own range");
+}
+
+// Слияние: записи партии поверх кампании по id, база не меняется.
+auto TestOverlayMerge() -> void {
+  const dnd::GameSnapshot plain{.map = dnd::GridMap(4, 4), .next_token_id = 1};
+  dnd::Campaign base = dnd::MakeCampaign(plain, "Пролог");
+  base.scenes.push_back(dnd::Scene{
+      .id = dnd::NextSceneId(base), .name = "Пещера", .snapshot = plain});
+  base.scenes.push_back(dnd::Scene{
+      .id = dnd::NextSceneId(base), .name = "Финал", .snapshot = plain});
+  base.active = 1;
+  const dnd::SceneId prologue = base.scenes[0].id;
+  const dnd::SceneId cave = base.scenes[1].id;
+  const dnd::SceneId finale = base.scenes[2].id;
+
+  dnd::Overlay overlay;
+  overlay.campaign_fingerprint = dnd::CampaignFingerprint(base);
+  dnd::GameSnapshot played = plain;
+  played.game_time_seconds = 600;
+  Expect(dnd::SetSceneSnapshot(overlay, prologue, played),
+         "a played scene gets an overlay snapshot");
+  Expect(dnd::SetSceneName(overlay, cave, "Глубина"),
+         "an overlay renames a campaign scene");
+  Expect(dnd::SetSceneNote(overlay, cave, "Заметка партии"),
+         "an overlay stores a scene note");
+  const dnd::SceneId added = dnd::NextOverlaySceneId(overlay);
+  dnd::GameSnapshot added_snapshot = plain;
+  added_snapshot.game_time_seconds = 120;
+  Expect(dnd::AddScene(overlay, added, "Новая", added_snapshot),
+         "a scene created in the party is added");
+  dnd::SetActive(overlay, added);
+
+  const dnd::OverlayMerge merged = dnd::ApplyOverlay(base, overlay);
+  Expect(!merged.rolled_back && merged.campaign.scenes.size() == 4,
+         "the merge keeps every scene");
+  Expect(base.scenes.size() == 3 && base.scenes[0].name == "Пролог" &&
+             base.scenes[0].snapshot.game_time_seconds == 0 &&
+             base.scenes[1].name == "Пещера" && base.active == 1,
+         "the merge does not touch the campaign");
+  const std::size_t played_index =
+      dnd::FindSceneIndex(merged.campaign, prologue);
+  Expect(played_index != dnd::kNoScene &&
+             merged.campaign.scenes[played_index].snapshot.game_time_seconds ==
+                 600,
+         "the played snapshot wins over the campaign");
+  const std::size_t renamed_index = dnd::FindSceneIndex(merged.campaign, cave);
+  Expect(renamed_index != dnd::kNoScene &&
+             merged.campaign.scenes[renamed_index].name == "Глубина" &&
+             merged.campaign.scenes[renamed_index].note == "Заметка партии",
+         "the overlay name and note win");
+  const std::size_t party_index = dnd::FindSceneIndex(merged.campaign, added);
+  Expect(party_index != dnd::kNoScene &&
+             merged.campaign.scenes[party_index].overlay_only &&
+             merged.campaign.active == party_index,
+         "a party scene is marked as missing from the campaign");
+
+  // Tombstone скрывает базовую сцену; активной становится следующая.
+  Expect(dnd::RemoveScene(overlay, cave),
+         "a scene can be deleted in the party");
+  dnd::SetActive(overlay, 0);
+  const dnd::OverlayMerge without_cave = dnd::ApplyOverlay(base, overlay);
+  Expect(dnd::FindSceneIndex(without_cave.campaign, cave) == dnd::kNoScene &&
+             without_cave.campaign.scenes.size() == 3,
+         "a tombstone hides the campaign scene");
+  Expect(without_cave.campaign.active ==
+             dnd::FindSceneIndex(without_cave.campaign, finale),
+         "deleting the active scene moves to the next one");
+
+  // Сцена, удалённая в редакторе, но сыгранная в партии, не теряется.
+  dnd::Campaign edited = base;
+  edited.scenes.erase(edited.scenes.begin());
+  edited.active = 0;
+  const dnd::OverlayMerge rescued = dnd::ApplyOverlay(edited, overlay);
+  const std::size_t rescued_index =
+      dnd::FindSceneIndex(rescued.campaign, prologue);
+  Expect(
+      rescued_index != dnd::kNoScene &&
+          rescued.campaign.scenes[rescued_index].overlay_only &&
+          rescued.campaign.scenes[rescued_index].snapshot.game_time_seconds ==
+              600,
+      "a scene deleted in the editor keeps the party progress");
+
+  // Дубль имени после слияния получает суффикс, кампания не меняется.
+  dnd::Overlay clash;
+  Expect(dnd::SetSceneName(clash, cave, "Пролог"),
+         "an overlay may ask for a taken name");
+  const dnd::OverlayMerge renamed = dnd::ApplyOverlay(base, clash);
+  const std::size_t clash_index = dnd::FindSceneIndex(renamed.campaign, cave);
+  Expect(clash_index != dnd::kNoScene &&
+             renamed.campaign.scenes[clash_index].name == "Пролог (2)" &&
+             base.scenes[0].name == "Пролог",
+         "a duplicate name gets a suffix after the merge");
+
+  // Пустой итог откатывается к кампании с предупреждением.
+  dnd::Overlay empty;
+  for (const dnd::Scene& scene : base.scenes) {
+    Expect(dnd::RemoveScene(empty, scene.id), "a base scene can be tombstoned");
+  }
+  const dnd::OverlayMerge rolled = dnd::ApplyOverlay(base, empty);
+  Expect(rolled.rolled_back &&
+             rolled.campaign.scenes.size() == base.scenes.size() &&
+             rolled.campaign.scenes[0].name == "Пролог",
+         "an overlay that hides every scene falls back to the campaign");
+  Expect(!dnd::SetSceneSnapshot(empty, prologue, played),
+         "a deleted scene takes no snapshot");
+  Expect(!dnd::AddScene(empty, prologue, "Чужая", plain),
+         "a campaign id cannot be used for a party scene");
+
+  // Номера сцен партии не переиспользуются после удаления.
+  dnd::Overlay ids;
+  const dnd::SceneId first = dnd::NextOverlaySceneId(ids);
+  Expect(dnd::AddScene(ids, first, "А", plain), "a party scene is added");
+  const dnd::SceneId second = dnd::NextOverlaySceneId(ids);
+  Expect(second > first && dnd::RemoveScene(ids, first) &&
+             dnd::NextOverlaySceneId(ids) > second,
+         "deleted party scene ids are not reused");
+}
+
+// Файл партии: DNDO, строгий декодер, атомарная запись.
+auto TestOverlayRoundtrip() -> void {
+  const dnd::GameSnapshot plain{.map = dnd::GridMap(3, 3), .next_token_id = 1};
+  dnd::Overlay overlay;
+  overlay.campaign_fingerprint = 0x123456789ABCDEF0ULL;
+  const dnd::SceneId added = dnd::NextOverlaySceneId(overlay);
+  Expect(dnd::AddScene(overlay, added, "Новая", plain),
+         "a party scene is encoded");
+  Expect(dnd::SetSceneName(overlay, 7, "Имя") &&
+             dnd::SetSceneNote(overlay, 7, "Заметка") &&
+             dnd::RemoveScene(overlay, 8),
+         "name, note and tombstone records are encoded");
+  dnd::SetActive(overlay, added);
+
+  const std::vector<std::uint8_t> payload =
+      dnd::EncodeOverlayAs(overlay, dnd::kOverlayVersion);
+  Expect(!payload.empty(), "an overlay encodes");
+  Expect(dnd::EncodeOverlayAs(overlay, 0).empty(),
+         "an unknown overlay version is not encoded");
+
+  constexpr std::uint32_t overlay_magic = 0x4F444E44U;
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "dnd_core_tests_overlay.dndoverlay";
+  WriteVersionedFile(path, overlay_magic, dnd::kOverlayVersion, payload);
+  const std::optional<dnd::Overlay> loaded = dnd::ReadOverlay(path);
+  Expect(loaded.has_value(), "an overlay reads back");
+  if (loaded.has_value()) {
+    Expect(loaded->campaign_fingerprint == overlay.campaign_fingerprint,
+           "the campaign fingerprint survives the roundtrip");
+    Expect(loaded->active == added &&
+               loaded->next_scene_id == overlay.next_scene_id,
+           "the active scene and the id counter survive the roundtrip");
+    Expect(loaded->scenes.size() == overlay.scenes.size(),
+           "every overlay record survives the roundtrip");
+    const dnd::OverlayScene* named = dnd::FindOverlayScene(*loaded, 7);
+    Expect(named != nullptr && named->name == "Имя" &&
+               named->note == "Заметка" && !named->deleted &&
+               !named->snapshot.has_value(),
+           "an overlay name and note survive the roundtrip");
+    const dnd::OverlayScene* tombstone = dnd::FindOverlayScene(*loaded, 8);
+    Expect(tombstone != nullptr && tombstone->deleted &&
+               !tombstone->snapshot.has_value(),
+           "a tombstone survives the roundtrip");
+    const dnd::OverlayScene* party = dnd::FindOverlayScene(*loaded, added);
+    Expect(party != nullptr && party->snapshot.has_value() &&
+               party->snapshot->map.Width() == 3,
+           "a party scene snapshot survives the roundtrip");
+  }
+  std::filesystem::remove(path);
+
+  std::vector<std::uint8_t> unknown_flag = payload;
+  // Запись 0: id (8 байт) идёт после отпечатка, active, next и счётчика.
+  constexpr std::size_t first_flags = 3 * 8 + 4 + 8;
+  unknown_flag[first_flags] |= 0x10;
+  WriteVersionedFile(path, overlay_magic, dnd::kOverlayVersion, unknown_flag);
+  Expect(!dnd::ReadOverlay(path).has_value(),
+         "an unknown record flag is rejected");
+
+  std::vector<std::uint8_t> mixed_flags = payload;
+  mixed_flags[first_flags] = 0x01 | 0x02;
+  WriteVersionedFile(path, overlay_magic, dnd::kOverlayVersion, mixed_flags);
+  Expect(!dnd::ReadOverlay(path).has_value(),
+         "a tombstone with fields is rejected");
+
+  const std::vector<std::uint8_t> truncated(payload.begin(), payload.end() - 1);
+  WriteVersionedFile(path, overlay_magic, dnd::kOverlayVersion, truncated);
+  Expect(!dnd::ReadOverlay(path).has_value(),
+         "a truncated overlay is rejected");
+  WriteVersionedFile(path, overlay_magic, dnd::kOverlayVersion + 1, payload);
+  Expect(!dnd::ReadOverlay(path).has_value(),
+         "an overlay from a newer version is rejected");
+  std::filesystem::remove(path);
+
+  const std::filesystem::path written =
+      std::filesystem::temp_directory_path() /
+      "dnd_core_tests_overlay_write.dndoverlay";
+  Expect(dnd::WriteOverlay(overlay, written), "the overlay is written");
+  std::filesystem::path temp = written;
+  temp += ".tmp";
+  Expect(!std::filesystem::exists(temp),
+         "the atomic write leaves no temporary file");
+  Expect(dnd::ReadOverlay(written).has_value(),
+         "the written overlay reads back");
+  std::filesystem::remove(written);
+}
+
+// Партия не меняет авторский файл кампании ни в памяти, ни на диске.
+auto TestCampaignUntouched() -> void {
+  const dnd::GameSnapshot plain{.map = dnd::GridMap(5, 5), .next_token_id = 1};
+  const dnd::Campaign campaign = dnd::MakeCampaign(plain, "Шаблон");
+  const std::filesystem::path campaign_path =
+      std::filesystem::temp_directory_path() /
+      "dnd_core_tests_untouched.dndcamp";
+  Expect(dnd::WriteCampaign(campaign, campaign_path),
+         "the campaign is written before the party");
+  const auto read_bytes =
+      [](const std::filesystem::path& path) -> std::vector<std::uint8_t> {
+    std::ifstream in(path, std::ios::binary);
+    std::vector<std::uint8_t> bytes;
+    bytes.assign(std::istreambuf_iterator<char>(in),
+                 std::istreambuf_iterator<char>());
+    return bytes;
+  };
+  const std::vector<std::uint8_t> before = read_bytes(campaign_path);
+
+  dnd::Overlay overlay;
+  overlay.campaign_fingerprint = dnd::CampaignFingerprint(campaign);
+  const dnd::SceneId id = campaign.scenes.front().id;
+  Expect(dnd::SetSceneName(overlay, id, "Партия") &&
+             dnd::SetSceneSnapshot(overlay, id, plain),
+         "the party changes its own copy of the scene");
+  const std::filesystem::path overlay_path =
+      std::filesystem::temp_directory_path() /
+      "dnd_core_tests_untouched.dndoverlay";
+  Expect(dnd::WriteOverlay(overlay, overlay_path),
+         "the party is written next to the campaign");
+  Expect(read_bytes(campaign_path) == before,
+         "writing the party does not touch the campaign file");
+
+  const dnd::OverlayMerge merged = dnd::ApplyOverlay(campaign, overlay);
+  Expect(merged.campaign.scenes.front().name == "Партия" &&
+             campaign.scenes.front().name == "Шаблон",
+         "the merge leaves the campaign object unchanged");
+  std::filesystem::remove(campaign_path);
+  std::filesystem::remove(overlay_path);
 }
 
 // Испорченные байты — обычное дело при обрыве связи или битом файле.
@@ -6857,8 +7136,10 @@ auto TestSceneDeleteRules() -> void {
   dnd::Campaign campaign = dnd::MakeCampaign(dnd::GameSnapshot{}, "Одна");
   Expect(!dnd::CanDeleteScene(campaign),
          "the last scene of a campaign cannot be deleted");
-  campaign.scenes.push_back(
-      dnd::Scene{.name = "Вторая", .note = "", .snapshot = {}});
+  campaign.scenes.push_back(dnd::Scene{.id = dnd::NextSceneId(campaign),
+                                       .name = "Вторая",
+                                       .note = "",
+                                       .snapshot = {}});
   Expect(dnd::CanDeleteScene(campaign),
          "a campaign with two scenes allows deletion");
 }
@@ -6959,6 +7240,10 @@ auto main() -> int {
     TestReadsPreviousVersions();
     TestCampaign();
     TestCampaignSaver();
+    TestSceneIds();
+    TestOverlayMerge();
+    TestOverlayRoundtrip();
+    TestCampaignUntouched();
     TestDamagedPayloads();
     TestSessionLog();
     TestSessionLogHistory();

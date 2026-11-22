@@ -142,6 +142,8 @@ add_library(dnd_core STATIC
   src/core/menu_model.cpp
   src/core/movement.cpp
   src/core/navigation.cpp
+  src/core/overlay.cpp
+  src/core/overlay_io.cpp
   src/core/password.cpp
   src/core/player_name.cpp
   src/core/random.cpp

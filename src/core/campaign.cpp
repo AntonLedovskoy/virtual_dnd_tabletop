@@ -25,10 +25,45 @@ auto MakeCampaign(GameSnapshot snapshot, std::string name) -> Campaign {
     name = "Сцена 1";
   }
   Campaign campaign;
-  campaign.scenes.push_back(
-      Scene{.name = std::move(name), .snapshot = std::move(snapshot)});
+  campaign.scenes.push_back(Scene{.id = NextSceneId(campaign),
+                                  .name = std::move(name),
+                                  .snapshot = std::move(snapshot)});
   campaign.active = 0;
   return campaign;
+}
+
+auto NextSceneId(Campaign& campaign) -> SceneId {
+  SceneId max_id = 0;
+  for (const Scene& scene : campaign.scenes) {
+    max_id = std::max(max_id, scene.id);
+  }
+  if (campaign.next_scene_id <= max_id ||
+      campaign.next_scene_id >= kOverlaySceneIdBase) {
+    campaign.next_scene_id = max_id + 1;
+  }
+  return campaign.next_scene_id++;
+}
+
+auto FindSceneIndex(const Campaign& campaign, SceneId id) -> std::size_t {
+  if (id == 0) {
+    return kNoScene;
+  }
+  for (std::size_t index = 0; index < campaign.scenes.size(); ++index) {
+    if (campaign.scenes[index].id == id) {
+      return index;
+    }
+  }
+  return kNoScene;
+}
+
+auto CopyScene(Campaign& campaign, std::size_t index) -> std::optional<Scene> {
+  if (index >= campaign.scenes.size()) {
+    return std::nullopt;
+  }
+  Scene copy = campaign.scenes[index];
+  copy.id = NextSceneId(campaign);
+  copy.overlay_only = false;
+  return copy;
 }
 
 auto NextSceneName(const Campaign& campaign) -> std::string {

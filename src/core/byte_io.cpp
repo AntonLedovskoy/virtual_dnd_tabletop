@@ -13,6 +13,12 @@ auto ByteWriter::U32(std::uint32_t value) -> void {
   }
 }
 
+auto ByteWriter::U64(std::uint64_t value) -> void {
+  for (int shift = 0; shift < 64; shift += 8) {
+    data_.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+  }
+}
+
 auto ByteWriter::I32(std::int32_t value) -> void {
   U32(static_cast<std::uint32_t>(value));
 }
@@ -52,6 +58,19 @@ auto ByteReader::U32(std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
   for (int shift = 0; shift < 32; shift += 8) {
     result |= static_cast<std::uint32_t>(data_[offset_]) << shift;
+    ++offset_;
+  }
+  value = result;
+  return true;
+}
+
+auto ByteReader::U64(std::uint64_t& value) -> bool {
+  if (Remaining() < 8) {
+    return false;
+  }
+  std::uint64_t result = 0;
+  for (int shift = 0; shift < 64; shift += 8) {
+    result |= static_cast<std::uint64_t>(data_[offset_]) << shift;
     ++offset_;
   }
   value = result;

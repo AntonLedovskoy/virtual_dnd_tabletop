@@ -1331,7 +1331,9 @@ auto App::CreateEditorScene() -> void {
     editor_scenes_status_.Set(std::string(strings::kSceneNameTaken));
     return;
   }
-  Scene scene{.name = std::move(name), .snapshot = scene_};
+  Scene scene{.id = NextSceneId(campaign_),
+              .name = std::move(name),
+              .snapshot = scene_};
   scene.snapshot.encounter = Encounter{};
   campaign_.scenes.push_back(std::move(scene));
   campaign_.active = campaign_.scenes.size() - 1;
@@ -4602,7 +4604,8 @@ auto App::CreateScene() -> void {
     view_.AddLocalLine(std::string(strings::kSceneNameTaken));
     return;
   }
-  Scene scene{.name = std::move(name),
+  Scene scene{.id = NextSceneId(campaign_),
+              .name = std::move(name),
               .snapshot = campaign_.scenes[campaign_.active].snapshot};
   const std::string display_name = scene.name;
   campaign_.scenes.push_back(std::move(scene));

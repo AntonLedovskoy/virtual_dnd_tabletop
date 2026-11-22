@@ -13,6 +13,7 @@ class ByteWriter {
  public:
   auto U8(std::uint8_t value) -> void;
   auto U32(std::uint32_t value) -> void;
+  auto U64(std::uint64_t value) -> void;
   auto I32(std::int32_t value) -> void;
   auto String(const std::string& value) -> void;
   auto Bytes(const std::uint8_t* data, std::size_t size) -> void;
@@ -34,6 +35,7 @@ class ByteReader {
 
   auto U8(std::uint8_t& value) -> bool;
   auto U32(std::uint32_t& value) -> bool;
+  auto U64(std::uint64_t& value) -> bool;
   auto I32(std::int32_t& value) -> bool;
   auto String(std::string& value, std::uint32_t max_length) -> bool;
   auto Bytes(std::uint32_t length, std::vector<std::uint8_t>& out) -> bool;

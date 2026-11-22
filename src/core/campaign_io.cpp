@@ -38,9 +38,9 @@ auto WriteU32(std::ostream& out, std::uint32_t value) -> void {
   }
 }
 
-// Кампания 13 хранит снимки сохранения 26, 14 — 27, 15 — 28 или 29, 16 — 30.
-// Набор полей берём из версии сохранения, чтобы история формата жила в одном
-// месте (scene_io).
+// Кампания 13 хранит снимки сохранения 26, 14 — 27, 15 — 28 или 29, 16 — 30,
+// 17 — текущий снимок. Набор полей берём из версии сохранения, чтобы история
+// формата жила в одном месте (scene_io).
 auto CampaignSnapshotFormat(std::uint32_t campaign_version) -> SnapshotFormat {
   if (campaign_version >= 16) {
     return SaveSnapshotFormat(kSaveVersion);
@@ -53,12 +53,22 @@ auto CampaignSnapshotFormat(std::uint32_t campaign_version) -> SnapshotFormat {
   return SaveSnapshotFormat(27);
 }
 
-auto EncodeCampaign(const Campaign& campaign, const SnapshotFormat& format)
-    -> std::vector<std::uint8_t> {
+// Сцены и счётчик id пишутся начиная с версии 17; в старых файлах id
+// выводятся из порядка сцен.
+constexpr std::uint32_t kSceneIdCampaignVersion = 17;
+
+auto EncodeCampaign(const Campaign& campaign, std::uint32_t campaign_version,
+                    const SnapshotFormat& format) -> std::vector<std::uint8_t> {
   ByteWriter writer;
   writer.U32(static_cast<std::uint32_t>(campaign.scenes.size()));
   writer.U32(static_cast<std::uint32_t>(campaign.active));
+  if (campaign_version >= kSceneIdCampaignVersion) {
+    writer.U64(campaign.next_scene_id);
+  }
   for (const Scene& scene : campaign.scenes) {
+    if (campaign_version >= kSceneIdCampaignVersion) {
+      writer.U64(scene.id);
+    }
     writer.String(scene.name);
     writer.String(scene.note);
     const std::vector<std::uint8_t> blob =
@@ -70,6 +80,7 @@ auto EncodeCampaign(const Campaign& campaign, const SnapshotFormat& format)
 }
 
 auto DecodeCampaign(const std::uint8_t* data, std::size_t size,
+                    std::uint32_t campaign_version,
                     const SnapshotFormat& format) -> std::optional<Campaign> {
   ByteReader reader(data, size);
   std::uint32_t scene_count = 0;
@@ -83,9 +94,22 @@ auto DecodeCampaign(const std::uint8_t* data, std::size_t size,
   }
 
   Campaign campaign;
+  if (campaign_version >= kSceneIdCampaignVersion &&
+      !reader.U64(campaign.next_scene_id)) {
+    return std::nullopt;
+  }
   campaign.scenes.reserve(scene_count);
   for (std::uint32_t i = 0; i < scene_count; ++i) {
     Scene scene;
+    if (campaign_version >= kSceneIdCampaignVersion) {
+      if (!reader.U64(scene.id) || scene.id == 0 ||
+          scene.id >= kOverlaySceneIdBase ||
+          FindSceneIndex(campaign, scene.id) != kNoScene) {
+        return std::nullopt;
+      }
+    } else {
+      scene.id = static_cast<SceneId>(i) + 1;
+    }
     std::uint32_t blob_size = 0;
     std::vector<std::uint8_t> blob;
     if (!reader.String(scene.name, kMaxSceneNameLength) || scene.name.empty() ||
@@ -105,19 +129,53 @@ auto DecodeCampaign(const std::uint8_t* data, std::size_t size,
   if (!reader.Done()) {
     return std::nullopt;
   }
+  if (campaign_version < kSceneIdCampaignVersion) {
+    campaign.next_scene_id = static_cast<SceneId>(scene_count) + 1;
+  }
+  if (campaign.next_scene_id == 0 ||
+      campaign.next_scene_id >= kOverlaySceneIdBase ||
+      FindSceneIndex(campaign, campaign.next_scene_id) != kNoScene) {
+    return std::nullopt;
+  }
+  for (const Scene& scene : campaign.scenes) {
+    if (scene.id >= campaign.next_scene_id) {
+      return std::nullopt;
+    }
+  }
   campaign.active = active;
   return campaign;
+}
+
+// Кампанию пишет только редактор: id должны быть настоящими, без сцен
+// партии и без повторов.
+auto IsCampaignWritable(const Campaign& campaign) -> bool {
+  if (campaign.scenes.empty() || campaign.active >= campaign.scenes.size()) {
+    return false;
+  }
+  if (campaign.next_scene_id == 0 ||
+      campaign.next_scene_id >= kOverlaySceneIdBase) {
+    return false;
+  }
+  for (std::size_t index = 0; index < campaign.scenes.size(); ++index) {
+    const Scene& scene = campaign.scenes[index];
+    if (scene.id == 0 || scene.id >= kOverlaySceneIdBase ||
+        scene.overlay_only || FindSceneIndex(campaign, scene.id) != index ||
+        scene.id >= campaign.next_scene_id) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
 
 auto WriteCampaign(const Campaign& campaign, const std::filesystem::path& path)
     -> bool {
-  if (campaign.scenes.empty() || campaign.active >= campaign.scenes.size()) {
+  if (!IsCampaignWritable(campaign)) {
     return false;
   }
   const std::vector<std::uint8_t> payload =
-      EncodeCampaign(campaign, SnapshotFormat{});
+      EncodeCampaign(campaign, kCampaignVersion, SnapshotFormat{});
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out) {
     return false;
@@ -161,19 +219,20 @@ auto ReadCampaign(const std::filesystem::path& path)
   }
   SnapshotFormat format = CampaignSnapshotFormat(version);
   std::optional<Campaign> campaign =
-      DecodeCampaign(payload.data(), payload.size(), format);
+      DecodeCampaign(payload.data(), payload.size(), version, format);
   // Кампания 15 писалась и до появления защит от урона (снимки 28), поэтому
   // пробуем и старый набор полей: строгий декодер не примет лишние байты.
   if (!campaign.has_value() && version == 15) {
     format.has_damage_profile = false;
-    campaign = DecodeCampaign(payload.data(), payload.size(), format);
+    campaign = DecodeCampaign(payload.data(), payload.size(), version, format);
   }
   return campaign;
 }
 
 auto EncodeCampaignAs(const Campaign& campaign, std::uint32_t campaign_version)
     -> std::vector<std::uint8_t> {
-  return EncodeCampaign(campaign, CampaignSnapshotFormat(campaign_version));
+  return EncodeCampaign(campaign, campaign_version,
+                        CampaignSnapshotFormat(campaign_version));
 }
 
 auto ListCampaignFiles(const std::filesystem::path& directory)
