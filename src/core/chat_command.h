@@ -4,6 +4,8 @@
 #include <string>
 #include <string_view>
 
+#include "core/damage.h"
+
 namespace dnd {
 
 // Что игрок ввёл в строке чата. Всё, что не похоже на известную команду,
@@ -67,6 +69,8 @@ struct ChatCommand {
   int value = 0;
   // Сложность спасброска из /aoe.
   int save_dc = 0;
+  // Тип урона из /damage N ТИП и /aoe ВЫРАЖЕНИЕ КС ТИП.
+  DamageType damage_type = DamageType::kNone;
   bool long_rest = false;
   // /xp N all — опыт всей партии.
   bool party = false;

@@ -67,13 +67,6 @@ auto RemoveCondition(Token& token, std::string_view name) -> bool {
                        }) > 0;
 }
 
-auto HasCondition(const Token& token, std::string_view name) -> bool {
-  return std::ranges::any_of(token.conditions,
-                             [name](const Condition& condition) -> bool {
-                               return condition.name == name;
-                             });
-}
-
 // Гибель: «без сознания» заменяется на «мёртв».
 auto KillToken(Token& token) -> void {
   RemoveCondition(token, kUnconscious);
@@ -184,7 +177,9 @@ auto GameState::TokenCopy(TokenId id) const -> std::optional<Token> {
 auto GameState::AddToken(std::string name, Cell cell, std::string owner,
                          TokenKind kind, int max_hp, std::uint32_t color,
                          int ac, int speed, std::string notes, int attack_bonus,
-                         int save_bonus, std::string damage) -> TokenId {
+                         int save_bonus, std::string damage, int attack_range,
+                         std::uint32_t resist, std::uint32_t vulnerable,
+                         std::uint32_t immune) -> TokenId {
   const TokenId active = ActiveTokenId();
   const TokenId id = next_token_id_++;
   const int resolved_max_hp = std::max(1, max_hp);
@@ -199,6 +194,10 @@ auto GameState::AddToken(std::string name, Cell cell, std::string owner,
                           .attack_bonus = attack_bonus,
                           .save_bonus = save_bonus,
                           .damage = std::move(damage),
+                          .resist = resist,
+                          .vulnerable = vulnerable,
+                          .immune = immune,
+                          .attack_range = attack_range,
                           .kind = kind,
                           .color = color,
                           .cell = cell});
@@ -304,7 +303,8 @@ auto GameState::HealToken(TokenId id, int amount) -> std::optional<Token> {
   return *token;
 }
 
-auto GameState::DeathSave(TokenId id, int roll) -> std::optional<Token> {
+auto GameState::DeathSave(TokenId id, int roll, int penalty)
+    -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr || token->hp > 0) {
     return std::nullopt;
@@ -320,7 +320,8 @@ auto GameState::DeathSave(TokenId id, int roll) -> std::optional<Token> {
     RemoveCondition(*token, kUnconscious);
     return *token;
   }
-  if (roll >= 10) {
+  const int effective = roll - std::max(0, penalty);
+  if (effective >= 10) {
     token->death_save_successes = std::min(3, token->death_save_successes + 1);
     // Три успеха: персонаж стабилен, но всё ещё без сознания на нуле HP.
     // «Без сознания» снимает только лечение или возврат HP.
@@ -478,7 +479,9 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
                                  std::string notes, int attack_bonus,
                                  int save_bonus, int initiative_bonus,
                                  std::string damage, int temp_hp, int hit_die,
-                                 int con_modifier) -> std::optional<Token> {
+                                 int con_modifier, int attack_range,
+                                 std::uint32_t resist, std::uint32_t vulnerable,
+                                 std::uint32_t immune) -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -490,9 +493,14 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
   token->save_bonus = save_bonus;
   token->initiative_bonus = initiative_bonus;
   token->damage = std::move(damage);
-  token->temp_hp = temp_hp;
+  // Временные HP не складываются: остаётся большее (SRD 5.2.1).
+  token->temp_hp = std::max(token->temp_hp, temp_hp);
   token->hit_die = hit_die;
   token->con_modifier = con_modifier;
+  token->attack_range = attack_range;
+  token->resist = resist & kAllDamageTypes;
+  token->vulnerable = vulnerable & kAllDamageTypes;
+  token->immune = immune & kAllDamageTypes;
   return *token;
 }
 
@@ -503,6 +511,12 @@ auto GameState::UpdateTokenCombat(TokenId id, std::vector<Condition> conditions)
     return std::nullopt;
   }
   token->conditions = std::move(conditions);
+  // Шестой уровень истощения убивает (SRD 5.2.1).
+  if (ExhaustionLevel(*token) >= kMaxExhaustionLevel &&
+      !HasCondition(*token, kDead)) {
+    token->hp = 0;
+    KillToken(*token);
+  }
   return *token;
 }
 
@@ -557,8 +571,9 @@ auto GameState::UseTurnAction(TokenId id, TurnActionKind kind)
   token->action_used = true;
   switch (kind) {
     case TurnActionKind::kDash:
-      // Рывок даёт ещё столько же движения, сколько обычный запас.
-      token->movement_bonus = SpeedToCells(token->speed);
+      // Рывок даёт ещё столько же движения, сколько обычный запас с учётом
+      // истощения и состояний.
+      token->movement_bonus = EffectiveSpeedCells(*token);
       break;
     case TurnActionKind::kDisengage:
       token->disengaged = true;

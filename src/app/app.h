@@ -169,6 +169,10 @@ class App {
   auto HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleConditionsTextInput(const char* text) -> void;
   auto ApplyConditionDc() -> void;
+  // Снять один уровень истощения из черновика состояний.
+  auto RemoveExhaustionLevelFromDraft() -> void;
+  // Добавить своё состояние из строки ввода.
+  auto ApplyConditionCustom(bool until_removed) -> void;
   // Панель действий хода: рывок, отход, уклонение и остальные приёмы 2024.
   auto OpenActions() -> void;
   auto CloseActions() -> void;
@@ -298,7 +302,11 @@ class App {
   std::string sheet_temp_hp_;
   std::string sheet_hit_die_;
   std::string sheet_con_;
+  std::string sheet_range_;
   std::string sheet_damage_;
+  std::string sheet_resist_;
+  std::string sheet_vulnerable_;
+  std::string sheet_immune_;
   std::string sheet_notes_;
 
   bool bestiary_active_ = false;
@@ -309,6 +317,11 @@ class App {
   std::size_t conditions_selected_ = 0;
   bool conditions_dc_edit_ = false;
   std::string conditions_dc_buffer_;
+  // Ввод своего состояния: T открывает строку, Enter добавляет.
+  bool conditions_custom_edit_ = false;
+  std::string conditions_custom_buffer_;
+  // Первый TEXT_INPUT после T — это сама горячая клавиша, её не вводим.
+  bool conditions_custom_ignore_text_ = false;
 
   bool actions_active_ = false;
   TokenId actions_token_id_ = 0;

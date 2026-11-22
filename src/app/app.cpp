@@ -2010,7 +2010,11 @@ auto App::OpenSheet() -> void {
   sheet_temp_hp_ = std::to_string(token->temp_hp);
   sheet_hit_die_ = std::to_string(token->hit_die);
   sheet_con_ = std::to_string(token->con_modifier);
+  sheet_range_ = std::to_string(token->attack_range);
   sheet_damage_ = token->damage;
+  sheet_resist_ = FormatDamageTypeList(token->resist);
+  sheet_vulnerable_ = FormatDamageTypeList(token->vulnerable);
+  sheet_immune_ = FormatDamageTypeList(token->immune);
   sheet_notes_ = token->notes;
 }
 
@@ -2053,12 +2057,28 @@ auto App::SaveSheet() -> void {
     view_.AddLocalLine(std::string(strings::kSheetBadCon));
     return;
   }
+  int attack_range = 0;
+  if (!ParseSignedNumber(sheet_range_, attack_range) || attack_range < 0 ||
+      attack_range > 1000) {
+    view_.AddLocalLine(std::string(strings::kSheetBadRange));
+    return;
+  }
   if (!sheet_damage_.empty()) {
     DiceExpression damage;
-    if (!ParseDiceExpression(sheet_damage_, damage)) {
-      view_.AddLocalLine("Некорректное выражение урона");
+    DamageType damage_type = DamageType::kNone;
+    if (!ParseDamageProfile(sheet_damage_, damage, damage_type)) {
+      view_.AddLocalLine(std::string(strings::kSheetBadDamage));
       return;
     }
+  }
+  std::uint32_t resist = 0;
+  std::uint32_t vulnerable = 0;
+  std::uint32_t immune = 0;
+  if (!ParseDamageTypeList(sheet_resist_, resist) ||
+      !ParseDamageTypeList(sheet_vulnerable_, vulnerable) ||
+      !ParseDamageTypeList(sheet_immune_, immune)) {
+    view_.AddLocalLine(std::string(strings::kSheetBadDamageType));
+    return;
   }
   const Token* token = nullptr;
   for (const Token& candidate : view_.Tokens()) {
@@ -2081,7 +2101,11 @@ auto App::SaveSheet() -> void {
                                .damage = sheet_damage_,
                                .temp_hp = temp_hp,
                                .hit_die = hit_die,
-                               .con_modifier = con});
+                               .con_modifier = con,
+                               .attack_range = attack_range,
+                               .resist = resist,
+                               .vulnerable = vulnerable,
+                               .immune = immune});
   CloseSheet();
 }
 
@@ -2150,7 +2174,9 @@ auto App::HandleSheetTextInput(const char* text) -> void {
       sheet_field_ == SheetField::kAttack ||
       sheet_field_ == SheetField::kSave ||
       sheet_field_ == SheetField::kInitiative ||
-      sheet_field_ == SheetField::kHitDie || sheet_field_ == SheetField::kCon) {
+      sheet_field_ == SheetField::kTempHp ||
+      sheet_field_ == SheetField::kHitDie || sheet_field_ == SheetField::kCon ||
+      sheet_field_ == SheetField::kRange) {
     switch (sheet_field_) {
       case SheetField::kAc:
         AppendBoundedNumber(sheet_ac_, text, 1, 1000, false);
@@ -2177,6 +2203,9 @@ auto App::HandleSheetTextInput(const char* text) -> void {
         AppendBoundedNumber(sheet_con_, text, -kMaxConModifier, kMaxConModifier,
                             true);
         break;
+      case SheetField::kRange:
+        AppendBoundedNumber(sheet_range_, text, 0, 1000, false);
+        break;
       default:
         break;
     }
@@ -2185,9 +2214,21 @@ auto App::HandleSheetTextInput(const char* text) -> void {
   if (sheet_field_ == SheetField::kDamage) {
     std::string candidate = sheet_damage_;
     candidate += text;
-    if (IsDiceExpressionPrefix(candidate) && candidate.size() <= 64) {
+    if (IsDamageProfilePrefix(candidate) && candidate.size() <= 64) {
       sheet_damage_ = std::move(candidate);
     }
+    return;
+  }
+  if (sheet_field_ == SheetField::kResist) {
+    AppendUtf8(sheet_resist_, text, 128);
+    return;
+  }
+  if (sheet_field_ == SheetField::kVulnerable) {
+    AppendUtf8(sheet_vulnerable_, text, 128);
+    return;
+  }
+  if (sheet_field_ == SheetField::kImmune) {
+    AppendUtf8(sheet_immune_, text, 128);
     return;
   }
   AppendUtf8(sheet_notes_, text, 512);
@@ -2239,8 +2280,20 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SheetField::kCon:
       buffer = &sheet_con_;
       break;
+    case SheetField::kRange:
+      buffer = &sheet_range_;
+      break;
     case SheetField::kDamage:
       buffer = &sheet_damage_;
+      break;
+    case SheetField::kResist:
+      buffer = &sheet_resist_;
+      break;
+    case SheetField::kVulnerable:
+      buffer = &sheet_vulnerable_;
+      break;
+    case SheetField::kImmune:
+      buffer = &sheet_immune_;
       break;
     case SheetField::kNotes:
       buffer = &sheet_notes_;
@@ -2315,6 +2368,10 @@ auto App::SpawnBestiary(int index, bool group) -> void {
         .attack_bonus = monster.attack_bonus,
         .save_bonus = monster.save_bonus,
         .damage = monster.damage,
+        .attack_range = monster.attack_range,
+        .resist = monster.resist,
+        .vulnerable = monster.vulnerable,
+        .immune = monster.immune,
     });
   }
   bestiary_active_ = false;
@@ -2333,6 +2390,9 @@ auto App::OpenConditions() -> void {
   conditions_selected_ = 0;
   conditions_dc_edit_ = false;
   conditions_dc_buffer_.clear();
+  conditions_custom_edit_ = false;
+  conditions_custom_buffer_.clear();
+  conditions_custom_ignore_text_ = false;
   const auto& standard = DefaultConditions();
   for (std::size_t i = 0; i < standard.size(); ++i) {
     if (std::ranges::any_of(conditions_draft_,
@@ -2354,6 +2414,9 @@ auto App::CloseConditions() -> void {
   conditions_read_only_ = false;
   conditions_dc_edit_ = false;
   conditions_dc_buffer_.clear();
+  conditions_custom_edit_ = false;
+  conditions_custom_buffer_.clear();
+  conditions_custom_ignore_text_ = false;
   conditions_token_id_ = 0;
   conditions_draft_.clear();
 }
@@ -2408,6 +2471,17 @@ auto App::ToggleCondition(int index, bool until_removed) -> void {
   }
   conditions_selected_ = static_cast<std::size_t>(index);
   const std::string& condition = standard[static_cast<std::size_t>(index)];
+  if (condition == kExhaustion) {
+    // Каждое включение истощения добавляет уровень, выше шестого нельзя.
+    if (ExhaustionLevel(conditions_draft_) >= kMaxExhaustionLevel) {
+      view_.AddLocalLine(std::string(strings::kConditionExhaustionMax));
+      return;
+    }
+    conditions_draft_.emplace_back(condition);
+    SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
+                                  .conditions = conditions_draft_});
+    return;
+  }
   const auto it = std::ranges::find_if(
       conditions_draft_, [&condition](const Condition& item) -> bool {
         return item.name == condition;
@@ -2422,19 +2496,66 @@ auto App::ToggleCondition(int index, bool until_removed) -> void {
                                 .conditions = conditions_draft_});
 }
 
+auto App::RemoveExhaustionLevelFromDraft() -> void {
+  if (conditions_read_only_) {
+    return;
+  }
+  const auto it = std::ranges::find_if(
+      conditions_draft_,
+      [](const Condition& item) -> bool { return item.name == kExhaustion; });
+  if (it == conditions_draft_.end()) {
+    return;
+  }
+  conditions_draft_.erase(it);
+  SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
+                                .conditions = conditions_draft_});
+}
+
+auto App::ApplyConditionCustom(bool until_removed) -> void {
+  std::string name = conditions_custom_buffer_;
+  while (!name.empty() && name.front() == ' ') {
+    name.erase(name.begin());
+  }
+  while (!name.empty() && name.back() == ' ') {
+    name.pop_back();
+  }
+  TruncateUtf8(name, kMaxConditionNameBytes);
+  conditions_custom_edit_ = false;
+  conditions_custom_buffer_.clear();
+  if (name.empty() || conditions_read_only_) {
+    return;
+  }
+  const auto exists = std::ranges::any_of(
+      conditions_draft_,
+      [&name](const Condition& item) -> bool { return item.name == name; });
+  if (!exists) {
+    conditions_draft_.emplace_back(
+        name, until_removed ? 0 : kDefaultConditionSeconds);
+  }
+  SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
+                                .conditions = conditions_draft_});
+}
+
 auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
-  if (conditions_dc_edit_) {
+  if (conditions_dc_edit_ || conditions_custom_edit_) {
     if (key.key == SDLK_ESCAPE) {
       conditions_dc_edit_ = false;
       conditions_dc_buffer_.clear();
+      conditions_custom_edit_ = false;
+      conditions_custom_buffer_.clear();
       return;
     }
     if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
-      ApplyConditionDc();
+      if (conditions_dc_edit_) {
+        ApplyConditionDc();
+      } else {
+        ApplyConditionCustom((key.mod & SDL_KMOD_SHIFT) != 0);
+      }
       return;
     }
     if (key.key == SDLK_BACKSPACE) {
-      EraseLastCodePoint(conditions_dc_buffer_);
+      EraseLastCodePoint(conditions_dc_edit_ ? conditions_dc_buffer_
+                                             : conditions_custom_buffer_);
       return;
     }
     return;
@@ -2453,6 +2574,22 @@ auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
   }
   if (key.key == SDLK_DOWN && count > 0) {
     conditions_selected_ = (conditions_selected_ + 1) % count;
+    return;
+  }
+  if (key.key == SDLK_SPACE || key.key == SDLK_RETURN ||
+      key.key == SDLK_KP_ENTER) {
+    ToggleCondition(static_cast<int>(conditions_selected_),
+                    (key.mod & SDL_KMOD_SHIFT) != 0);
+    return;
+  }
+  if (key.key == SDLK_T) {
+    conditions_custom_edit_ = true;
+    conditions_custom_buffer_.clear();
+    conditions_custom_ignore_text_ = true;
+    return;
+  }
+  if (key.key == SDLK_MINUS || key.key == SDLK_KP_MINUS) {
+    RemoveExhaustionLevelFromDraft();
     return;
   }
   if (key.key == SDLK_C) {
@@ -2480,17 +2617,27 @@ auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
                                   .conditions = conditions_draft_});
     return;
   }
-  if (key.key >= SDLK_1 && key.key <= SDLK_8) {
+  if (key.key >= SDLK_1 && key.key <= SDLK_9) {
     ToggleCondition(static_cast<int>(key.key - SDLK_1),
                     (key.mod & SDL_KMOD_SHIFT) != 0);
   }
 }
 
 auto App::HandleConditionsTextInput(const char* text) -> void {
-  if (text == nullptr || conditions_read_only_ || !conditions_dc_edit_) {
+  if (text == nullptr || conditions_read_only_) {
     return;
   }
-  AppendBoundedNumber(conditions_dc_buffer_, text, 0, kMaxSaveDc, false);
+  if (conditions_dc_edit_) {
+    AppendBoundedNumber(conditions_dc_buffer_, text, 0, kMaxSaveDc, false);
+    return;
+  }
+  if (conditions_custom_edit_) {
+    if (conditions_custom_ignore_text_) {
+      conditions_custom_ignore_text_ = false;
+      return;
+    }
+    AppendUtf8(conditions_custom_buffer_, text, kMaxConditionNameBytes);
+  }
 }
 
 auto App::ApplyConditionDc() -> void {
@@ -2710,8 +2857,9 @@ auto App::SubmitChat() -> void {
         view_.AddLocalLine("Урон по области наносит только DM");
         return;
       }
-      SendCommand(
-          AoeDamage{.expression = command.text, .save_dc = command.save_dc});
+      SendCommand(AoeDamage{.expression = command.text,
+                            .save_dc = command.save_dc,
+                            .damage_type = command.damage_type});
       return;
     case ChatCommandKind::kOwner:
       if (token == nullptr) {
@@ -2754,7 +2902,9 @@ auto App::SubmitChat() -> void {
       if (command.kind == ChatCommandKind::kHeal) {
         SendCommand(HealToken{.id = token->id, .amount = command.value});
       } else {
-        SendCommand(DamageToken{.id = token->id, .amount = command.value});
+        SendCommand(DamageToken{.id = token->id,
+                                .amount = command.value,
+                                .damage_type = command.damage_type});
       }
       return;
     case ChatCommandKind::kDeathSave:
@@ -3783,10 +3933,15 @@ auto App::Iterate() -> void {
   if (show_movement_range_) {
     const Token* range_token = FindSelectedToken();
     if (range_token != nullptr) {
-      int radius = SpeedToCells(range_token->speed);
+      const int budget = EffectiveSpeedCells(*range_token);
+      int radius = budget;
       if (encounter.active && !is_dm) {
-        radius = std::max(0, radius + range_token->movement_bonus -
+        radius = std::max(0, budget + range_token->movement_bonus -
                                  range_token->movement_used);
+        // Встать из «сбит с ног» стоит половину скорости.
+        if (HasCondition(*range_token, "сбит с ног")) {
+          radius = std::max(0, radius - std::max(1, budget / 2));
+        }
       }
       // Монстры и NPC перекрывают путь, персонажи — нет; встать на занятую
       // клетку всё равно нельзя, поэтому её не показываем.
@@ -3890,7 +4045,9 @@ auto App::Iterate() -> void {
       DrawSheetPanel(renderer_, text_.get(), *sheet_token, sheet_field_,
                      sheet_ac_, sheet_speed_, sheet_attack_, sheet_save_,
                      sheet_initiative_, sheet_temp_hp_, sheet_hit_die_,
-                     sheet_con_, sheet_damage_, sheet_notes_, sheet_read_only_);
+                     sheet_con_, sheet_range_, sheet_damage_, sheet_resist_,
+                     sheet_vulnerable_, sheet_immune_, sheet_notes_,
+                     sheet_read_only_);
     }
   }
   if (bestiary_active_) {
@@ -3921,7 +4078,8 @@ auto App::Iterate() -> void {
       DrawConditionsPanel(renderer_, text_.get(), *condition_token,
                           conditions_draft_, conditions_read_only_,
                           conditions_selected_, conditions_dc_edit_,
-                          conditions_dc_buffer_);
+                          conditions_dc_buffer_, conditions_custom_edit_,
+                          conditions_custom_buffer_);
     }
   }
   if (actions_active_) {

@@ -65,13 +65,6 @@ auto IsValidKind(TokenKind kind) -> bool {
          kind == TokenKind::kMonster;
 }
 
-auto HasCondition(const Token& token, std::string_view name) -> bool {
-  return std::ranges::any_of(token.conditions,
-                             [name](const Condition& condition) -> bool {
-                               return condition.name == name;
-                             });
-}
-
 auto IsIncapacitated(const Token& token) -> bool {
   if (token.hp == 0) {
     return true;
@@ -127,7 +120,7 @@ auto TurnActionName(TurnActionKind kind) -> const char* {
 auto TurnActionEffect(TurnActionKind kind, const Token& token) -> std::string {
   switch (kind) {
     case TurnActionKind::kDash:
-      return " — ещё " + FormatMeters(SpeedToCells(token.speed)) + " движения";
+      return " — ещё " + FormatMeters(EffectiveSpeedCells(token)) + " движения";
     case TurnActionKind::kDisengage:
       return " — движение не вызывает атак по возможности";
     case TurnActionKind::kDodge:
@@ -305,6 +298,11 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   if (!can_control_all && !IsExploredTo(actor, command.target)) {
     return CommandOutcome{.reject_reason = "клетка не разведана"};
   }
+  // Захваченный, опутанный, парализованный и лежащий без сознания не
+  // двигаются: скорость 0 (SRD 5.2.1).
+  if (!can_control_all && IsSpeedZeroed(*token)) {
+    return CommandOutcome{.reject_reason = "скорость 0: персонаж обездвижен"};
+  }
 
   // Проверяем путь и для игрока вне боя: сквозь стены и монстров нельзя.
   // Свои персонажи друг друга не блокируют, но встать на занятую клетку
@@ -327,6 +325,10 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   }
 
   const bool budgeted = state_.EncounterState().active && !can_control_all;
+  // Встать из положения «сбит с ног» стоит половину скорости (2024).
+  const bool prone = HasCondition(*token, "сбит с ног");
+  const int stand_cost =
+      prone && budgeted ? std::max(1, EffectiveSpeedCells(*token) / 2) : 0;
   std::optional<PathCost> path;
   if (!can_control_all) {
     path = PathCostCells(state_.Map(), token->cell, command.target,
@@ -336,9 +338,11 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
     }
   }
   if (budgeted) {
-    const int budget = SpeedToCells(token->speed) + token->movement_bonus;
-    if (token->movement_used + path->cost > budget) {
-      return CommandOutcome{.reject_reason = "не хватает движения на ход"};
+    const int budget = EffectiveSpeedCells(*token) + token->movement_bonus;
+    if (token->movement_used + stand_cost + path->cost > budget) {
+      return CommandOutcome{.reject_reason =
+                                prone ? "не хватает движения, чтобы встать"
+                                      : "не хватает движения на ход"};
     }
   }
 
@@ -351,11 +355,16 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(*event);
+  std::optional<Token> updated;
+  if (prone) {
+    updated = state_.RemoveTokenCondition(command.id, "сбит с ног");
+  }
   if (budgeted) {
-    if (std::optional<Token> moved = state_.SpendMovement(
-            command.id, path->cost, path->diagonal_parity)) {
-      outcome.events.emplace_back(TokenUpdated{.token = std::move(*moved)});
-    }
+    updated = state_.SpendMovement(command.id, path->cost + stand_cost,
+                                   path->diagonal_parity);
+  }
+  if (updated.has_value()) {
+    outcome.events.emplace_back(TokenUpdated{.token = std::move(*updated)});
   }
   return outcome;
 }
@@ -478,9 +487,18 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   }
   if (!command.damage.empty()) {
     DiceExpression damage;
-    if (!ParseDiceExpression(command.damage, damage)) {
+    DamageType damage_type = DamageType::kNone;
+    if (!ParseDamageProfile(command.damage, damage, damage_type)) {
       return CommandOutcome{.reject_reason = "некорректное выражение урона"};
     }
+  }
+  if (command.attack_range < 0 || command.attack_range > kMaxSpeed) {
+    return CommandOutcome{.reject_reason = "некорректная дистанция атаки"};
+  }
+  if (!IsValidDamageTypeBit(command.resist) ||
+      !IsValidDamageTypeBit(command.vulnerable) ||
+      !IsValidDamageTypeBit(command.immune)) {
+    return CommandOutcome{.reject_reason = "некорректная защита от урона"};
   }
   std::string owner = command.owner;
   if (owner.size() > kMaxTokenName) {
@@ -494,7 +512,8 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   const TokenId id = state_.AddToken(
       name, command.cell, std::move(owner), command.kind, command.max_hp, 0,
       command.ac, command.speed, command.notes, command.attack_bonus,
-      command.save_bonus, command.damage);
+      command.save_bonus, command.damage, command.attack_range, command.resist,
+      command.vulnerable, command.immune);
   const std::optional<Token> token = state_.TokenCopy(id);
   if (!token.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось создать токен"};
@@ -576,24 +595,56 @@ auto GameServer::HandleDamage(const DamageToken& command,
   }
   CommandOutcome outcome;
   outcome.accepted = true;
-  DamageAndLog(command.id, command.amount, false, actor, outcome.events);
+  DamageAndLog(command.id, command.amount, false, command.damage_type, actor,
+               outcome.events);
   return outcome;
 }
 
 auto GameServer::DamageAndLog(TokenId id, int amount, bool critical,
-                              const std::string& actor,
+                              DamageType damage_type, const std::string& actor,
                               std::vector<Event>& events) -> void {
   const Token* token = FindToken(id);
   if (token == nullptr) {
     return;
   }
   const std::string name = token->name;
+  // Сопротивление, уязвимость и иммунитет цели (SRD 5.2.1).
+  const DamageProfile profile = EffectiveDamageProfile(*token);
+  const int dealt = AdjustedDamage(amount, damage_type, profile);
+  const std::uint32_t type_bit =
+      damage_type == DamageType::kNone ? 0 : DamageTypeBit(damage_type);
+  const bool immune = type_bit != 0 && (profile.immune & type_bit) != 0;
+  const bool resisted = type_bit != 0 && (profile.resist & type_bit) != 0;
+  const bool vulnerable = type_bit != 0 && (profile.vulnerable & type_bit) != 0;
+
+  std::ostringstream text;
+  text << name << " получил " << dealt << " урона";
+  if (damage_type != DamageType::kNone) {
+    text << " (" << DamageTypeName(damage_type) << ")";
+  }
+  if (resisted && !immune) {
+    text << "; сопротивление";
+  }
+  if (vulnerable && !immune) {
+    text << "; уязвимость";
+  }
+  if (immune) {
+    text << "; иммунитет";
+  }
+  if (dealt <= 0) {
+    events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = AuthorName(actor),
+                        .text = text.str(),
+                        .timestamp = CurrentTimeSeconds()},
+    });
+    return;
+  }
   const int temp_before = token->temp_hp;
   const int hp_before = token->hp;
-  const int save_bonus = token->save_bonus;
+  const int save_bonus = token->save_bonus - ExhaustionPenalty(*token);
   const bool was_dead = HasCondition(*token, kDead);
   const bool concentrating = HasCondition(*token, kConcentration);
-  std::optional<Token> updated = state_.DamageToken(id, amount, critical);
+  std::optional<Token> updated = state_.DamageToken(id, dealt, critical);
   if (!updated.has_value()) {
     return;
   }
@@ -607,9 +658,7 @@ auto GameServer::DamageAndLog(TokenId id, int amount, bool critical,
     }
   }
   const bool died = !was_dead && HasCondition(*updated, kDead);
-  const int absorbed = std::min(temp_before, amount);
-  std::ostringstream text;
-  text << name << " получил " << amount << " урона";
+  const int absorbed = std::min(temp_before, dealt);
   if (absorbed > 0) {
     text << " (" << absorbed << " из временных HP)";
   }
@@ -639,7 +688,7 @@ auto GameServer::DamageAndLog(TokenId id, int amount, bool critical,
   // полученного урона, но не выше 30. Провал снимает состояние
   // «концентрация». Бонус спасброска в листе один на все спасброски —
   // упрощение проекта (см. AGENTS.md).
-  const int dc = ConcentrationDc(amount);
+  const int dc = ConcentrationDc(dealt);
   std::uniform_int_distribution<int> d20(1, 20);
   const int roll = d20(rng_) + save_bonus;
   std::ostringstream check;
@@ -709,34 +758,60 @@ auto GameServer::HandleAttack(const AttackToken& command,
     return CommandOutcome{.reject_reason =
                               "нельзя одновременно преимущество и помеху"};
   }
-  // Уклонение даёт помеху атакам по токену. Преимущество и помеха взаимно
-  // гасятся, как и любые другие источники (SRD 5.2.1).
-  bool advantage = command.advantage;
-  bool disadvantage = command.disadvantage;
-  if (target->dodging) {
-    if (advantage) {
-      advantage = false;
-    } else {
-      disadvantage = true;
+  const int distance_cells =
+      std::max(std::abs(attacker->cell.x - target->cell.x),
+               std::abs(attacker->cell.y - target->cell.y));
+  const int attack_range = attacker->attack_range;
+  if (attack_range > 0 && distance_cells > attack_range * 2) {
+    return CommandOutcome{.reject_reason = "цель за пределами дистанции"};
+  }
+  // Дальнобойная атака в 5 футах от другого противника идёт с помехой.
+  // Враждебность в токенах не хранится, поэтому учитывается любой сосед,
+  // кроме самой цели: упрощение проекта.
+  bool threatened = false;
+  if (attack_range > 0) {
+    for (const Token& other : state_.Tokens()) {
+      if (other.id != attacker->id && other.id != target->id &&
+          AreAdjacent(other.cell, attacker->cell)) {
+        threatened = true;
+        break;
+      }
     }
   }
+  // Преимущество и помеха от состояний 2024 складываются с ручными и взаимно
+  // гасятся (SRD 5.2.1).
+  const AttackRollModes modes = AttackRollModesFor(
+      *attacker, *target, distance_cells, attack_range, threatened);
+  bool advantage = command.advantage || modes.advantage;
+  bool disadvantage = command.disadvantage || modes.disadvantage;
+  if (advantage && disadvantage) {
+    advantage = false;
+    disadvantage = false;
+  }
   DiceExpression damage;
+  DamageType damage_type = DamageType::kNone;
   if (attacker->damage.size() > kMaxDamageExpression ||
       (!attacker->damage.empty() &&
-       !ParseDiceExpression(attacker->damage, damage))) {
+       !ParseDamageProfile(attacker->damage, damage, damage_type))) {
     return CommandOutcome{.reject_reason = "некорректное выражение урона"};
   }
+  // Истощение: −2 ко всем d20 за уровень.
+  const int exhaustion = ExhaustionPenalty(*attacker);
+  const int effective_bonus = attacker->attack_bonus - exhaustion;
 
   const DiceExpression attack{
       .count = 1,
       .sides = 20,
-      .modifier = attacker->attack_bonus,
+      .modifier = effective_bonus,
       .advantage = advantage,
       .disadvantage = disadvantage,
   };
   const DiceRollResult roll = RollDiceExpression(attack, rng_);
   const AttackCheck check =
-      CheckAttack(roll.chosen, attacker->attack_bonus, target->ac);
+      CheckAttack(roll.chosen, effective_bonus, target->ac);
+  const bool critical =
+      check.critical ||
+      (check.hit && IsAutoCriticalOnHit(*target, distance_cells));
 
   std::ostringstream text;
   text << "Атака" << (is_reaction ? " (реакция)" : "") << ": " << attacker->name
@@ -746,8 +821,11 @@ auto GameServer::HandleAttack(const AttackToken& command,
   } else if (disadvantage) {
     text << " с помехой";
   }
-  text << ": d20" << (attacker->attack_bonus >= 0 ? " + " : " - ")
-       << std::abs(attacker->attack_bonus) << " = " << roll.breakdown;
+  if (exhaustion > 0) {
+    text << " (истощение −" << exhaustion << ")";
+  }
+  text << ": d20" << (effective_bonus >= 0 ? " + " : " - ")
+       << std::abs(effective_bonus) << " = " << roll.breakdown;
   if (roll.breakdown != std::to_string(roll.total)) {
     text << " = " << roll.total;
   }
@@ -762,10 +840,9 @@ auto GameServer::HandleAttack(const AttackToken& command,
   } else if (attacker->damage.empty()) {
     text << " — попадание, урон не задан";
   } else {
-    const DiceRollResult damage_roll =
-        RollAttackDamage(damage, check.critical, rng_);
-    text << (check.critical ? " — критическое попадание, урон "
-                            : " — попадание, урон ")
+    const DiceRollResult damage_roll = RollAttackDamage(damage, critical, rng_);
+    text << (critical ? " — критическое попадание, урон "
+                      : " — попадание, урон ")
          << damage_roll.breakdown;
     if (damage_roll.breakdown != std::to_string(damage_roll.total)) {
       text << " = " << damage_roll.total;
@@ -787,7 +864,7 @@ auto GameServer::HandleAttack(const AttackToken& command,
     }
   }
   if (applied_damage > 0) {
-    DamageAndLog(target_id, applied_damage, check.critical, actor,
+    DamageAndLog(target_id, applied_damage, critical, damage_type, actor,
                  outcome.events);
   }
   return outcome;
@@ -973,8 +1050,11 @@ auto GameServer::HandleAoeDamage(const AoeDamage& command, bool can_control_all)
   CommandOutcome outcome;
   outcome.accepted = true;
   std::ostringstream header;
-  header << "Область: " << command.expression << " = " << total_damage
-         << ", спасбросок " << command.save_dc;
+  header << "Область: " << command.expression << " = " << total_damage;
+  if (command.damage_type != DamageType::kNone) {
+    header << " " << DamageTypeName(command.damage_type);
+  }
+  header << ", спасбросок " << command.save_dc;
   outcome.events.emplace_back(LogLineAdded{
       .line = LogLine{.author = "DM",
                       .text = header.str(),
@@ -987,9 +1067,14 @@ auto GameServer::HandleAoeDamage(const AoeDamage& command, bool can_control_all)
       continue;
     }
     const std::string name = token.name;
-    const int roll = d20(rng_) + token.save_bonus;
+    const int save_bonus = token.save_bonus - ExhaustionPenalty(token);
+    const int roll = d20(rng_) + save_bonus;
     const bool success = roll >= command.save_dc;
-    const int damage = success ? total_damage / 2 : total_damage;
+    const DamageProfile profile = EffectiveDamageProfile(token);
+    // Сопротивление, уязвимость и иммунитет применяются после половинного
+    // урона за успешный спасбросок.
+    const int damage = AdjustedDamage(success ? total_damage / 2 : total_damage,
+                                      command.damage_type, profile);
     if (damage > 0) {
       if (std::optional<Token> updated = state_.DamageToken(token.id, damage)) {
         outcome.events.emplace_back(TokenUpdated{.token = std::move(*updated)});
@@ -998,6 +1083,19 @@ auto GameServer::HandleAoeDamage(const AoeDamage& command, bool can_control_all)
     std::ostringstream line;
     line << name << ": спасбросок " << roll << " против " << command.save_dc
          << (success ? " — успех, " : " — провал, ") << damage << " урона";
+    const std::uint32_t type_bit = command.damage_type == DamageType::kNone
+                                       ? 0
+                                       : DamageTypeBit(command.damage_type);
+    if (type_bit != 0 && (profile.immune & type_bit) != 0) {
+      line << " (иммунитет)";
+    } else if (type_bit != 0) {
+      if ((profile.resist & type_bit) != 0) {
+        line << " (сопротивление)";
+      }
+      if ((profile.vulnerable & type_bit) != 0) {
+        line << " (уязвимость)";
+      }
+    }
     outcome.events.emplace_back(LogLineAdded{
         .line = LogLine{.author = "DM",
                         .text = line.str(),
@@ -1034,12 +1132,18 @@ auto GameServer::HandleDeathSave(const DeathSave& command,
   const std::string name = token->name;
   std::uniform_int_distribution<int> d20(1, 20);
   const int roll = d20(rng_);
-  const std::optional<Token> updated = state_.DeathSave(command.id, roll);
+  const int penalty = ExhaustionPenalty(*token);
+  const std::optional<Token> updated =
+      state_.DeathSave(command.id, roll, penalty);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось бросить спасбросок"};
   }
   std::ostringstream text;
   text << name << ": спасбросок от смерти " << roll;
+  const int effective = roll - penalty;
+  if (penalty > 0 && roll != 1 && roll != 20) {
+    text << " − " << penalty << " (истощение) = " << effective;
+  }
   if (roll == 20) {
     text << " — критический успех, 1 HP";
   } else if (roll == 1) {
@@ -1048,7 +1152,7 @@ auto GameServer::HandleDeathSave(const DeathSave& command,
     if (updated->death_save_failures >= 3) {
       text << ", персонаж погиб";
     }
-  } else if (roll >= 10) {
+  } else if (effective >= 10) {
     text << " — успех (" << updated->death_save_successes << "/3)";
     if (updated->death_save_successes >= 3) {
       text << ", стабилен";
@@ -1301,9 +1405,18 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   }
   if (!command.damage.empty()) {
     DiceExpression damage;
-    if (!ParseDiceExpression(command.damage, damage)) {
+    DamageType damage_type = DamageType::kNone;
+    if (!ParseDamageProfile(command.damage, damage, damage_type)) {
       return CommandOutcome{.reject_reason = "некорректное выражение урона"};
     }
+  }
+  if (command.attack_range < 0 || command.attack_range > kMaxSpeed) {
+    return CommandOutcome{.reject_reason = "некорректная дистанция атаки"};
+  }
+  if (!IsValidDamageTypeBit(command.resist) ||
+      !IsValidDamageTypeBit(command.vulnerable) ||
+      !IsValidDamageTypeBit(command.immune)) {
+    return CommandOutcome{.reject_reason = "некорректная защита от урона"};
   }
   if (command.temp_hp < 0 || command.temp_hp > kMaxTempHp) {
     return CommandOutcome{.reject_reason = "некорректные временные HP"};
@@ -1320,7 +1433,8 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   const std::optional<Token> updated = state_.UpdateTokenSheet(
       command.id, command.ac, command.speed, command.notes,
       command.attack_bonus, command.save_bonus, command.initiative_bonus,
-      command.damage, command.temp_hp, command.hit_die, command.con_modifier);
+      command.damage, command.temp_hp, command.hit_die, command.con_modifier,
+      command.attack_range, command.resist, command.vulnerable, command.immune);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }
@@ -1336,11 +1450,28 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
                   command.save_bonus);
   AppendIntChange(changes, "бонус инициативы", before.initiative_bonus,
                   command.initiative_bonus);
-  AppendIntChange(changes, "временные HP", before.temp_hp, command.temp_hp);
+  AppendIntChange(changes, "временные HP", before.temp_hp, updated->temp_hp);
   AppendIntChange(changes, "мод. Телосложения", before.con_modifier,
                   command.con_modifier);
+  AppendIntChange(changes, "дистанция атаки", before.attack_range,
+                  command.attack_range);
   if (before.hit_die != command.hit_die) {
     changes.emplace_back("кость хитов d" + std::to_string(command.hit_die));
+  }
+  if (before.resist != updated->resist) {
+    const std::string list = FormatDamageTypeList(updated->resist);
+    changes.emplace_back("сопротивления " +
+                         (list.empty() ? std::string("нет") : list));
+  }
+  if (before.vulnerable != updated->vulnerable) {
+    const std::string list = FormatDamageTypeList(updated->vulnerable);
+    changes.emplace_back("уязвимости " +
+                         (list.empty() ? std::string("нет") : list));
+  }
+  if (before.immune != updated->immune) {
+    const std::string list = FormatDamageTypeList(updated->immune);
+    changes.emplace_back("иммунитеты " +
+                         (list.empty() ? std::string("нет") : list));
   }
   if (before.damage != command.damage) {
     changes.emplace_back("урон " +
@@ -1379,6 +1510,13 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
         condition.save_dc < 0 || condition.save_dc > kMaxSaveDc) {
       return CommandOutcome{.reject_reason = "некорректное состояние"};
     }
+  }
+  const auto exhaustion_level = std::ranges::count_if(
+      command.conditions, [](const Condition& condition) -> bool {
+        return condition.name == kExhaustion;
+      });
+  if (exhaustion_level > kMaxExhaustionLevel) {
+    return CommandOutcome{.reject_reason = "уровень истощения не выше 6"};
   }
   const Token before = *token;
   std::optional<Token> updated =
@@ -1443,6 +1581,15 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
                         .timestamp = CurrentTimeSeconds()},
     });
   }
+  // Шестой уровень истощения убивает: состояние выставили через панель, а
+  // смерть ставит GameState. Сообщаем об этом отдельной строкой.
+  if (!HasCondition(before, kDead) && HasCondition(*updated, kDead)) {
+    outcome.events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = "DM",
+                        .text = before.name + ": истощение 6 — смерть",
+                        .timestamp = CurrentTimeSeconds()},
+    });
+  }
   return outcome;
 }
 
@@ -1493,16 +1640,31 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
     return CommandOutcome{.reject_reason = "бой начинает только DM"};
   }
   const std::vector<TokenId> spent = TokensWithTurnState(state_);
-  // Инициатива бросается за всех сразу: d20 + бонус из листа. Это же
-  // значение потом можно поправить вручную через [ и ].
+  // Инициатива бросается за всех сразу: d20 + бонус из листа, минус
+  // истощение. Застигнутый врасплох бросает с помехой (два d20, меньший) и
+  // после броска теряет состояние: отдельного раунда неожиданности в 2024
+  // нет. Это же значение потом можно поправить вручную через [ и ].
   std::uniform_int_distribution<int> d20(1, 20);
   std::vector<std::pair<int, std::string>> rolls;
-  rolls.reserve(state_.Tokens().size());
+  const std::vector<Token> all_tokens = state_.Tokens();
+  rolls.reserve(all_tokens.size());
   std::vector<TokenId> changed = spent;
-  for (const Token& token : state_.Tokens()) {
-    const int value = d20(rng_) + token.initiative_bonus;
-    rolls.emplace_back(value, token.name);
+  for (const Token& token : all_tokens) {
+    const int bonus = token.initiative_bonus - ExhaustionPenalty(token);
+    const bool surprised = IsSurprised(token);
+    int value = d20(rng_) + bonus;
+    if (surprised) {
+      value = std::min(value, d20(rng_) + bonus);
+    }
+    const std::string label =
+        surprised ? token.name + " (застигнут врасплох)" : token.name;
+    rolls.emplace_back(value, label);
     if (state_.SetInitiative(token.id, value).has_value() &&
+        std::ranges::find(changed, token.id) == changed.end()) {
+      changed.push_back(token.id);
+    }
+    if (surprised &&
+        state_.RemoveTokenCondition(token.id, kSurprised).has_value() &&
         std::ranges::find(changed, token.id) == changed.end()) {
       changed.push_back(token.id);
     }
@@ -1581,7 +1743,8 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
       if (condition.save_dc <= 0) {
         continue;
       }
-      const int roll = d20(rng_) + ending->save_bonus;
+      const int save_bonus = ending->save_bonus - ExhaustionPenalty(*ending);
+      const int roll = d20(rng_) + save_bonus;
       const bool success = roll >= condition.save_dc;
       std::string text = "спасбросок " + std::to_string(roll) + " против КС " +
                          std::to_string(condition.save_dc);

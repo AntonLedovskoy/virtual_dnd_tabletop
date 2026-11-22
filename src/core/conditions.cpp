@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "core/token.h"
+#include "core/units.h"
 
 namespace dnd {
 namespace {
@@ -69,16 +69,137 @@ auto DefaultConditions() -> const std::vector<std::string>& {
   // локальных констант ждёт lower_case.
   // NOLINTNEXTLINE(readability-identifier-naming)
   static const std::vector<std::string> kConditions{
-      "сбит с ног",
-      "отравлен",
+      "ослеплён",
+      "очарован",
+      "оглох",
       "испуган",
       "захвачен",
+      std::string(kIncapacitated),
+      "невидим",
+      "парализован",
+      "окаменел",
+      "отравлен",
+      "сбит с ног",
       "опутан",
       "оглушён",
       std::string(kUnconscious),
-      std::string(kConcentration),
+      std::string(kExhaustion),
+      std::string(kSurprised),
   };
   return kConditions;
+}
+
+auto HasCondition(const Token& token, std::string_view name) -> bool {
+  return std::ranges::any_of(token.conditions,
+                             [name](const Condition& condition) -> bool {
+                               return condition.name == name;
+                             });
+}
+
+auto ExhaustionLevel(const std::vector<Condition>& conditions) -> int {
+  const auto count =
+      std::ranges::count_if(conditions, [](const Condition& condition) -> bool {
+        return condition.name == kExhaustion;
+      });
+  return std::min(kMaxExhaustionLevel, static_cast<int>(count));
+}
+
+auto ExhaustionLevel(const Token& token) -> int {
+  return ExhaustionLevel(token.conditions);
+}
+
+auto ExhaustionPenalty(const Token& token) -> int {
+  return 2 * ExhaustionLevel(token);
+}
+
+auto ExhaustionSpeedPenaltyCells(const Token& token) -> int {
+  // В проекте клетка — 1,5 м, то есть 5 футов: штраф −5 футов за уровень.
+  return ExhaustionLevel(token);
+}
+
+auto IsSpeedZeroed(const Token& token) -> bool {
+  return HasCondition(token, "захвачен") || HasCondition(token, "опутан") ||
+         HasCondition(token, "парализован") || HasCondition(token, "оглушён") ||
+         HasCondition(token, "окаменел") || HasCondition(token, kUnconscious) ||
+         HasCondition(token, kDead);
+}
+
+auto EffectiveSpeedCells(const Token& token) -> int {
+  if (IsSpeedZeroed(token)) {
+    return 0;
+  }
+  const int base =
+      SpeedToCells(token.speed) - ExhaustionSpeedPenaltyCells(token);
+  return std::max(0, base);
+}
+
+auto AttackRollModesFor(const Token& attacker, const Token& target,
+                        int distance_cells, int attack_range_cells,
+                        bool threatened) -> AttackRollModes {
+  AttackRollModes modes;
+  const auto advantage = [&modes]() -> void { modes.advantage = true; };
+  const auto disadvantage = [&modes]() -> void { modes.disadvantage = true; };
+
+  // Атакующий: ослеплён, отравлен, испуган, сбит с ног, опутан.
+  if (HasCondition(attacker, "ослеплён") ||
+      HasCondition(attacker, "отравлен") || HasCondition(attacker, "испуган") ||
+      HasCondition(attacker, "сбит с ног") ||
+      HasCondition(attacker, "опутан")) {
+    disadvantage();
+  }
+  if (HasCondition(attacker, "невидим")) {
+    advantage();
+  }
+  // Цель: ослеплена, невидима, сбита с ног, опутана, обездвижена.
+  if (HasCondition(target, "ослеплён") || HasCondition(target, "опутан") ||
+      HasCondition(target, "парализован") || HasCondition(target, "оглушён") ||
+      HasCondition(target, "окаменел") || HasCondition(target, kUnconscious)) {
+    advantage();
+  }
+  if (HasCondition(target, "невидим")) {
+    disadvantage();
+  }
+  if (HasCondition(target, "сбит с ног")) {
+    // Лежачего бьют с преимуществом только в 5 футах, иначе с помехой.
+    if (distance_cells <= 1) {
+      advantage();
+    } else {
+      disadvantage();
+    }
+  }
+  if (target.dodging) {
+    disadvantage();
+  }
+  // Дальнобойная атака: на дистанции и в 5 футах от другого противника.
+  if (attack_range_cells > 0) {
+    if (distance_cells > attack_range_cells || threatened) {
+      disadvantage();
+    }
+  }
+  return modes;
+}
+
+auto IsAutoCriticalOnHit(const Token& target, int distance_cells) -> bool {
+  if (distance_cells > 1) {
+    return false;
+  }
+  return HasCondition(target, "парализован") ||
+         HasCondition(target, kUnconscious);
+}
+
+auto EffectiveDamageProfile(const Token& target) -> DamageProfile {
+  DamageProfile profile{.resist = target.resist,
+                        .vulnerable = target.vulnerable,
+                        .immune = target.immune};
+  if (HasCondition(target, "окаменел")) {
+    profile.resist |= kAllDamageTypes;
+    profile.immune |= DamageTypeBit(DamageType::kPoison);
+  }
+  return profile;
+}
+
+auto IsSurprised(const Token& token) -> bool {
+  return HasCondition(token, kSurprised);
 }
 
 }  // namespace dnd

@@ -59,7 +59,15 @@ struct Token {
   int attack_bonus = 0;
   int save_bonus = 0;
   int initiative_bonus = 0;
+  // «1d8+2 огонь»: выражение урона и необязательный тип в конце (core/damage).
   std::string damage;
+  // Защита от урона по типам: битовые маски core/damage.h.
+  std::uint32_t resist = 0;
+  std::uint32_t vulnerable = 0;
+  std::uint32_t immune = 0;
+  // Обычная дистанция атаки в клетках; 0 — ближний бой без ограничения
+  // дистанции (упрощение проекта), больше нуля — дальнобойная атака.
+  int attack_range = 0;
   std::vector<Condition> conditions;
   // Накопленный опыт; уровень считается по нему (core/levels.h).
   int xp = 0;

@@ -122,9 +122,10 @@ class GameServer {
       char*;
   // Наносит урон и добавляет события токена, лога и проверки концентрации.
   // critical — критическое попадание (урон по лежачему даёт два провала).
+  // Тип урона включает сопротивление, уязвимость и иммунитет цели.
   auto DamageAndLog(TokenId id, int amount, bool critical,
-                    const std::string& actor, std::vector<Event>& events)
-      -> void;
+                    DamageType damage_type, const std::string& actor,
+                    std::vector<Event>& events) -> void;
   [[nodiscard]] auto HandleHeal(const HealToken& command,
                                 const std::string& actor, bool can_control_all)
       -> CommandOutcome;

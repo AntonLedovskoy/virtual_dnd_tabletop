@@ -39,14 +39,13 @@ class GameState {
   [[nodiscard]] auto Snapshot() const -> GameSnapshot;
   [[nodiscard]] auto TokenCopy(TokenId id) const -> std::optional<Token>;
 
-  [[nodiscard]] auto AddToken(std::string name, Cell cell,
-                              std::string owner = {},
-                              TokenKind kind = TokenKind::kPlayer,
-                              int max_hp = 10, std::uint32_t color = 0,
-                              int ac = 10, int speed = 9,
-                              std::string notes = {}, int attack_bonus = 0,
-                              int save_bonus = 0, std::string damage = {})
-      -> TokenId;
+  [[nodiscard]] auto AddToken(
+      std::string name, Cell cell, std::string owner = {},
+      TokenKind kind = TokenKind::kPlayer, int max_hp = 10,
+      std::uint32_t color = 0, int ac = 10, int speed = 9,
+      std::string notes = {}, int attack_bonus = 0, int save_bonus = 0,
+      std::string damage = {}, int attack_range = 0, std::uint32_t resist = 0,
+      std::uint32_t vulnerable = 0, std::uint32_t immune = 0) -> TokenId;
 
   // Применяет команду клиента; возвращает событие для рассылки, если команда
   // изменила мир.
@@ -68,8 +67,10 @@ class GameState {
   [[nodiscard]] auto HealToken(TokenId id, int amount) -> std::optional<Token>;
   // Бросок спасброска от смерти при hp == 0; roll — уже выпавший d20.
   // Натуральная 1 даёт два провала, 20 возвращает 1 HP. Три успеха оставляют
-  // персонажа стабильным, но всё ещё без сознания на нуле HP.
-  [[nodiscard]] auto DeathSave(TokenId id, int roll) -> std::optional<Token>;
+  // персонажа стабильным, но всё ещё без сознания на нуле HP. penalty —
+  // истощение: оно вычитается из результата, но не из натурального значения.
+  [[nodiscard]] auto DeathSave(TokenId id, int roll, int penalty = 0)
+      -> std::optional<Token>;
   // Отдых по правилам 2024. Короткий (1 час) тратит кости хитов на HP:
   // каждая даёт бросок d{hit_die} плюс модификатор Телосложения (не меньше
   // единицы), пока не восстановлен максимум или не кончился запас. Длинный
@@ -96,12 +97,12 @@ class GameState {
   // Пустой portrait снимает картинку и возвращает цвет с инициалами.
   [[nodiscard]] auto SetTokenPortrait(TokenId id, std::string portrait)
       -> std::optional<Token>;
-  [[nodiscard]] auto UpdateTokenSheet(TokenId id, int ac, int speed,
-                                      std::string notes, int attack_bonus,
-                                      int save_bonus, int initiative_bonus,
-                                      std::string damage, int temp_hp,
-                                      int hit_die, int con_modifier)
-      -> std::optional<Token>;
+  [[nodiscard]] auto UpdateTokenSheet(
+      TokenId id, int ac, int speed, std::string notes, int attack_bonus,
+      int save_bonus, int initiative_bonus, std::string damage, int temp_hp,
+      int hit_die, int con_modifier, int attack_range = 0,
+      std::uint32_t resist = 0, std::uint32_t vulnerable = 0,
+      std::uint32_t immune = 0) -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenCombat(TokenId id,
                                        std::vector<Condition> conditions)
       -> std::optional<Token>;

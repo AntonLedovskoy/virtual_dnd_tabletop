@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "core/damage.h"
 #include "core/grid_map.h"
 #include "core/token.h"
 
@@ -24,6 +25,11 @@ struct MonsterTemplate {
   int save_bonus = 0;
   std::string damage;
   std::string notes;
+  // Дальнобойная атака в клетках (0 — без ограничения) и защита от урона.
+  int attack_range = 0;
+  std::uint32_t resist = 0;
+  std::uint32_t vulnerable = 0;
+  std::uint32_t immune = 0;
 };
 
 [[nodiscard]] auto DefaultBestiary() -> const std::vector<MonsterTemplate>&;

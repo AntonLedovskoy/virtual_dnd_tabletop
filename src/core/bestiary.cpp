@@ -18,7 +18,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 9,
           .attack_bonus = 4,
           .save_bonus = 0,
-          .damage = "1d6+2",
+          .damage = "1d6+2 рубящий",
           .notes = "Скимитар: +4, 1d6+2; короткий лук: +4, 1d6+2",
       },
       MonsterTemplate{
@@ -28,7 +28,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 12,
           .attack_bonus = 4,
           .save_bonus = 0,
-          .damage = "2d4+2",
+          .damage = "2d4+2 колющий",
           .notes = "Укус: +4, 2d4+2; тактика стаи",
       },
       MonsterTemplate{
@@ -38,7 +38,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 9,
           .attack_bonus = 3,
           .save_bonus = 0,
-          .damage = "1d6+1",
+          .damage = "1d6+1 рубящий",
           .notes = "Скимитар: +3, 1d6+1; лёгкий арбалет: +3, 1d8+1",
       },
       MonsterTemplate{
@@ -48,8 +48,10 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 9,
           .attack_bonus = 4,
           .save_bonus = 0,
-          .damage = "1d6+2",
+          .damage = "1d6+2 рубящий",
           .notes = "Короткий меч: +4, 1d6+2; уязвим к дробящему",
+          .vulnerable = DamageTypeBit(DamageType::kBludgeoning),
+          .immune = DamageTypeBit(DamageType::kPoison),
       },
       MonsterTemplate{
           .name = "Огр",
@@ -58,7 +60,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 12,
           .attack_bonus = 6,
           .save_bonus = 0,
-          .damage = "2d8+4",
+          .damage = "2d8+4 дробящий",
           .notes = "Дубина: +6, 2d8+4; большой размер",
       },
       MonsterTemplate{
@@ -68,8 +70,9 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 6,
           .attack_bonus = 3,
           .save_bonus = 0,
-          .damage = "1d6+1",
+          .damage = "1d6+1 дробящий",
           .notes = "Удар: +3, 1d6+1; стойкость нежити",
+          .immune = DamageTypeBit(DamageType::kPoison),
       },
       MonsterTemplate{
           .name = "Орк",
@@ -78,7 +81,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 9,
           .attack_bonus = 5,
           .save_bonus = 0,
-          .damage = "1d12+3",
+          .damage = "1d12+3 рубящий",
           .notes = "Секира: +5, 1d12+3; ярость при виде крови",
       },
       MonsterTemplate{
@@ -88,7 +91,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 9,
           .attack_bonus = 4,
           .save_bonus = 0,
-          .damage = "1d4+2",
+          .damage = "1d4+2 колющий",
           .notes = "Кинжал: +4, 1d4+2; тактика стаи, ловушки",
       },
       MonsterTemplate{
@@ -98,7 +101,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .speed = 12,
           .attack_bonus = 5,
           .save_bonus = 0,
-          .damage = "1d8+3",
+          .damage = "1d8+3 яд",
           .notes = "Укус: +5, 1d8+3 и яд; паутина, лазание",
       },
   };

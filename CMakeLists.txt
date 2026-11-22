@@ -125,6 +125,7 @@ add_library(dnd_core STATIC
   src/core/chat_input.cpp
   src/core/client_view.cpp
   src/core/conditions.cpp
+  src/core/damage.cpp
   src/core/delete_confirm.cpp
   src/core/dice.cpp
   src/core/game_server.cpp

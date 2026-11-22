@@ -228,22 +228,32 @@ inline constexpr std::string_view kSheetInitiative = "Бонус инициат�
 inline constexpr std::string_view kSheetTempHp = "Временные HP";
 inline constexpr std::string_view kSheetHitDie = "Кость хитов (d6–d12)";
 inline constexpr std::string_view kSheetCon = "Мод. Телосложения";
+inline constexpr std::string_view kSheetRange = "Дальность атаки";
+inline constexpr std::string_view kSheetResist =
+    "Сопротивления (через запятую)";
+inline constexpr std::string_view kSheetVulnerable = "Уязвимости";
+inline constexpr std::string_view kSheetImmune = "Иммунитеты";
 inline constexpr std::string_view kSheetProficiency = "Мастерство";
 inline constexpr std::string_view kSheetPerLevel = "HP за уровень";
 inline constexpr std::string_view kSheetLevel = "Уровень";
 inline constexpr std::string_view kSheetXp = "Опыт";
 inline constexpr std::string_view kConditions = "Состояния";
 inline constexpr std::string_view kConditionsHint =
-    "1–8 — вкл/выкл | ↑↓ — выбор | C — КС | Esc — закрыть";
+    "↑↓ — выбор | Пробел — вкл/выкл | T — своё | Esc — закрыть";
 inline constexpr std::string_view kConditionsPanelHint =
-    "1–8 — вкл/выкл | Shift+1–8 — до снятия | 0 — очистить";
+    "Пробел — вкл/выкл | Shift+Пробел — до снятия | ↑↓ — выбор";
 inline constexpr std::string_view kConditionsPanelHint2 =
-    "↑↓ — выбор | C — КС спасброска | Esc — закрыть";
+    "T — своё состояние | C — КС спасброска | − — снять уровень истощения";
+inline constexpr std::string_view kConditionsPanelHint3 =
+    "1–9 — первые девять | 0 — очистить | Esc — закрыть";
 inline constexpr std::string_view kConditionsViewHint =
     "Только просмотр, состояния меняет DM | Esc — закрыть";
 inline constexpr std::string_view kConditionDcPrompt = "КС (0–30): ";
+inline constexpr std::string_view kConditionCustomPrompt = "Своё состояние: ";
 inline constexpr std::string_view kConditionDcNeedActive =
     "Сначала включите состояние";
+inline constexpr std::string_view kConditionExhaustionMax =
+    "Уровень истощения уже 6: персонаж мёртв";
 // Панель действий хода: список 2024 и подсказки о счётчиках.
 inline constexpr std::string_view kActionsTitle = "Действия";
 inline constexpr std::string_view kActionsHint =
@@ -287,6 +297,12 @@ inline constexpr std::string_view kSheetBadHitDie =
     "Кость хитов: 6, 8, 10 или 12";
 inline constexpr std::string_view kSheetBadCon =
     "Модификатор Телосложения: от -20 до 20";
+inline constexpr std::string_view kSheetBadRange =
+    "Дистанция атаки — целое число клеток";
+inline constexpr std::string_view kSheetBadDamage =
+    "Некорректное выражение урона";
+inline constexpr std::string_view kSheetBadDamageType =
+    "Неизвестный тип урона: дробящий, колющий, рубящий, огонь, холод, яд…";
 inline constexpr std::string_view kSheetNoAccess =
     "Лист этого токена показывает только DM";
 inline constexpr std::string_view kBestiaryTitle = "Бестиарий";

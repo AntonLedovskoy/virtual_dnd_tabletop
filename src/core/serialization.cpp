@@ -115,10 +115,15 @@ auto WriteToken(ByteWriter& writer, const Token& token) -> void {
   writer.I32(token.movement_bonus);
   writer.U8(token.disengaged ? 1 : 0);
   writer.U8(token.dodging ? 1 : 0);
+  // С версии сохранения 29: защита от урона и дистанция атаки.
+  writer.U32(token.resist);
+  writer.U32(token.vulnerable);
+  writer.U32(token.immune);
+  writer.I32(token.attack_range);
 }
 
 auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
-               bool has_turn_economy) -> bool {
+               bool has_turn_economy, bool has_damage_profile) -> bool {
   std::uint32_t id = 0;
   std::string name;
   std::string owner;
@@ -154,6 +159,10 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
   std::int32_t movement_bonus = 0;
   std::uint8_t disengaged = 0;
   std::uint8_t dodging = 0;
+  std::uint32_t resist = 0;
+  std::uint32_t vulnerable = 0;
+  std::uint32_t immune = 0;
+  std::int32_t attack_range = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -196,6 +205,11 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
        !reader.U8(disengaged) || !reader.U8(dodging))) {
     return false;
   }
+  if (has_damage_profile &&
+      (!reader.U32(resist) || !reader.U32(vulnerable) || !reader.U32(immune) ||
+       !reader.I32(attack_range))) {
+    return false;
+  }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
       initiative < -1000000 || initiative > 1000000 || ac <= 0 || ac > 1000 ||
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
@@ -208,7 +222,10 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
       movement_bonus > 1000 || disengaged > 1 || dodging > 1 ||
       kind > static_cast<std::uint8_t>(TokenKind::kMonster) ||
       (color & 0xFF000000U) != 0 ||
-      (!portrait.empty() && !IsSafeImageName(portrait))) {
+      (!portrait.empty() && !IsSafeImageName(portrait)) ||
+      !IsValidDamageTypeBit(resist) || !IsValidDamageTypeBit(vulnerable) ||
+      !IsValidDamageTypeBit(immune) || attack_range < 0 ||
+      attack_range > 1000) {
     return false;
   }
   token = Token{
@@ -229,6 +246,10 @@ auto ReadToken(ByteReader& reader, Token& token, bool conditions_have_dc,
       .save_bonus = save_bonus,
       .initiative_bonus = initiative_bonus,
       .damage = std::move(damage),
+      .resist = resist,
+      .vulnerable = vulnerable,
+      .immune = immune,
+      .attack_range = attack_range,
       .conditions = std::move(conditions),
       .xp = xp,
       .movement_used = movement_used,
@@ -392,10 +413,16 @@ auto DecodeSetMapBackgroundCommand(ByteReader& reader)
 auto DecodeDamageCommand(ByteReader& reader) -> std::optional<Command> {
   std::uint32_t id = 0;
   std::int32_t amount = 0;
-  if (!reader.U32(id) || !reader.I32(amount) || !reader.Done()) {
+  std::uint8_t damage_type = 0;
+  if (!reader.U32(id) || !reader.I32(amount) || !reader.U8(damage_type) ||
+      damage_type > static_cast<std::uint8_t>(DamageType::kThunder) ||
+      !reader.Done()) {
     return std::nullopt;
   }
-  return Command{DamageToken{.id = id, .amount = amount}};
+  return Command{
+      DamageToken{.id = id,
+                  .amount = amount,
+                  .damage_type = static_cast<DamageType>(damage_type)}};
 }
 
 auto DecodeHealCommand(ByteReader& reader) -> std::optional<Command> {
@@ -427,12 +454,17 @@ auto DecodeAdvanceTimeCommand(ByteReader& reader) -> std::optional<Command> {
 auto DecodeAoeDamageCommand(ByteReader& reader) -> std::optional<Command> {
   std::string expression;
   std::int32_t save_dc = 0;
+  std::uint8_t damage_type = 0;
   if (!reader.String(expression, kMaxNotes) || !reader.I32(save_dc) ||
+      !reader.U8(damage_type) ||
+      damage_type > static_cast<std::uint8_t>(DamageType::kThunder) ||
       !reader.Done()) {
     return std::nullopt;
   }
   return Command{
-      AoeDamage{.expression = std::move(expression), .save_dc = save_dc}};
+      AoeDamage{.expression = std::move(expression),
+                .save_dc = save_dc,
+                .damage_type = static_cast<DamageType>(damage_type)}};
 }
 
 auto DecodeDeathSaveCommand(ByteReader& reader) -> std::optional<Command> {
@@ -551,18 +583,25 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
   std::int32_t attack_bonus = 0;
   std::int32_t save_bonus = 0;
   std::string damage;
+  std::int32_t attack_range = 0;
+  std::uint32_t resist = 0;
+  std::uint32_t vulnerable = 0;
+  std::uint32_t immune = 0;
   if (!reader.String(name, kMaxNameLength) || !ReadPosition(reader, cell) ||
       !reader.String(owner, kMaxNameLength) || !reader.U8(kind) ||
       !reader.I32(max_hp) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.String(damage, kMaxNotes) ||
-      !reader.Done()) {
+      !reader.I32(attack_range) || !reader.U32(resist) ||
+      !reader.U32(vulnerable) || !reader.U32(immune) || !reader.Done()) {
     return std::nullopt;
   }
   if (kind > static_cast<std::uint8_t>(TokenKind::kMonster) || max_hp <= 0 ||
       max_hp > 1000000 || ac <= 0 || ac > 1000 || speed < 0 || speed > 1000 ||
       attack_bonus < -100 || attack_bonus > 100 || save_bonus < -100 ||
-      save_bonus > 100) {
+      save_bonus > 100 || attack_range < 0 || attack_range > 1000 ||
+      !IsValidDamageTypeBit(resist) || !IsValidDamageTypeBit(vulnerable) ||
+      !IsValidDamageTypeBit(immune)) {
     return std::nullopt;
   }
   return Command{AddToken{
@@ -577,6 +616,10 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
       .attack_bonus = attack_bonus,
       .save_bonus = save_bonus,
       .damage = std::move(damage),
+      .attack_range = attack_range,
+      .resist = resist,
+      .vulnerable = vulnerable,
+      .immune = immune,
   }};
 }
 
@@ -722,13 +765,21 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
   std::int32_t temp_hp = 0;
   std::int32_t hit_die = 8;
   std::int32_t con_modifier = 0;
+  std::int32_t attack_range = 0;
+  std::uint32_t resist = 0;
+  std::uint32_t vulnerable = 0;
+  std::uint32_t immune = 0;
   if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.I32(initiative_bonus) ||
       !reader.String(damage, kMaxNotes) || !reader.I32(temp_hp) ||
-      !reader.I32(hit_die) || !reader.I32(con_modifier) || !reader.Done() ||
+      !reader.I32(hit_die) || !reader.I32(con_modifier) ||
+      !reader.I32(attack_range) || !reader.U32(resist) ||
+      !reader.U32(vulnerable) || !reader.U32(immune) || !reader.Done() ||
       !IsValidHitDie(hit_die) || con_modifier < -kMaxConModifier ||
-      con_modifier > kMaxConModifier) {
+      con_modifier > kMaxConModifier || attack_range < 0 ||
+      attack_range > 1000 || !IsValidDamageTypeBit(resist) ||
+      !IsValidDamageTypeBit(vulnerable) || !IsValidDamageTypeBit(immune)) {
     return std::nullopt;
   }
   return Command{UpdateTokenSheet{.id = id,
@@ -741,7 +792,11 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
                                   .damage = std::move(damage),
                                   .temp_hp = temp_hp,
                                   .hit_die = hit_die,
-                                  .con_modifier = con_modifier}};
+                                  .con_modifier = con_modifier,
+                                  .attack_range = attack_range,
+                                  .resist = resist,
+                                  .vulnerable = vulnerable,
+                                  .immune = immune}};
 }
 
 auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
@@ -917,7 +972,7 @@ auto DecodeLogLineEvent(ByteReader& reader) -> std::optional<Event> {
 
 auto DecodeTokenAddedEvent(ByteReader& reader) -> std::optional<Event> {
   Token token;
-  if (!ReadToken(reader, token, true, true) || !reader.Done()) {
+  if (!ReadToken(reader, token, true, true, true) || !reader.Done()) {
     return std::nullopt;
   }
   return Event{TokenAdded{.token = std::move(token)}};
@@ -933,7 +988,7 @@ auto DecodeTokenRemovedEvent(ByteReader& reader) -> std::optional<Event> {
 
 auto DecodeTokenUpdatedEvent(ByteReader& reader) -> std::optional<Event> {
   Token token;
-  if (!ReadToken(reader, token, true, true) || !reader.Done()) {
+  if (!ReadToken(reader, token, true, true, true) || !reader.Done()) {
     return std::nullopt;
   }
   return Event{TokenUpdated{.token = std::move(token)}};
@@ -999,8 +1054,8 @@ auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
 }
 
 auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
-                    bool conditions_have_dc, bool has_turn_economy)
-    -> std::optional<GameSnapshot> {
+                    bool conditions_have_dc, bool has_turn_economy,
+                    bool has_damage_profile) -> std::optional<GameSnapshot> {
   ByteReader reader(data, size);
   std::uint32_t width = 0;
   std::uint32_t height = 0;
@@ -1034,7 +1089,8 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
   tokens.reserve(token_count);
   for (std::uint32_t i = 0; i < token_count; ++i) {
     Token token;
-    if (!ReadToken(reader, token, conditions_have_dc, has_turn_economy) ||
+    if (!ReadToken(reader, token, conditions_have_dc, has_turn_economy,
+                   has_damage_profile) ||
         !map.Contains(token.cell)) {
       return std::nullopt;
     }
@@ -1160,6 +1216,10 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.attack_bonus);
           writer.I32(cmd.save_bonus);
           writer.String(cmd.damage);
+          writer.I32(cmd.attack_range);
+          writer.U32(cmd.resist);
+          writer.U32(cmd.vulnerable);
+          writer.U32(cmd.immune);
         } else if constexpr (std::is_same_v<T, RemoveToken>) {
           writer.U8(kCommandRemoveToken);
           writer.U32(cmd.id);
@@ -1206,6 +1266,10 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.temp_hp);
           writer.I32(cmd.hit_die);
           writer.I32(cmd.con_modifier);
+          writer.I32(cmd.attack_range);
+          writer.U32(cmd.resist);
+          writer.U32(cmd.vulnerable);
+          writer.U32(cmd.immune);
         } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
           writer.U8(kCommandUpdateTokenCombat);
           writer.U32(cmd.id);
@@ -1228,6 +1292,7 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandDamageToken);
           writer.U32(cmd.id);
           writer.I32(cmd.amount);
+          writer.U8(static_cast<std::uint8_t>(cmd.damage_type));
         } else if constexpr (std::is_same_v<T, HealToken>) {
           writer.U8(kCommandHealToken);
           writer.U32(cmd.id);
@@ -1242,6 +1307,7 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandAoeDamage);
           writer.String(cmd.expression);
           writer.I32(cmd.save_dc);
+          writer.U8(static_cast<std::uint8_t>(cmd.damage_type));
         } else if constexpr (std::is_same_v<T, DeathSave>) {
           writer.U8(kCommandDeathSave);
           writer.U32(cmd.id);

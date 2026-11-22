@@ -79,12 +79,7 @@ auto TokenOf(const dnd::GameState& state, dnd::TokenId id) -> dnd::Token {
   return token.value_or(dnd::Token{});
 }
 
-auto HasCondition(const dnd::Token& token, std::string_view name) -> bool {
-  return std::ranges::any_of(token.conditions,
-                             [name](const dnd::Condition& condition) -> bool {
-                               return condition.name == name;
-                             });
-}
+using dnd::HasCondition;
 
 auto FogVisibleAt(const dnd::FogSnapshot& fog, int x, int y) -> bool {
   return fog.visible[static_cast<std::size_t>(y) *
@@ -1486,6 +1481,552 @@ auto TestConditionSaves() -> void {
                "", true)
            .accepted,
       "a save DC above 30 is rejected");
+}
+
+auto TestConditionPaletteAndExhaustion() -> void {
+  const auto& palette = dnd::DefaultConditions();
+  bool all_listed = true;
+  for (const char* name :
+       {"ослеплён", "очарован", "оглох", "испуган", "захвачен",
+        "выведен из строя", "невидим", "парализован", "окаменел", "отравлен",
+        "сбит с ног", "опутан", "оглушён", "без сознания", "истощение",
+        "застигнут врасплох"}) {
+    all_listed =
+        all_listed && std::ranges::find(palette, name) != palette.end();
+  }
+  Expect(all_listed, "palette lists all 2024 conditions");
+
+  dnd::Token token;
+  token.speed = 9;
+  token.conditions = {dnd::Condition{"истощение"}, dnd::Condition{"истощение"}};
+  Expect(dnd::ExhaustionLevel(token) == 2, "two entries are level two");
+  Expect(dnd::ExhaustionPenalty(token) == 4, "each level gives -2 to d20");
+  Expect(dnd::ExhaustionSpeedPenaltyCells(token) == 2,
+         "each level costs 5 feet of speed");
+  Expect(dnd::EffectiveSpeedCells(token) == 4,
+         "speed in cells drops by the exhaustion level");
+  token.conditions.emplace_back("захвачен");
+  Expect(dnd::IsSpeedZeroed(token), "grappled speed is zero");
+  Expect(dnd::EffectiveSpeedCells(token) == 0,
+         "grappled speed has no movement budget");
+  token.conditions.clear();
+  token.conditions.resize(dnd::kMaxExhaustionLevel,
+                          dnd::Condition{"истощение"});
+  Expect(dnd::ExhaustionLevel(token) == dnd::kMaxExhaustionLevel,
+         "exhaustion is capped at six levels");
+
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 10,
+                         .max_hp = 10,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "double",
+                         .owner = "dm",
+                         .hp = 10,
+                         .max_hp = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(4, 4)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 6, 99);
+  const std::vector<dnd::Condition> maximum(dnd::kMaxExhaustionLevel,
+                                            dnd::Condition{"истощение"});
+  const dnd::CommandOutcome killed = server.HandleCommand(
+      dnd::UpdateTokenCombat{.id = 2, .conditions = maximum}, "", true);
+  Expect(killed.accepted, "the DM sets six exhaustion levels");
+  const dnd::Token dead = TokenOf(server.State(), 2);
+  Expect(dead.hp == 0 && HasCondition(dead, dnd::kDead),
+         "six exhaustion levels kill the character");
+  Expect(std::ranges::any_of(
+             killed.events,
+             [](const dnd::Event& event) -> bool {
+               if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+                 return false;
+               }
+               return std::get<dnd::LogLineAdded>(event).line.text.find(
+                          "истощение 6") != std::string::npos;
+             }),
+         "exhaustion death is written to the log");
+  std::vector<dnd::Condition> too_many = maximum;
+  too_many.emplace_back("истощение");
+  Expect(!server
+              .HandleCommand(
+                  dnd::UpdateTokenCombat{.id = 1, .conditions = too_many}, "",
+                  true)
+              .accepted,
+         "seven exhaustion levels are rejected");
+
+  // Длинный отдых снимает ровно один уровень.
+  Expect(server
+             .HandleCommand(
+                 dnd::UpdateTokenCombat{
+                     .id = 1,
+                     .conditions = {dnd::Condition{"истощение"},
+                                    dnd::Condition{"истощение"}}},
+                 "", true)
+             .accepted,
+         "the DM applies two exhaustion levels");
+  Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
+             .accepted,
+         "the party rests");
+  Expect(dnd::ExhaustionLevel(TokenOf(server.State(), 1)) == 1,
+         "a long rest removes one exhaustion level");
+
+  // Истощение вычитается и из спасброска от смерти: 10 при −2 — провал.
+  const dnd::GameSnapshot dying{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "dying",
+                            .hp = 0,
+                            .max_hp = 10,
+                            .conditions = {dnd::Condition{"без сознания"},
+                                           dnd::Condition{"истощение"}},
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)}},
+      .next_token_id = 2,
+  };
+  dnd::GameState dying_state(dying);
+  const std::optional<dnd::Token> failed = dying_state.DeathSave(1, 10, 2);
+  Expect(failed.has_value() && failed->death_save_failures == 1,
+         "exhaustion lowers a death save result");
+  const std::optional<dnd::Token> natural = dying_state.DeathSave(1, 20, 2);
+  Expect(natural.has_value() && natural->hp == 1,
+         "a natural 20 on a death save still revives");
+}
+
+auto TestConditionAttackModifiers() -> void {
+  dnd::Token attacker;
+  dnd::Token target;
+  Expect(dnd::AttackRollModesFor(attacker, target, 1, 0, false).Net() == 0,
+         "plain conditions give a plain attack");
+
+  target.conditions = {dnd::Condition{"сбит с ног"}};
+  Expect(dnd::AttackRollModesFor(attacker, target, 1, 0, false).Net() == 1,
+         "a prone target is easier to hit within five feet");
+  Expect(dnd::AttackRollModesFor(attacker, target, 3, 0, false).Net() == -1,
+         "a prone target is harder to hit at range");
+
+  target.conditions = {dnd::Condition{"невидим"}};
+  Expect(dnd::AttackRollModesFor(attacker, target, 1, 0, false).Net() == -1,
+         "an invisible target is harder to hit");
+  attacker.conditions = {dnd::Condition{"ослеплён"}};
+  Expect(dnd::AttackRollModesFor(attacker, target, 1, 0, false).Net() == -1,
+         "a blinded attacker has disadvantage");
+
+  attacker.conditions = {dnd::Condition{"невидим"}};
+  Expect(
+      dnd::AttackRollModesFor(attacker, target, 1, 0, false).advantage &&
+          dnd::AttackRollModesFor(attacker, target, 1, 0, false).disadvantage,
+      "an invisible attacker against an invisible target has both");
+
+  dnd::Token prone_target;
+  prone_target.conditions = {dnd::Condition{"парализован"}};
+  Expect(dnd::IsAutoCriticalOnHit(prone_target, 1),
+         "a hit on a paralyzed target within five feet is critical");
+  Expect(!dnd::IsAutoCriticalOnHit(prone_target, 2),
+         "a paralyzed target at range is not automatically critical");
+
+  dnd::Token archer;
+  archer.attack_range = 2;
+  const dnd::Token nearby;
+  Expect(dnd::AttackRollModesFor(archer, nearby, 2, 2, false).Net() == 0,
+         "a ranged attack inside normal range is plain");
+  Expect(dnd::AttackRollModesFor(archer, nearby, 3, 2, false).Net() == -1,
+         "a ranged attack beyond normal range has disadvantage");
+  Expect(dnd::AttackRollModesFor(archer, nearby, 2, 2, true).Net() == -1,
+         "a ranged attack next to another enemy has disadvantage");
+
+  const dnd::GridMap map(8, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 30,
+                         .max_hp = 30,
+                         .ac = 10,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .conditions = {dnd::Condition{"ослеплён"}},
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .hp = 1000,
+                         .max_hp = 1000,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(1, 0)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 6, 5);
+  const dnd::CommandOutcome blinded = server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 2}, "alice", false);
+  Expect(blinded.accepted, "a blinded character still attacks");
+  Expect(std::ranges::any_of(
+             blinded.events,
+             [](const dnd::Event& event) -> bool {
+               if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+                 return false;
+               }
+               return std::get<dnd::LogLineAdded>(event).line.text.find(
+                          "с помехой") != std::string::npos;
+             }),
+         "condition disadvantage is written to the log");
+
+  // Встать из «сбит с ног» стоит половину скорости, двигаться нельзя
+  // захваченному.
+  const dnd::GameSnapshot prone_snapshot{
+      .map = dnd::GridMap(10, 1),
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .hp = 10,
+                            .max_hp = 10,
+                            .speed = 9,
+                            .conditions = {dnd::Condition{"сбит с ног"}},
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)}},
+      .next_token_id = 2,
+      .encounter = dnd::Encounter{.active = true, .order = {1}},
+  };
+  dnd::GameServer prone_server(prone_snapshot, 6, 3);
+  dnd::ClientView prone_view;
+  prone_view.Reset(prone_server.Snapshot(), prone_server.FullFogState());
+  Expect(!prone_server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(4, 0)},
+                             "alice", false)
+              .accepted,
+         "standing up spends half of the movement budget");
+  Expect(prone_server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 0)},
+                            "alice", false)
+             .accepted,
+         "a prone character stands up and moves");
+  const dnd::Token stood = TokenOf(prone_server.State(), 1);
+  Expect(!HasCondition(stood, "сбит с ног"),
+         "standing up removes the prone condition");
+  Expect(stood.movement_used == 5,
+         "the move charged the standing cost plus the path");
+
+  const dnd::GameSnapshot grappled_snapshot{
+      .map = dnd::GridMap(10, 1),
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "hero",
+                            .owner = "alice",
+                            .hp = 10,
+                            .max_hp = 10,
+                            .conditions = {dnd::Condition{"захвачен"}},
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(0, 0)}},
+      .next_token_id = 2,
+      .encounter = dnd::Encounter{.active = true, .order = {1}},
+  };
+  dnd::GameServer grappled_server(grappled_snapshot, 6, 3);
+  Expect(!grappled_server
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 0)},
+                             "alice", false)
+              .accepted,
+         "a grappled character cannot move");
+}
+
+auto TestDamageTypesAndDefenses() -> void {
+  using dnd::DamageType;
+  using dnd::DamageTypeBit;
+  const dnd::DamageProfile profile{
+      .resist = DamageTypeBit(DamageType::kFire),
+      .vulnerable = DamageTypeBit(DamageType::kCold),
+      .immune = DamageTypeBit(DamageType::kPoison),
+  };
+  Expect(dnd::AdjustedDamage(11, DamageType::kFire, profile) == 5,
+         "resistance halves damage, rounding down");
+  Expect(dnd::AdjustedDamage(11, DamageType::kCold, profile) == 22,
+         "vulnerability doubles damage");
+  Expect(dnd::AdjustedDamage(11, DamageType::kPoison, profile) == 0,
+         "immunity removes damage");
+  Expect(dnd::AdjustedDamage(11, DamageType::kSlashing, profile) == 11,
+         "untyped defence leaves damage alone");
+  const dnd::DamageProfile both{
+      .resist = DamageTypeBit(DamageType::kFire),
+      .vulnerable = DamageTypeBit(DamageType::kFire),
+  };
+  Expect(dnd::AdjustedDamage(25, DamageType::kFire, both) == 24,
+         "resistance halves first, vulnerability doubles after");
+
+  dnd::DiceExpression expression;
+  DamageType type = DamageType::kNone;
+  Expect(dnd::ParseDamageProfile("1d8+2 огонь", expression, type) &&
+             type == DamageType::kFire && expression.modifier == 2,
+         "damage sheet holds an expression and a type");
+  Expect(dnd::IsDamageProfilePrefix("1d8+2 ого"),
+         "a partially typed damage type is accepted");
+  Expect(!dnd::IsDamageProfilePrefix("1d8+2 огоx"),
+         "an unknown damage type is rejected");
+  std::uint32_t mask = 0;
+  Expect(!dnd::ParseDamageTypeList("огонь, холод и", mask),
+         "an unknown name rejects the whole list");
+  Expect(dnd::ParseDamageTypeList("огонь, холод", mask) &&
+             dnd::FormatDamageTypeList(mask) == "холод, огонь",
+         "damage type lists round-trip");
+
+  const dnd::GridMap map(8, 8);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 40,
+                         .max_hp = 40,
+                         .damage = "1d4 огонь",
+                         .resist = DamageTypeBit(DamageType::kFire),
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "skeleton",
+                         .owner = "dm",
+                         .hp = 20,
+                         .max_hp = 20,
+                         .vulnerable = DamageTypeBit(DamageType::kFire),
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(2, 1)},
+              dnd::Token{.id = 3,
+                         .name = "statue",
+                         .owner = "dm",
+                         .hp = 20,
+                         .max_hp = 20,
+                         .conditions = {dnd::Condition{"окаменел"}},
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(4, 4)},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameServer server(snapshot, 6, 7);
+  const dnd::CommandOutcome resisted = server.HandleCommand(
+      dnd::DamageToken{.id = 1, .amount = 10, .damage_type = DamageType::kFire},
+      "alice", false);
+  Expect(resisted.accepted && TokenOf(server.State(), 1).hp == 35,
+         "fire resistance halves the damage");
+  const dnd::CommandOutcome vulnerable = server.HandleCommand(
+      dnd::DamageToken{.id = 2, .amount = 10, .damage_type = DamageType::kFire},
+      "", true);
+  Expect(vulnerable.accepted && TokenOf(server.State(), 2).hp == 0,
+         "a vulnerable target takes doubled fire damage");
+  const dnd::CommandOutcome statue_poison = server.HandleCommand(
+      dnd::DamageToken{
+          .id = 3, .amount = 10, .damage_type = DamageType::kPoison},
+      "", true);
+  Expect(statue_poison.accepted && TokenOf(server.State(), 3).hp == 20,
+         "a petrified target is immune to poison");
+  Expect(std::ranges::any_of(
+             statue_poison.events,
+             [](const dnd::Event& event) -> bool {
+               if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+                 return false;
+               }
+               return std::get<dnd::LogLineAdded>(event).line.text.find(
+                          "иммунитет") != std::string::npos;
+             }),
+         "immunity is written to the log");
+  const dnd::CommandOutcome statue_fire = server.HandleCommand(
+      dnd::DamageToken{.id = 3, .amount = 10, .damage_type = DamageType::kFire},
+      "", true);
+  Expect(statue_fire.accepted && TokenOf(server.State(), 3).hp == 15,
+         "a petrified target resists all typed damage");
+
+  // Временные HP не складываются: остаётся большее значение.
+  const auto sheet = [&server](int temp_hp) -> dnd::CommandOutcome {
+    return server.HandleCommand(
+        dnd::UpdateTokenSheet{.id = 1,
+                              .ac = 10,
+                              .speed = 9,
+                              .notes = "",
+                              .attack_bonus = 0,
+                              .save_bonus = 0,
+                              .initiative_bonus = 0,
+                              .damage = "1d4 огонь",
+                              .temp_hp = temp_hp,
+                              .hit_die = 8,
+                              .con_modifier = 0,
+                              .attack_range = 0,
+                              .resist = DamageTypeBit(DamageType::kFire)},
+        "", true);
+  };
+  Expect(sheet(5).accepted && TokenOf(server.State(), 1).temp_hp == 5,
+         "temporary HP can be granted");
+  Expect(sheet(3).accepted && TokenOf(server.State(), 1).temp_hp == 5,
+         "a smaller amount of temporary HP does not replace the pool");
+  Expect(sheet(8).accepted && TokenOf(server.State(), 1).temp_hp == 8,
+         "a bigger amount of temporary HP replaces the pool");
+
+  // Атака с типом урона сообщает сопротивление в логе.
+  const dnd::GameSnapshot attack_snapshot{
+      .map = map,
+      .tokens = {dnd::Token{.id = 1,
+                            .name = "mage",
+                            .owner = "alice",
+                            .hp = 10,
+                            .max_hp = 10,
+                            .attack_bonus = 100,
+                            .damage = "1d4 холод",
+                            .kind = dnd::TokenKind::kPlayer,
+                            .cell = CellAt(1, 1)},
+                 dnd::Token{.id = 2,
+                            .name = "yeti",
+                            .owner = "dm",
+                            .hp = 1000,
+                            .max_hp = 1000,
+                            .ac = 10,
+                            .resist = DamageTypeBit(DamageType::kCold),
+                            .kind = dnd::TokenKind::kMonster,
+                            .cell = CellAt(2, 1)}},
+      .next_token_id = 3,
+  };
+  dnd::GameServer attack_server(attack_snapshot, 6, 11);
+  bool saw_resistance = false;
+  for (int i = 0; i < 20 && !saw_resistance; ++i) {
+    const dnd::CommandOutcome outcome = attack_server.HandleCommand(
+        dnd::AttackToken{.attacker = 1, .target = 2}, "alice", false);
+    Expect(outcome.accepted, "a typed attack is accepted");
+    for (const dnd::Event& event : outcome.events) {
+      if (const auto* line = std::get_if<dnd::LogLineAdded>(&event)) {
+        saw_resistance =
+            saw_resistance ||
+            line->line.text.find("сопротивление") != std::string::npos;
+      }
+    }
+  }
+  Expect(saw_resistance, "an attack with a damage type respects resistance");
+}
+
+auto TestRangedAttackAndSurprise() -> void {
+  // Клетки: стрелок, соседний союзник и цель на дистанции.
+  const dnd::GridMap map(10, 1);
+  const auto make_snapshot = [&map](int target_x) -> dnd::GameSnapshot {
+    return dnd::GameSnapshot{
+        .map = map,
+        .tokens =
+            {
+                dnd::Token{.id = 1,
+                           .name = "archer",
+                           .owner = "alice",
+                           .hp = 10,
+                           .max_hp = 10,
+                           .ac = 10,
+                           .attack_bonus = 100,
+                           .damage = "1d4",
+                           .attack_range = 2,
+                           .kind = dnd::TokenKind::kPlayer,
+                           .cell = CellAt(0, 0)},
+                dnd::Token{.id = 2,
+                           .name = "buddy",
+                           .owner = "alice",
+                           .hp = 10,
+                           .max_hp = 10,
+                           .kind = dnd::TokenKind::kPlayer,
+                           .cell = CellAt(1, 0)},
+                dnd::Token{.id = 3,
+                           .name = "goblin",
+                           .owner = "dm",
+                           .hp = 1000,
+                           .max_hp = 1000,
+                           .ac = 10,
+                           .kind = dnd::TokenKind::kMonster,
+                           .cell = CellAt(target_x, 0)},
+            },
+        .next_token_id = 4,
+    };
+  };
+  dnd::GameServer out_of_range(make_snapshot(5), 6, 21);
+  const dnd::CommandOutcome long_shot = out_of_range.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 3}, "alice", false);
+  Expect(!long_shot.accepted &&
+             long_shot.reject_reason.find("пределами") != std::string::npos,
+         "a target out of range is beyond reach");
+  dnd::GameServer near_server(make_snapshot(4), 6, 21);
+  const dnd::CommandOutcome shot = near_server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 3}, "alice", false);
+  Expect(shot.accepted, "an attack at long range is allowed");
+  Expect(std::ranges::any_of(
+             shot.events,
+             [](const dnd::Event& event) -> bool {
+               if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+                 return false;
+               }
+               return std::get<dnd::LogLineAdded>(event).line.text.find(
+                          "с помехой") != std::string::npos;
+             }),
+         "a ranged attack beyond normal range has disadvantage");
+  // Цель вплотную, но рядом свой: на дистанции 1 вторая цель тоже сосед.
+  dnd::GameServer point_blank(make_snapshot(2), 6, 21);
+  const dnd::CommandOutcome close_shot = point_blank.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 3}, "alice", false);
+  Expect(close_shot.accepted, "a point-blank ranged attack is allowed");
+  Expect(std::ranges::any_of(
+             close_shot.events,
+             [](const dnd::Event& event) -> bool {
+               if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+                 return false;
+               }
+               return std::get<dnd::LogLineAdded>(event).line.text.find(
+                          "с помехой") != std::string::npos;
+             }),
+         "a ranged attack next to another enemy has disadvantage");
+
+  // Застигнутый врасплох бросает инициативу с помехой и теряет состояние.
+  const auto initiative_snapshot =
+      [&map](std::vector<dnd::Condition> conditions,
+             int initiative_bonus) -> dnd::GameSnapshot {
+    return dnd::GameSnapshot{
+        .map = map,
+        .tokens = {dnd::Token{.id = 1,
+                              .name = "hero",
+                              .owner = "alice",
+                              .initiative_bonus = initiative_bonus,
+                              .conditions = std::move(conditions),
+                              .kind = dnd::TokenKind::kPlayer,
+                              .cell = CellAt(0, 0)}},
+        .next_token_id = 2,
+    };
+  };
+  dnd::GameServer calm(initiative_snapshot({}, 5), 6, 42);
+  dnd::GameServer surprised(
+      initiative_snapshot({dnd::Condition{"застигнут врасплох"}}, 5), 6, 42);
+  Expect(calm.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the calm encounter starts");
+  Expect(surprised.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the surprising encounter starts");
+  const int calm_initiative = TokenOf(calm.State(), 1).initiative;
+  const int surprised_initiative = TokenOf(surprised.State(), 1).initiative;
+  Expect(surprised_initiative <= calm_initiative,
+         "surprise rolls initiative with disadvantage");
+  Expect(surprised_initiative >= 1 + 5 && surprised_initiative <= 20 + 5,
+         "surprise keeps the sheet bonus");
+  Expect(!HasCondition(TokenOf(surprised.State(), 1), "застигнут врасплох"),
+         "surprise is spent after the initiative roll");
+
+  dnd::GameServer tired(
+      initiative_snapshot(
+          {dnd::Condition{"истощение"}, dnd::Condition{"истощение"}}, 5),
+      6, 42);
+  Expect(tired.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the tired encounter starts");
+  Expect(TokenOf(tired.State(), 1).initiative == calm_initiative - 4,
+         "exhaustion subtracts two from initiative per level");
 }
 
 auto TestDiceExpression() -> void {
@@ -3132,31 +3673,36 @@ auto TestSaveLoadRoundtrip() -> void {
       .map = map,
       .tokens =
           {
-              dnd::Token{.id = 4,
-                         .name = "hero",
-                         .owner = "alice",
-                         .hp = 7,
-                         .max_hp = 12,
-                         .temp_hp = 3,
-                         .hit_die = 10,
-                         .con_modifier = 2,
-                         .hit_dice_spent = 2,
-                         .initiative = 15,
-                         .ac = 16,
-                         .speed = 9,
-                         .notes = "Атака: +5, 1d8+3",
-                         .attack_bonus = 5,
-                         .save_bonus = 2,
-                         .damage = "1d8+3",
-                         .conditions = {dnd::Condition{"сбит с ног"},
-                                        dnd::Condition{"концентрация", 60, 12}},
-                         .xp = 900,
-                         .movement_used = 4,
-                         .diagonal_parity = 1,
-                         .kind = dnd::TokenKind::kPlayer,
-                         .color = 0x507AC8U,
-                         .portrait = "hero.png",
-                         .cell = CellAt(1, 1)},
+              dnd::Token{
+                  .id = 4,
+                  .name = "hero",
+                  .owner = "alice",
+                  .hp = 7,
+                  .max_hp = 12,
+                  .temp_hp = 3,
+                  .hit_die = 10,
+                  .con_modifier = 2,
+                  .hit_dice_spent = 2,
+                  .initiative = 15,
+                  .ac = 16,
+                  .speed = 9,
+                  .notes = "Атака: +5, 1d8+3",
+                  .attack_bonus = 5,
+                  .save_bonus = 2,
+                  .damage = "1d8+3 огонь",
+                  .resist = dnd::DamageTypeBit(dnd::DamageType::kFire),
+                  .vulnerable = dnd::DamageTypeBit(dnd::DamageType::kCold),
+                  .immune = dnd::DamageTypeBit(dnd::DamageType::kPoison),
+                  .attack_range = 3,
+                  .conditions = {dnd::Condition{"сбит с ног"},
+                                 dnd::Condition{"концентрация", 60, 12}},
+                  .xp = 900,
+                  .movement_used = 4,
+                  .diagonal_parity = 1,
+                  .kind = dnd::TokenKind::kPlayer,
+                  .color = 0x507AC8U,
+                  .portrait = "hero.png",
+                  .cell = CellAt(1, 1)},
               dnd::Token{.id = 6,
                          .name = "goblin",
                          .owner = "dm",
@@ -3240,8 +3786,17 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().attack_bonus == 5,
            "token attack bonus survives");
     Expect(loaded->tokens.front().save_bonus == 2, "token save bonus survives");
-    Expect(loaded->tokens.front().damage == "1d8+3",
+    Expect(loaded->tokens.front().damage == "1d8+3 огонь",
            "token damage expression survives");
+    Expect(loaded->tokens.front().resist ==
+                   dnd::DamageTypeBit(dnd::DamageType::kFire) &&
+               loaded->tokens.front().vulnerable ==
+                   dnd::DamageTypeBit(dnd::DamageType::kCold) &&
+               loaded->tokens.front().immune ==
+                   dnd::DamageTypeBit(dnd::DamageType::kPoison),
+           "damage defences survive the roundtrip");
+    Expect(loaded->tokens.front().attack_range == 3,
+           "attack range survives the roundtrip");
     Expect(loaded->tokens.front().conditions.size() == 2 &&
                loaded->tokens.front().conditions.back().seconds == 60 &&
                loaded->tokens.front().conditions.back().save_dc == 12,
@@ -3723,6 +4278,13 @@ auto TestChatCommandParsing() -> void {
          "/heal keeps the amount");
   Expect(parse("/damage -1").error == ChatCommandError::kBadDamage,
          "/damage rejects a negative amount");
+  const dnd::ChatCommand typed_damage = parse("/damage 9 огонь");
+  Expect(typed_damage.kind == ChatCommandKind::kDamage &&
+             typed_damage.value == 9 &&
+             typed_damage.damage_type == dnd::DamageType::kFire,
+         "/damage keeps the damage type");
+  Expect(parse("/damage 9 огонx").error == ChatCommandError::kBadDamage,
+         "/damage rejects an unknown damage type");
   Expect(parse("/heal 0").error == ChatCommandError::kBadDamage,
          "/heal rejects zero");
 
@@ -3731,6 +4293,10 @@ auto TestChatCommandParsing() -> void {
   Expect(aoe.kind == ChatCommandKind::kAoe, "/aoe is recognized");
   Expect(aoe.text == "2d6" && aoe.save_dc == 15,
          "/aoe keeps the damage and the DC");
+  const dnd::ChatCommand typed_aoe = parse("/aoe 2d6 15 холод");
+  Expect(typed_aoe.text == "2d6" && typed_aoe.save_dc == 15 &&
+             typed_aoe.damage_type == dnd::DamageType::kCold,
+         "/aoe keeps the damage type");
   Expect(parse("/aoe 2d6").error == ChatCommandError::kBadAoe,
          "/aoe without a DC is an error");
   Expect(parse("/aoe 2d6 200").error == ChatCommandError::kBadAoe,
@@ -4329,7 +4895,11 @@ auto TestCommandEventSerialization() -> void {
       .notes = "Дубина: +4, 1d8+2",
       .attack_bonus = 4,
       .save_bonus = 1,
-      .damage = "1d8+2",
+      .damage = "1d8+2 дробящий",
+      .attack_range = 2,
+      .resist = dnd::DamageTypeBit(dnd::DamageType::kCold),
+      .vulnerable = dnd::DamageTypeBit(dnd::DamageType::kFire),
+      .immune = dnd::DamageTypeBit(dnd::DamageType::kPoison),
   }};
   const std::vector<std::uint8_t> add_bytes = dnd::EncodeCommand(add);
   const std::optional<dnd::Command> add_decoded =
@@ -4348,7 +4918,14 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::AddToken>(*add_decoded).notes == "Дубина: +4, 1d8+2" &&
           std::get<dnd::AddToken>(*add_decoded).attack_bonus == 4 &&
           std::get<dnd::AddToken>(*add_decoded).save_bonus == 1 &&
-          std::get<dnd::AddToken>(*add_decoded).damage == "1d8+2",
+          std::get<dnd::AddToken>(*add_decoded).damage == "1d8+2 дробящий" &&
+          std::get<dnd::AddToken>(*add_decoded).attack_range == 2 &&
+          std::get<dnd::AddToken>(*add_decoded).resist ==
+              dnd::DamageTypeBit(dnd::DamageType::kCold) &&
+          std::get<dnd::AddToken>(*add_decoded).vulnerable ==
+              dnd::DamageTypeBit(dnd::DamageType::kFire) &&
+          std::get<dnd::AddToken>(*add_decoded).immune ==
+              dnd::DamageTypeBit(dnd::DamageType::kPoison),
       "spawn command survives serialization");
 
   const dnd::Command claim{dnd::ClaimToken{.id = 4}};
@@ -4405,18 +4982,22 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::SetTokenColor>(*color_decoded).color == 0xC85046U,
          "colour command survives serialization");
 
-  const dnd::Command sheet_command{
-      dnd::UpdateTokenSheet{.id = 4,
-                            .ac = 15,
-                            .speed = 9,
-                            .notes = "Атака: +4, 1d6+2",
-                            .attack_bonus = 4,
-                            .save_bonus = 1,
-                            .initiative_bonus = 3,
-                            .damage = "1d6+2",
-                            .temp_hp = 5,
-                            .hit_die = 10,
-                            .con_modifier = 2}};
+  const dnd::Command sheet_command{dnd::UpdateTokenSheet{
+      .id = 4,
+      .ac = 15,
+      .speed = 9,
+      .notes = "Атака: +4, 1d6+2",
+      .attack_bonus = 4,
+      .save_bonus = 1,
+      .initiative_bonus = 3,
+      .damage = "1d6+2 огонь",
+      .temp_hp = 5,
+      .hit_die = 10,
+      .con_modifier = 2,
+      .attack_range = 6,
+      .resist = dnd::DamageTypeBit(dnd::DamageType::kFire),
+      .vulnerable = dnd::DamageTypeBit(dnd::DamageType::kCold),
+      .immune = dnd::DamageTypeBit(dnd::DamageType::kPoison)}};
   const std::vector<std::uint8_t> sheet_bytes =
       dnd::EncodeCommand(sheet_command);
   const std::optional<dnd::Command> sheet_decoded =
@@ -4432,10 +5013,18 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).save_bonus == 1 &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).initiative_bonus ==
               3 &&
-          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).damage == "1d6+2" &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).damage ==
+              "1d6+2 огонь" &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).temp_hp == 5 &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).hit_die == 10 &&
-          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).con_modifier == 2,
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).con_modifier == 2 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).attack_range == 6 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).resist ==
+              dnd::DamageTypeBit(dnd::DamageType::kFire) &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).vulnerable ==
+              dnd::DamageTypeBit(dnd::DamageType::kCold) &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).immune ==
+              dnd::DamageTypeBit(dnd::DamageType::kPoison),
       "sheet command survives serialization");
 
   const dnd::Command combat_command{dnd::UpdateTokenCombat{
@@ -4459,14 +5048,17 @@ auto TestCommandEventSerialization() -> void {
                   .save_dc == 15,
       "combat command with save DC survives serialization");
 
-  const dnd::Command damage{dnd::DamageToken{.id = 4, .amount = 7}};
+  const dnd::Command damage{dnd::DamageToken{
+      .id = 4, .amount = 7, .damage_type = dnd::DamageType::kFire}};
   const std::vector<std::uint8_t> damage_bytes = dnd::EncodeCommand(damage);
   const std::optional<dnd::Command> damage_decoded =
       dnd::DecodeCommand(damage_bytes.data(), damage_bytes.size());
   Expect(damage_decoded.has_value() &&
              std::holds_alternative<dnd::DamageToken>(*damage_decoded) &&
              std::get<dnd::DamageToken>(*damage_decoded).id == 4 &&
-             std::get<dnd::DamageToken>(*damage_decoded).amount == 7,
+             std::get<dnd::DamageToken>(*damage_decoded).amount == 7 &&
+             std::get<dnd::DamageToken>(*damage_decoded).damage_type ==
+                 dnd::DamageType::kFire,
          "damage command survives serialization");
 
   const dnd::Command heal{dnd::HealToken{.id = 5, .amount = 3}};
@@ -4480,7 +5072,9 @@ auto TestCommandEventSerialization() -> void {
          "heal command survives serialization");
 
   const dnd::Command aoe_damage{
-      dnd::AoeDamage{.expression = "2d6", .save_dc = 15}};
+      dnd::AoeDamage{.expression = "2d6",
+                     .save_dc = 15,
+                     .damage_type = dnd::DamageType::kFire}};
   const std::vector<std::uint8_t> aoe_damage_bytes =
       dnd::EncodeCommand(aoe_damage);
   const std::optional<dnd::Command> aoe_damage_decoded =
@@ -4489,7 +5083,9 @@ auto TestCommandEventSerialization() -> void {
       aoe_damage_decoded.has_value() &&
           std::holds_alternative<dnd::AoeDamage>(*aoe_damage_decoded) &&
           std::get<dnd::AoeDamage>(*aoe_damage_decoded).expression == "2d6" &&
-          std::get<dnd::AoeDamage>(*aoe_damage_decoded).save_dc == 15,
+          std::get<dnd::AoeDamage>(*aoe_damage_decoded).save_dc == 15 &&
+          std::get<dnd::AoeDamage>(*aoe_damage_decoded).damage_type ==
+              dnd::DamageType::kFire,
       "aoe damage command survives serialization");
 
   const dnd::Command death_save{dnd::DeathSave{.id = 6}};
@@ -5408,6 +6004,10 @@ auto main() -> int {
     TestDeathSaves();
     TestConditionDurationAndInitiative();
     TestConditionSaves();
+    TestConditionPaletteAndExhaustion();
+    TestConditionAttackModifiers();
+    TestDamageTypesAndDefenses();
+    TestRangedAttackAndSurprise();
     TestDiceExpression();
     TestBestiary();
     TestDynamicFogObservers();

@@ -92,10 +92,14 @@ enum class SheetField : std::uint8_t {
   kTempHp = 5,
   kHitDie = 6,
   kCon = 7,
-  kDamage = 8,
-  kNotes = 9,
+  kRange = 8,
+  kDamage = 9,
+  kResist = 10,
+  kVulnerable = 11,
+  kImmune = 12,
+  kNotes = 13,
 };
-inline constexpr int kSheetFieldCount = 10;
+inline constexpr int kSheetFieldCount = 14;
 
 // Модальный лист персонажа или монстра. read_only — игрок только смотрит,
 // поля не подсвечиваются и не редактируются.
@@ -105,7 +109,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& attack, const std::string& save,
                     const std::string& initiative, const std::string& temp_hp,
                     const std::string& hit_die, const std::string& con,
-                    const std::string& damage, const std::string& notes,
+                    const std::string& range, const std::string& damage,
+                    const std::string& resist, const std::string& vulnerable,
+                    const std::string& immune, const std::string& notes,
                     bool read_only) -> void;
 
 // Модальный список встроенного бестиария.
@@ -118,7 +124,8 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
                          const std::vector<Condition>& conditions,
                          bool read_only, std::size_t selected, bool edit_dc,
-                         const std::string& dc_buffer) -> void;
+                         const std::string& dc_buffer, bool edit_custom,
+                         const std::string& custom_buffer) -> void;
 
 // Модальный список действий хода (2024): рывок, отход, уклонение и другие.
 // own_turn — ход этого токена и действие ещё не потрачено.

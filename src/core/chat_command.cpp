@@ -182,8 +182,18 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
 
   if (MatchesCommand(text, "/aoe")) {
     command.kind = ChatCommandKind::kAoe;
-    const std::string_view args = CommandArgs(text, "/aoe");
-    const std::size_t space = args.rfind(' ');
+    std::string_view args = CommandArgs(text, "/aoe");
+    // Необязательный тип урона идёт последним словом: «2d6 15 огонь».
+    const std::size_t last_space = args.find_last_of(' ');
+    if (last_space != std::string_view::npos) {
+      if (const std::optional<DamageType> type =
+              ParseDamageType(args.substr(last_space + 1));
+          type.has_value()) {
+        command.damage_type = *type;
+        args = args.substr(0, last_space);
+      }
+    }
+    const std::size_t space = args.find_last_of(' ');
     int save_dc = 0;
     DiceExpression expression;
     if (space == std::string_view::npos ||
@@ -237,9 +247,21 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
   if (MatchesCommand(text, "/damage") || MatchesCommand(text, "/heal")) {
     const bool heal = MatchesCommand(text, "/heal");
     command.kind = heal ? ChatCommandKind::kHeal : ChatCommandKind::kDamage;
-    if (!ParsePositiveNumber(CommandArgs(text, heal ? "/heal" : "/damage"),
-                             command.value)) {
+    const std::string_view args = CommandArgs(text, heal ? "/heal" : "/damage");
+    // Тип урона необязателен: «/damage 7 огонь».
+    const std::size_t space = args.find(' ');
+    const std::string_view number =
+        space == std::string_view::npos ? args : args.substr(0, space);
+    if (!ParsePositiveNumber(number, command.value)) {
       return reject(ChatCommandError::kBadDamage);
+    }
+    if (!heal && space != std::string_view::npos) {
+      const std::optional<DamageType> type =
+          ParseDamageType(args.substr(space + 1));
+      if (!type.has_value()) {
+        return reject(ChatCommandError::kBadDamage);
+      }
+      command.damage_type = *type;
     }
     return command;
   }

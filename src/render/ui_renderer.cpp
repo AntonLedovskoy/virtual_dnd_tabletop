@@ -481,7 +481,8 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
                      std::string(strings::kSheetSpeed) + ": " +
                      std::to_string(token->speed));
   if (movement == MovementInfo::kBudget) {
-    const int budget = SpeedToCells(token->speed) + token->movement_bonus;
+    // Запас с учётом истощения и обездвиживающих состояний.
+    const int budget = EffectiveSpeedCells(*token) + token->movement_bonus;
     const int left = std::max(0, budget - token->movement_used);
     lines.emplace_back(
         std::string(strings::kMovementLeft) + ": " + FormatMeters(left) + " " +
@@ -741,7 +742,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& attack, const std::string& save,
                     const std::string& initiative, const std::string& temp_hp,
                     const std::string& hit_die, const std::string& con,
-                    const std::string& damage, const std::string& notes,
+                    const std::string& range, const std::string& damage,
+                    const std::string& resist, const std::string& vulnerable,
+                    const std::string& immune, const std::string& notes,
                     bool read_only) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
@@ -752,7 +755,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
     return;
   }
   constexpr float width = 640.0F;
-  constexpr float height = 520.0F;
+  constexpr float height = 600.0F;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -768,7 +771,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   auto cursor_y = y + 18.0F;
   text->Draw(std::string(strings::kSheetTitle) + ": " + token.name, left,
              cursor_y, kAuthorText, content_width);
-  cursor_y += text->LineHeight() + 8.0F;
+  cursor_y += text->LineHeight() + 6.0F;
   text->Draw(std::string(KindLabel(token.kind)) + "  HP " +
                  std::to_string(token.hp) + "/" + std::to_string(token.max_hp) +
                  "  Иниц. " + std::to_string(token.initiative) + "  " +
@@ -777,17 +780,32 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                  std::string(strings::kSheetXp) + " " +
                  std::to_string(token.xp),
              left, cursor_y, kHintText, content_width);
+  cursor_y += text->LineHeight() + 2.0F;
+  if (token.kind == TokenKind::kPlayer) {
+    // Бонус мастерства уже включён в итоговые бонусы листа, здесь он только
+    // справочный. Монстры опыт не получают, им блок не нужен.
+    text->Draw(std::string(strings::kSheetProficiency) + " +" +
+                   std::to_string(ProficiencyBonus(LevelForXp(token.xp))) +
+                   "   " + std::string(strings::kSheetPerLevel) + " +" +
+                   std::to_string(
+                       HitPointsPerLevel(token.hit_die, token.con_modifier)),
+               left, cursor_y, kHintText, content_width);
+  }
 
-  const SDL_FRect ac_field{left, y + 114.0F, 174.0F, 40.0F};
-  const SDL_FRect speed_field{left + 193.0F, y + 114.0F, 174.0F, 40.0F};
-  const SDL_FRect initiative_field{left + 386.0F, y + 114.0F, 174.0F, 40.0F};
-  const SDL_FRect attack_field{left, y + 194.0F, 174.0F, 40.0F};
-  const SDL_FRect save_field{left + 193.0F, y + 194.0F, 174.0F, 40.0F};
-  const SDL_FRect temp_hp_field{left + 386.0F, y + 194.0F, 174.0F, 40.0F};
-  const SDL_FRect hit_die_field{left, y + 274.0F, 174.0F, 40.0F};
-  const SDL_FRect con_field{left + 193.0F, y + 274.0F, 174.0F, 40.0F};
-  const SDL_FRect damage_field{left, y + 354.0F, content_width, 40.0F};
-  const SDL_FRect notes_field{left, y + 434.0F, content_width, 40.0F};
+  const SDL_FRect ac_field{left, y + 108.0F, 174.0F, 40.0F};
+  const SDL_FRect speed_field{left + 193.0F, y + 108.0F, 174.0F, 40.0F};
+  const SDL_FRect initiative_field{left + 386.0F, y + 108.0F, 174.0F, 40.0F};
+  const SDL_FRect attack_field{left, y + 168.0F, 174.0F, 40.0F};
+  const SDL_FRect save_field{left + 193.0F, y + 168.0F, 174.0F, 40.0F};
+  const SDL_FRect temp_hp_field{left + 386.0F, y + 168.0F, 174.0F, 40.0F};
+  const SDL_FRect hit_die_field{left, y + 228.0F, 174.0F, 40.0F};
+  const SDL_FRect con_field{left + 193.0F, y + 228.0F, 174.0F, 40.0F};
+  const SDL_FRect range_field{left + 386.0F, y + 228.0F, 174.0F, 40.0F};
+  const SDL_FRect damage_field{left, y + 292.0F, content_width, 40.0F};
+  const SDL_FRect resist_field{left, y + 352.0F, content_width, 40.0F};
+  const SDL_FRect vulnerable_field{left, y + 412.0F, content_width, 40.0F};
+  const SDL_FRect immune_field{left, y + 472.0F, content_width, 40.0F};
+  const SDL_FRect notes_field{left, y + 532.0F, content_width, 40.0F};
 
   const bool editing = !read_only;
   DrawModalField(renderer, text, ac_field, std::string(strings::kSheetAc), ac,
@@ -810,28 +828,22 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                  editing && active == SheetField::kHitDie);
   DrawModalField(renderer, text, con_field, std::string(strings::kSheetCon),
                  con, editing && active == SheetField::kCon);
+  DrawModalField(renderer, text, range_field, std::string(strings::kSheetRange),
+                 range, editing && active == SheetField::kRange);
   DrawModalField(renderer, text, damage_field,
                  std::string(strings::kSheetDamage), damage,
                  editing && active == SheetField::kDamage);
+  DrawModalField(renderer, text, resist_field,
+                 std::string(strings::kSheetResist), resist,
+                 editing && active == SheetField::kResist);
+  DrawModalField(renderer, text, vulnerable_field,
+                 std::string(strings::kSheetVulnerable), vulnerable,
+                 editing && active == SheetField::kVulnerable);
+  DrawModalField(renderer, text, immune_field,
+                 std::string(strings::kSheetImmune), immune,
+                 editing && active == SheetField::kImmune);
   DrawModalField(renderer, text, notes_field, std::string(strings::kSheetNotes),
                  notes, editing && active == SheetField::kNotes);
-
-  // Справа от кости хитов видно, что даст следующий уровень: мастерство уже
-  // включено в итоговые бонусы листа, поэтому показан только справочно.
-  // Монстры опыт не получают, поэтому им этот блок не нужен.
-  if (token.kind == TokenKind::kPlayer) {
-    const float derived_x = left + 386.0F;
-    const float derived_y = y + 282.0F;
-    const std::string level_label =
-        std::string(strings::kSheetProficiency) + " +" +
-        std::to_string(ProficiencyBonus(LevelForXp(token.xp)));
-    text->Draw(level_label, derived_x, derived_y, kHintText, 174.0F);
-    const std::string per_level =
-        std::string(strings::kSheetPerLevel) + " +" +
-        std::to_string(HitPointsPerLevel(token.hit_die, token.con_modifier));
-    text->Draw(per_level, derived_x, derived_y + text->LineHeight() + 2.0F,
-               kHintText, 174.0F);
-  }
 
   text->Draw(
       std::string(read_only ? strings::kSheetViewHint : strings::kSheetHint),
@@ -883,7 +895,8 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
                          const Token& token,
                          const std::vector<Condition>& conditions,
                          bool read_only, std::size_t selected, bool edit_dc,
-                         const std::string& dc_buffer) -> void {
+                         const std::string& dc_buffer, bool edit_custom,
+                         const std::string& custom_buffer) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -892,8 +905,8 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
   if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
-  constexpr float width = 520.0F;
-  constexpr float height = 360.0F;
+  constexpr float width = 660.0F;
+  constexpr float height = 480.0F;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -904,15 +917,41 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
   SDL_RenderRect(renderer, &panel);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-  const auto left = x + 30.0F;
-  const auto content_width = width - 60.0F;
-  auto cursor_y = y + 18.0F;
+  const auto left = x + 26.0F;
+  const auto content_width = width - 52.0F;
+  auto cursor_y = y + 16.0F;
   text->Draw(std::string(strings::kConditions) + ": " + token.name, left,
              cursor_y, kAuthorText, content_width);
-  cursor_y += text->LineHeight() + 10.0F;
+  cursor_y += text->LineHeight() + 4.0F;
+  const int exhaustion = ExhaustionLevel(token);
+  std::string summary = "Истощение: " + std::to_string(exhaustion) + "/" +
+                        std::to_string(kMaxExhaustionLevel);
+  if (exhaustion > 0) {
+    summary += " (−" + std::to_string(ExhaustionPenalty(token)) + " к d20, −" +
+               std::to_string(ExhaustionSpeedPenaltyCells(token)) +
+               " кл. скорости)";
+  }
+  if (IsSpeedZeroed(token)) {
+    summary += "  Скорость 0";
+  }
+  text->Draw(summary, left, cursor_y, kHintText, content_width);
 
   const auto& standard = DefaultConditions();
-  for (std::size_t i = 0; i < standard.size(); ++i) {
+  // Окно списка: восемь строк вокруг выбранной.
+  constexpr std::size_t visible_rows = 8;
+  std::size_t first = 0;
+  if (selected >= visible_rows) {
+    first = selected - visible_rows + 1;
+  }
+  if (standard.size() > visible_rows &&
+      first + visible_rows > standard.size()) {
+    first = standard.size() - visible_rows;
+  }
+  const float list_top = y + 70.0F;
+  const float left_width = 290.0F;
+  auto row_y = list_top;
+  for (std::size_t i = first; i < standard.size() && i < first + visible_rows;
+       ++i) {
     const auto found = std::ranges::find_if(
         conditions, [&standard, i](const Condition& item) -> bool {
           return item.name == standard[i];
@@ -923,17 +962,54 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
       line = (i == selected ? "> " : "  ") + std::to_string(i + 1) + ". ";
     }
     line += (active ? "[x] " : "[ ] ") + standard[i];
-    if (active) {
+    if (standard[i] == kExhaustion) {
+      line += " (" + std::to_string(exhaustion) + "/" +
+              std::to_string(kMaxExhaustionLevel) + ")";
+    } else if (active) {
       line += " (" + FormatConditionDuration(found->seconds);
       if (found->save_dc > 0) {
         line += ", КС " + std::to_string(found->save_dc);
       }
       line += ")";
     }
-    text->Draw(line, left, cursor_y, active ? kAuthorText : kLogText,
-               content_width);
-    cursor_y += text->LineHeight() + 2.0F;
+    text->Draw(line, left, row_y, active ? kAuthorText : kLogText, left_width);
+    row_y += text->LineHeight() + 2.0F;
   }
+  // Правая колонка: всё, что сейчас на токене, включая свои состояния.
+  const float right_x = left + left_width + 16.0F;
+  const float right_width = width - (right_x - x) - 20.0F;
+  text->Draw("Сейчас на токене:", right_x, list_top, kHintText, right_width);
+  auto active_y = list_top + text->LineHeight() + 2.0F;
+  std::size_t shown = 0;
+  bool exhaustion_shown = false;
+  for (const Condition& condition : conditions) {
+    if (condition.name == kExhaustion) {
+      if (exhaustion_shown) {
+        continue;
+      }
+      exhaustion_shown = true;
+    }
+    if (shown >= visible_rows) {
+      text->Draw("…", right_x, active_y, kHintText, right_width);
+      break;
+    }
+    std::string line = "• " + condition.name;
+    if (condition.name != kExhaustion) {
+      line += " — " + FormatConditionDuration(condition.seconds);
+      if (condition.save_dc > 0) {
+        line += ", КС " + std::to_string(condition.save_dc);
+      }
+    } else {
+      line += " — уровень " + std::to_string(ExhaustionLevel(token));
+    }
+    text->Draw(line, right_x, active_y, kLogText, right_width);
+    active_y += text->LineHeight() + 2.0F;
+    ++shown;
+  }
+  if (conditions.empty()) {
+    text->Draw("нет состояний", right_x, active_y, kHintText, right_width);
+  }
+
   if (read_only) {
     text->Draw(std::string(strings::kConditionsViewHint), left,
                y + height - 30.0F, kHintText, content_width);
@@ -941,12 +1017,18 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   if (edit_dc) {
     text->Draw(std::string(strings::kConditionDcPrompt) + dc_buffer + "_", left,
-               y + height - 74.0F, kAuthorText, content_width);
+               y + height - 98.0F, kAuthorText, content_width);
+  } else if (edit_custom) {
+    text->Draw(
+        std::string(strings::kConditionCustomPrompt) + custom_buffer + "_",
+        left, y + height - 98.0F, kAuthorText, content_width);
   }
   text->Draw(std::string(strings::kConditionsPanelHint), left,
-             y + height - 48.0F, kHintText, content_width);
+             y + height - 70.0F, kHintText, content_width);
   text->Draw(std::string(strings::kConditionsPanelHint2), left,
-             y + height - 26.0F, kHintText, content_width);
+             y + height - 46.0F, kHintText, content_width);
+  text->Draw(std::string(strings::kConditionsPanelHint3), left,
+             y + height - 22.0F, kHintText, content_width);
 }
 
 auto DrawActionsPanel(SDL_Renderer* renderer, TextRenderer* text,

@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "core/aoe.h"
+#include "core/damage.h"
 #include "core/encounter.h"
 #include "core/grid_map.h"
 #include "core/map_background.h"
@@ -52,6 +53,11 @@ struct AddToken {
   int attack_bonus = 0;
   int save_bonus = 0;
   std::string damage;
+  // Дальнобойная атака и защита от урона монстра из шаблона бестиария.
+  int attack_range = 0;
+  std::uint32_t resist = 0;
+  std::uint32_t vulnerable = 0;
+  std::uint32_t immune = 0;
 };
 
 // Только DM: удалить токен.
@@ -128,6 +134,11 @@ struct UpdateTokenSheet {
   // прирост HP при повышении уровня.
   int hit_die = 8;
   int con_modifier = 0;
+  // Дальнобойная атака в клетках (0 — без ограничения) и маски защиты.
+  int attack_range = 0;
+  std::uint32_t resist = 0;
+  std::uint32_t vulnerable = 0;
+  std::uint32_t immune = 0;
 };
 
 // Атака одним токеном другого: сервер бросает d20 + бонус атаки против КД
@@ -170,10 +181,12 @@ struct UseTurnAction {
 };
 
 // Владелец или DM: нанести урон. Временные HP принимают удар первыми, при
-// нуле HP сервер ставит состояние «без сознания».
+// нуле HP сервер ставит состояние «без сознания». Тип урона включает
+// сопротивление, уязвимость и иммунитет цели; kNone — урон без типа.
 struct DamageToken {
   TokenId id = 0;
   int amount = 1;
+  DamageType damage_type = DamageType::kNone;
 };
 
 // Владелец или DM: вылечить токен, но не выше максимума HP.
@@ -201,6 +214,7 @@ struct AdvanceTime {
 struct AoeDamage {
   std::string expression;
   int save_dc = 15;
+  DamageType damage_type = DamageType::kNone;
 };
 
 // Владелец или DM: спасбросок от смерти у токена с нулём HP.
