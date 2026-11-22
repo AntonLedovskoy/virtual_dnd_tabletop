@@ -225,6 +225,9 @@ inline constexpr std::string_view kVersionLabel = "Версия ";
 inline constexpr std::string_view kProtocolLabel = "протокол ";
 inline constexpr std::string_view kUpdateAvailable = "Доступна версия ";
 inline constexpr std::string_view kUpdateDownloading = "Загрузка обновления";
+// Несколько файлов (exe плюс ассеты): «Загрузка обновления» с номером файла
+// уже не влезает в полосу — берём короткую подпись.
+inline constexpr std::string_view kUpdateDownloadingFile = "Загрузка";
 inline constexpr std::string_view kUpdateReady = "Скачано: ";
 inline constexpr std::string_view kUpdateAction = "Обновить и перезапустить";
 inline constexpr std::string_view kUpdateRestart = "Перезапустить";

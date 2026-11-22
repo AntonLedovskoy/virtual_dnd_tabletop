@@ -2,7 +2,13 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <utility>
+#include <vector>
+
+#include "core/sha256.h"
 
 namespace dnd {
 namespace {
@@ -270,6 +276,26 @@ class Reader {
     return false;
   }
 
+  // Неотрицательное целое с потолком: размер файла из манифеста.
+  [[nodiscard]] auto ParseUnsigned(std::uint64_t limit, std::uint64_t& out)
+      -> bool {
+    SkipWhitespace();
+    const std::size_t start = pos_;
+    std::uint64_t value = 0;
+    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') {
+      value = value * 10 + static_cast<std::uint64_t>(text_[pos_] - '0');
+      if (value > limit) {
+        return false;
+      }
+      ++pos_;
+    }
+    if (pos_ == start) {
+      return false;
+    }
+    out = value;
+    return true;
+  }
+
  private:
   [[nodiscard]] auto ParseHex4(std::uint32_t& value) -> bool {
     if (pos_ + 4 > text_.size()) {
@@ -325,7 +351,247 @@ auto ToLowerAscii(std::string& text) -> void {
   }
 }
 
+auto ToLowerAsciiCopy(std::string_view text) -> std::string {
+  std::string copy(text);
+  ToLowerAscii(copy);
+  return copy;
+}
+
+auto EndsWithNoCase(std::string_view text, std::string_view suffix) -> bool {
+  if (text.size() < suffix.size()) {
+    return false;
+  }
+  return ToLowerAsciiCopy(text.substr(text.size() - suffix.size())) ==
+         ToLowerAsciiCopy(suffix);
+}
+
+// Один элемент массива `files`. Неизвестные ключи пропускаем: манифест
+// будущей версии не должен ломать старый клиент. Обязательны все четыре
+// поля: без пути, ссылки, хеша или размера файл не скачать и не проверить.
+[[nodiscard]] auto ParseUpdateFile(Reader& reader,
+                                   const std::vector<UpdateFile>& already,
+                                   UpdateFile& file) -> bool {
+  if (!reader.Consume('{')) {
+    return false;
+  }
+  reader.SkipWhitespace();
+  if (reader.Consume('}')) {
+    return false;
+  }
+  bool has_path = false;
+  bool has_url = false;
+  bool has_sha = false;
+  bool has_size = false;
+  while (true) {
+    std::string key;
+    if (!reader.ParseString(key)) {
+      return false;
+    }
+    if (!reader.Consume(':')) {
+      return false;
+    }
+    if (key == "path") {
+      std::string text;
+      if (!reader.ParseString(text) || !IsSafeUpdatePath(text)) {
+        return false;
+      }
+      // Windows не различает регистр: два пути, отличающиеся им, — один файл.
+      const std::string folded = ToLowerAsciiCopy(text);
+      for (const UpdateFile& other : already) {
+        if (ToLowerAsciiCopy(other.path) == folded) {
+          return false;
+        }
+      }
+      file.path = std::move(text);
+      has_path = true;
+    } else if (key == "url") {
+      std::string text;
+      if (!reader.ParseString(text) || text.empty()) {
+        return false;
+      }
+      file.url = std::move(text);
+      has_url = true;
+    } else if (key == "sha256") {
+      std::string text;
+      if (!reader.ParseString(text) || !IsValidSha256(text)) {
+        return false;
+      }
+      ToLowerAscii(text);
+      file.sha256 = std::move(text);
+      has_sha = true;
+    } else if (key == "size") {
+      std::uint64_t size = 0;
+      if (!reader.ParseUnsigned(kMaxUpdateBytes, size) || size == 0) {
+        return false;
+      }
+      file.size = size;
+      has_size = true;
+    } else if (!reader.SkipValue(1)) {
+      return false;
+    }
+
+    reader.SkipWhitespace();
+    if (reader.Consume('}')) {
+      break;
+    }
+    if (!reader.Consume(',')) {
+      return false;
+    }
+  }
+  return has_path && has_url && has_sha && has_size;
+}
+
+[[nodiscard]] auto ParseUpdateFiles(Reader& reader,
+                                    std::vector<UpdateFile>& out) -> bool {
+  out.clear();
+  if (!reader.Consume('[')) {
+    return false;
+  }
+  reader.SkipWhitespace();
+  if (reader.Consume(']')) {
+    return true;
+  }
+  std::uint64_t total = 0;
+  while (true) {
+    if (out.size() >= kMaxUpdateFiles) {
+      return false;
+    }
+    UpdateFile file;
+    if (!ParseUpdateFile(reader, out, file)) {
+      return false;
+    }
+    total += file.size;
+    if (total > kMaxUpdateTotalBytes) {
+      return false;
+    }
+    out.push_back(std::move(file));
+    reader.SkipWhitespace();
+    if (reader.Consume(']')) {
+      return true;
+    }
+    if (!reader.Consume(',')) {
+      return false;
+    }
+  }
+}
+
+// sha256 файла на диске: файл читается целиком, как и при скачивании.
+// false — файла нет или он больше лимита: тогда его нужно качать.
+[[nodiscard]] auto HashFileHex(const std::filesystem::path& path,
+                               std::string& hex) -> bool {
+  std::error_code code;
+  const std::uintmax_t size = std::filesystem::file_size(path, code);
+  if (code || size == 0 || size > kMaxUpdateBytes) {
+    return false;
+  }
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return false;
+  }
+  std::string bytes(static_cast<std::size_t>(size), '\0');
+  file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  if (!file) {
+    return false;
+  }
+  hex = HexDigest(Sha256(std::string_view(bytes)));
+  return true;
+}
+
 }  // namespace
+
+auto IsSafeUpdatePath(std::string_view path) -> bool {
+  constexpr std::size_t max_path_bytes = 200;
+  constexpr std::size_t max_segment_bytes = 64;
+  if (path.empty() || path.size() > max_path_bytes) {
+    return false;
+  }
+  // Только `assets/`: данные стола и сам exe манифесту недоступны.
+  if (!path.starts_with(kAssetDirectory)) {
+    return false;
+  }
+  // Временное имя скачанного файла — наше: ассет с таким именем перетрёт его.
+  if (EndsWithNoCase(path, kStagedSuffix)) {
+    return false;
+  }
+  std::size_t begin = 0;
+  while (begin <= path.size()) {
+    const std::size_t slash = path.find('/', begin);
+    const std::string_view segment = slash == std::string_view::npos
+                                         ? path.substr(begin)
+                                         : path.substr(begin, slash - begin);
+    if (segment.empty() || segment.size() > max_segment_bytes ||
+        segment == "." || segment == ".." || segment.back() == '.') {
+      return false;
+    }
+    for (const char c : segment) {
+      const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                           (c >= '0' && c <= '9') || c == '.' || c == '-' ||
+                           c == '_';
+      if (!allowed) {
+        return false;
+      }
+    }
+    if (slash == std::string_view::npos) {
+      return true;
+    }
+    begin = slash + 1;
+  }
+  return false;
+}
+
+auto StagedUpdatePath(const std::filesystem::path& base, std::string_view path)
+    -> std::filesystem::path {
+  std::string staged(path);
+  staged += kStagedSuffix;
+  return base / std::filesystem::path(staged);
+}
+
+auto PlanAssetDownloads(const std::filesystem::path& base,
+                        const std::vector<UpdateFile>& files,
+                        UpdateDownloadPlan& plan) -> void {
+  UpdateDownloadPlan result;
+  for (const UpdateFile& file : files) {
+    const std::filesystem::path target =
+        base / std::filesystem::path(file.path);
+    std::string hex;
+    if (!HashFileHex(target, hex) || hex != file.sha256) {
+      result.files.push_back(file);
+      result.total_bytes += file.size;
+    }
+  }
+  plan = std::move(result);
+}
+
+auto RemoveStagedAssets(const std::filesystem::path& base) -> void {
+  const std::filesystem::path root =
+      base / std::filesystem::path(std::string(kAssetDirectory));
+  std::error_code code;
+  if (!std::filesystem::is_directory(root, code)) {
+    return;
+  }
+  // Сначала собираем, потом удаляем: менять дерево во время обхода нельзя.
+  std::vector<std::filesystem::path> staged;
+  std::filesystem::recursive_directory_iterator it(root, code);
+  const std::filesystem::recursive_directory_iterator end;
+  if (code) {
+    return;
+  }
+  for (; it != end; it.increment(code)) {
+    if (code) {
+      break;
+    }
+    if (!it->is_regular_file(code)) {
+      continue;
+    }
+    if (EndsWithNoCase(it->path().filename().string(), kStagedSuffix)) {
+      staged.push_back(it->path());
+    }
+  }
+  for (const std::filesystem::path& path : staged) {
+    std::filesystem::remove(path, code);
+    code.clear();
+  }
+}
 
 auto ParseUpdateManifest(std::string_view json, UpdateManifest& manifest)
     -> bool {
@@ -401,6 +667,12 @@ auto ParseUpdateManifest(std::string_view json, UpdateManifest& manifest)
         return false;
       }
       parsed.protocol = protocol;
+    } else if (key == "files") {
+      // Битая таблица ассетов — битый манифест: без части файлов установка
+      // окажется половинчатой, лучше отказаться целиком.
+      if (!ParseUpdateFiles(reader, parsed.files)) {
+        return false;
+      }
     } else if (!reader.SkipValue(0)) {
       return false;
     }
@@ -480,6 +752,10 @@ auto ApplyStartupRecovery(const std::filesystem::path& directory,
       directory / std::string(kPreviousExeName);
   const std::filesystem::path update = directory / std::string(kUpdateExeName);
   std::error_code code;
+
+  // Недокачанные ассеты убираются при любом действии: рабочий exe их не
+  // читает, а места они не занимают.
+  RemoveStagedAssets(directory);
 
   switch (action) {
     case StartupAction::kNone:

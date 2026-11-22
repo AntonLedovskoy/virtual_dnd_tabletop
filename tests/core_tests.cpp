@@ -3129,6 +3129,146 @@ auto TestUpdateManifest() -> void {
          "a developer build never offers updates");
   Expect(dnd::IsUpdateAvailable(dirty, newer, true),
          "DND_UPDATE_MANIFEST lets a developer build test the cycle");
+  Expect(newer.files.empty(), "a manifest without files updates the exe only");
+
+  // Ассеты: путь только внутри assets/, поля обязательны, повторы и опасные
+  // пути отвергают манифест целиком — половина файлов хуже, чем ничего.
+  const std::string sha(64, 'a');
+  const auto entry = [&sha](std::string_view path, std::string_view url,
+                            std::string_view size) -> std::string {
+    return std::string(R"json({"path":")json") + std::string(path) +
+           R"json(","url":")json" + std::string(url) +
+           R"json(","sha256":")json" + sha + R"json(","size":)json" +
+           std::string(size) + R"json(,"future":{"nested":[1,true]}})json";
+  };
+  const auto manifest_with = [&sha](std::string_view files) -> std::string {
+    return std::string(
+               R"json({"version":"0.3.0","url":"x.exe","sha256":")json") +
+           sha + R"json(","files":)json" + std::string(files) + "}";
+  };
+  const auto rejects_files = [&manifest_with](std::string_view files) -> bool {
+    dnd::UpdateManifest candidate;
+    return !dnd::ParseUpdateManifest(manifest_with(files), candidate);
+  };
+  const auto many_files = [&entry](int count) -> std::string {
+    std::string text = "[";
+    for (int i = 0; i < count; ++i) {
+      if (i > 0) {
+        text += ",";
+      }
+      text += entry("assets/f" + std::to_string(i) + ".bin", "f", "1");
+    }
+    text += "]";
+    return text;
+  };
+
+  dnd::UpdateManifest with_files;
+  Expect(dnd::ParseUpdateManifest(
+             manifest_with(
+                 "[" + entry("assets/fonts/DejaVuSans.ttf", "f.ttf", "1024") +
+                 "]"),
+             with_files),
+         "a files array parses");
+  Expect(with_files.files.size() == 1 &&
+             with_files.files[0].path == "assets/fonts/DejaVuSans.ttf" &&
+             with_files.files[0].url == "f.ttf" &&
+             with_files.files[0].sha256 == sha &&
+             with_files.files[0].size == 1024,
+         "an asset keeps path, url, sha256 and size");
+  Expect(rejects_files("[" + entry("assets/../exe.exe", "f", "1") + "]"),
+         "a parent segment is rejected");
+  Expect(rejects_files("[" + entry("virtual_dnd_tabletop.exe", "f", "1") + "]"),
+         "a path outside assets/ is rejected");
+  Expect(
+      rejects_files("[" + entry("assets/fonts/x.ttf.update", "f", "1") + "]"),
+      "the staging suffix is reserved");
+  Expect(rejects_files("[" + entry("assets//x.ttf", "f", "1") + "]"),
+         "an empty segment is rejected");
+  Expect(rejects_files("[" + entry("assets/x.ttf", "f", "0") + "]"),
+         "a zero size is rejected");
+  Expect(rejects_files("[" + entry("assets/X.ttf", "f", "1") + "," +
+                       entry("assets/x.ttf", "f", "1") + "]"),
+         "paths differing only by case are one file");
+  Expect(rejects_files(
+             std::string(R"json([{"path":"assets/x.ttf","sha256":")json") +
+             sha + R"json(","size":1}])json"),
+         "an asset without a url is rejected");
+  Expect(rejects_files(many_files(static_cast<int>(dnd::kMaxUpdateFiles) + 1)),
+         "more assets than the limit is rejected");
+  Expect(!rejects_files(many_files(static_cast<int>(dnd::kMaxUpdateFiles))),
+         "the asset limit itself is allowed");
+  Expect(rejects_files(R"json({"assets":"not an array"})json"),
+         "files must be an array");
+
+  Expect(dnd::IsSafeUpdatePath("assets/fonts/DejaVuSans.ttf"),
+         "a plain asset path is safe");
+  Expect(!dnd::IsSafeUpdatePath("assets/x:y"), "a colon is not allowed");
+  Expect(!dnd::IsSafeUpdatePath("assets/x."), "a trailing dot is not allowed");
+  Expect(!dnd::IsSafeUpdatePath("/assets/x"), "an absolute path is rejected");
+  Expect(!dnd::IsSafeUpdatePath("assets\\x"), "a backslash is rejected");
+  Expect(!dnd::IsSafeUpdatePath("assets/"), "a bare directory is rejected");
+}
+
+auto TestUpdateAssetPlan() -> void {
+  const std::filesystem::path directory =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_assets";
+  std::error_code code;
+  std::filesystem::remove_all(directory, code);
+  std::filesystem::create_directories(directory / "assets/fonts");
+
+  const auto write = [&directory](std::string_view name,
+                                  std::string_view text) -> void {
+    std::ofstream file(directory / std::string(name),
+                       std::ios::binary | std::ios::trunc);
+    file.write(text.data(), static_cast<std::streamsize>(text.size()));
+  };
+  const auto exists = [&directory](std::string_view name) -> bool {
+    std::error_code exists_code;
+    return std::filesystem::exists(directory / std::string(name), exists_code);
+  };
+  const auto hex = [](std::string_view text) -> std::string {
+    return dnd::HexDigest(dnd::Sha256(text));
+  };
+  const auto make = [&hex](std::string path,
+                           std::string_view text) -> dnd::UpdateFile {
+    dnd::UpdateFile file;
+    file.path = std::move(path);
+    file.url = "https://example.com/" + file.path;
+    file.sha256 = hex(text);
+    file.size = text.size();
+    return file;
+  };
+
+  write("assets/fonts/DejaVuSans.ttf", "font");
+  write("assets/fonts/Old.ttf", "old");
+  const dnd::UpdateFile font = make("assets/fonts/DejaVuSans.ttf", "font");
+  const dnd::UpdateFile missing = make("assets/fonts/Extra.ttf", "extra");
+  const dnd::UpdateFile changed = make("assets/fonts/Old.ttf", "new");
+
+  dnd::UpdateDownloadPlan plan;
+  dnd::PlanAssetDownloads(directory, {font, missing, changed}, plan);
+  Expect(plan.files.size() == 2 && plan.files[0].path == missing.path &&
+             plan.files[1].path == changed.path,
+         "only missing or changed assets are planned");
+  Expect(plan.total_bytes == missing.size + changed.size,
+         "the plan sums the bytes it will fetch");
+
+  dnd::PlanAssetDownloads(directory, {font}, plan);
+  Expect(plan.files.empty() && plan.total_bytes == 0,
+         "a matching asset is not downloaded again");
+
+  // Скачанное лежит рядом с местом назначения и убирается на старте.
+  const std::filesystem::path staged =
+      dnd::StagedUpdatePath(directory, font.path);
+  Expect(staged == directory / "assets/fonts/DejaVuSans.ttf.update",
+         "the staged copy sits next to its target");
+  write("assets/fonts/DejaVuSans.ttf.update", "half");
+  dnd::RemoveStagedAssets(directory);
+  Expect(!exists("assets/fonts/DejaVuSans.ttf.update") &&
+             exists("assets/fonts/DejaVuSans.ttf"),
+         "staged copies are swept and real assets stay");
+
+  std::filesystem::remove_all(directory, code);
 }
 
 auto TestUpdateAdvice() -> void {
@@ -3238,6 +3378,16 @@ auto TestStartupRecovery() -> void {
   Expect(read(dnd::kExecutableName) == "downloaded" &&
              !exists(dnd::kUpdateExeName),
          "finish swap installs the downloaded exe");
+
+  // Недокачанный ассет — тоже остаток обновления: рабочий exe его не читает.
+  std::filesystem::create_directories(directory / "assets/fonts");
+  write("assets/fonts/DejaVuSans.ttf", "font");
+  write("assets/fonts/DejaVuSans.ttf.update", "half");
+  Expect(dnd::ApplyStartupRecovery(directory, StartupAction::kCleanup, error),
+         "cleanup also handles assets");
+  Expect(exists("assets/fonts/DejaVuSans.ttf") &&
+             !exists("assets/fonts/DejaVuSans.ttf.update"),
+         "a staged asset is removed, the real one stays");
 
   Expect(dnd::ApplyStartupRecovery(directory, StartupAction::kNone, error),
          "nothing to do is not an error");
@@ -7478,6 +7628,7 @@ auto main() -> int {
     TestPlayerNames();
     TestVersion();
     TestUpdateManifest();
+    TestUpdateAssetPlan();
     TestUpdateAdvice();
     TestStartupRecovery();
     TestCaseInsensitiveOwnership();

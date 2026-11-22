@@ -117,19 +117,6 @@ auto CanWriteDirectory(const std::filesystem::path& directory) -> bool {
   return true;
 }
 
-auto ToHex(const Sha256Digest& digest) -> std::string {
-  constexpr std::array<char, 16> hex_digits = {'0', '1', '2', '3', '4', '5',
-                                               '6', '7', '8', '9', 'a', 'b',
-                                               'c', 'd', 'e', 'f'};
-  std::string text;
-  text.reserve(digest.size() * 2);
-  for (const std::uint8_t byte : digest) {
-    text.push_back(hex_digits[byte >> 4]);
-    text.push_back(hex_digits[byte & 0x0F]);
-  }
-  return text;
-}
-
 #ifdef _WIN32
 
 auto Utf8ToWide(std::string_view text) -> std::wstring {
@@ -418,10 +405,12 @@ auto UpdateService::SetStage(UpdateStage stage, std::string error) -> void {
   status_.error = std::move(error);
 }
 
-auto UpdateService::SetProgress(int progress) -> void {
+auto UpdateService::SetFileProgress(int done, int total, int percent) -> void {
   const std::scoped_lock lock(mutex_);
-  if (status_.progress != progress) {
-    status_.progress = progress;
+  status_.files_done = done;
+  status_.files_total = total;
+  if (status_.progress != percent) {
+    status_.progress = percent;
   }
 }
 
@@ -442,6 +431,8 @@ auto UpdateService::StartCheck() -> void {
     status_.stage = UpdateStage::kChecking;
     status_.error.clear();
     status_.progress = 0;
+    status_.files_done = 0;
+    status_.files_total = 0;
     status_.manual_only = false;
   }
   JoinWorker();
@@ -463,6 +454,8 @@ auto UpdateService::StartDownload() -> void {
     }
     status_.stage = UpdateStage::kDownloading;
     status_.progress = 0;
+    status_.files_done = 0;
+    status_.files_total = 0;
     status_.error.clear();
   }
   JoinWorker();
@@ -543,6 +536,45 @@ auto UpdateService::RunCheck() -> void {
       FormatVersion(current_).c_str(), writable ? 0 : 1);
 }
 
+auto UpdateService::FetchFile(std::string_view url, std::size_t max_bytes,
+                              int files_done, int files_total, std::string& out,
+                              std::string& error) -> bool {
+  out.clear();
+  if (IsRemoteUrl(url)) {
+    const HttpResult result =
+        HttpGet(url, max_bytes,
+                [this, files_done, files_total](std::size_t received,
+                                                std::size_t file_size) -> void {
+                  if (file_size == 0 || files_total <= 0) {
+                    return;
+                  }
+                  const auto part = static_cast<int>(
+                      std::min<std::size_t>(100, received * 100 / file_size));
+                  SetFileProgress(files_done, files_total,
+                                  (files_done * 100 + part) / files_total);
+                });
+    if (!result.ok) {
+      error = result.error;
+      return false;
+    }
+    out = result.body;
+    return true;
+  }
+  // Офлайн-проверка цикла: ссылка — путь рядом с манифестом.
+  std::filesystem::path path = PathFromUtf8(url);
+  if (path.is_relative()) {
+    const std::filesystem::path directory =
+        manifest_directory_.empty() ? base_path_ : manifest_directory_;
+    path = directory / path;
+  }
+  if (!ReadFileBytes(path, max_bytes, out, error)) {
+    return false;
+  }
+  SetFileProgress(files_done, files_total,
+                  ((files_done + 1) * 100) / std::max(files_total, 1));
+  return true;
+}
+
 auto UpdateService::RunDownload() -> void {
   UpdateManifest manifest;
   {
@@ -554,42 +586,24 @@ auto UpdateService::RunDownload() -> void {
     return;
   }
 
+  // Ассеты, которых нет на диске или которые изменились. Совпавшие файлы не
+  // качаем: при обычном обновлении скачивается только exe.
+  UpdateDownloadPlan plan;
+  PlanAssetDownloads(base_path_, manifest.files, plan);
+  const auto files_total = static_cast<int>(1 + plan.files.size());
+  SDL_Log("update download: %d file(s), %d asset(s), %llu bytes to fetch",
+          files_total, static_cast<int>(plan.files.size()),
+          static_cast<unsigned long long>(plan.total_bytes));
+
   std::string bytes;
   std::string error;
-  if (IsRemoteUrl(manifest.url)) {
-    const HttpResult result =
-        HttpGet(manifest.url, kMaxUpdateBytes,
-                [this](std::size_t received, std::size_t total) -> void {
-                  if (total > 0) {
-                    const auto percent = static_cast<int>(
-                        std::min<std::size_t>(100, received * 100 / total));
-                    SetProgress(percent);
-                  }
-                });
-    if (!result.ok) {
-      SDL_Log("update download failed: %s", result.error.c_str());
-      SetStage(UpdateStage::kFailed,
-               "Не удалось скачать обновление: " + result.error);
-      return;
-    }
-    bytes = result.body;
-  } else {
-    std::filesystem::path path = PathFromUtf8(manifest.url);
-    if (path.is_relative()) {
-      const std::filesystem::path directory =
-          manifest_directory_.empty() ? base_path_ : manifest_directory_;
-      path = directory / path;
-    }
-    if (!ReadFileBytes(path, kMaxUpdateBytes, bytes, error)) {
-      SDL_Log("update file %s: %s", path.string().c_str(), error.c_str());
-      SetStage(UpdateStage::kFailed,
-               "Не удалось прочитать обновление: " + error);
-      return;
-    }
-    SetProgress(100);
+  if (!FetchFile(manifest.url, kMaxUpdateBytes, 0, files_total, bytes, error)) {
+    SDL_Log("update download failed: %s", error.c_str());
+    SetStage(UpdateStage::kFailed, "Не удалось скачать обновление: " + error);
+    return;
   }
 
-  if (ToHex(Sha256(std::string_view(bytes))) != manifest.sha256) {
+  if (HexDigest(Sha256(std::string_view(bytes))) != manifest.sha256) {
     SDL_Log("update sha256 mismatch for %s", manifest.url.c_str());
     SetStage(UpdateStage::kFailed,
              "Файл обновления повреждён (не совпал sha256)");
@@ -606,13 +620,48 @@ auto UpdateService::RunDownload() -> void {
     SetStage(UpdateStage::kFailed, "Не удалось записать обновление: " + error);
     return;
   }
-  SetProgress(100);
+  SetFileProgress(1, files_total, 100 / files_total);
+
+  // Ассеты кладём рядом с местом назначения: меняет файлы игры только
+  // подмена, поэтому до нажатия «Перезапустить» папка остаётся рабочей.
+  int done = 1;
+  for (const UpdateFile& file : plan.files) {
+    if (!FetchFile(file.url, kMaxUpdateBytes, done, files_total, bytes,
+                   error)) {
+      SDL_Log("update asset %s: %s", file.path.c_str(), error.c_str());
+      SetStage(UpdateStage::kFailed,
+               "Не удалось скачать " + file.path + ": " + error);
+      return;
+    }
+    if (bytes.size() != file.size ||
+        HexDigest(Sha256(std::string_view(bytes))) != file.sha256) {
+      SDL_Log("update asset %s is damaged", file.path.c_str());
+      SetStage(UpdateStage::kFailed,
+               "Файл " + file.path + " повреждён (не совпал sha256)");
+      return;
+    }
+    const std::filesystem::path staged =
+        StagedUpdatePath(base_path_, file.path);
+    std::error_code code;
+    std::filesystem::create_directories(staged.parent_path(), code);
+    if (!WriteFileBytes(staged, bytes, error)) {
+      SDL_Log("update write %s: %s", staged.string().c_str(), error.c_str());
+      SetStage(UpdateStage::kFailed,
+               "Не удалось записать " + file.path + ": " + error);
+      return;
+    }
+    ++done;
+    SetFileProgress(done, files_total, done * 100 / files_total);
+  }
+
+  SetFileProgress(files_total, files_total, 100);
   SetStage(UpdateStage::kReady);
-  SDL_Log("update %s is downloaded to %s",
-          FormatVersion(manifest.version).c_str(), target.string().c_str());
+  SDL_Log("update %s is downloaded (%d file(s))",
+          FormatVersion(manifest.version).c_str(), files_total);
 }
 
 auto InstallDownloadedUpdate(const std::filesystem::path& base_path,
+                             const std::vector<UpdateFile>& files,
                              std::string& error) -> bool {
 #ifdef _WIN32
   const std::filesystem::path exe = base_path / std::string(kExecutableName);
@@ -623,6 +672,26 @@ auto InstallDownloadedUpdate(const std::filesystem::path& base_path,
   if (!std::filesystem::exists(update, code)) {
     error = "Скачанный файл обновления не найден";
     return false;
+  }
+
+  // Ассеты — до exe: если подмена сорвётся на файле, игра останется со старым
+  // exe, а он новые файлы в assets/ просто не читает.
+  for (const UpdateFile& file : files) {
+    const std::filesystem::path staged = StagedUpdatePath(base_path, file.path);
+    if (!std::filesystem::exists(staged, code)) {
+      continue;
+    }
+    const std::filesystem::path asset =
+        base_path / std::filesystem::path(file.path);
+    std::filesystem::create_directories(asset.parent_path(), code);
+    if (MoveFileExW(staged.wstring().c_str(), asset.wstring().c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ==
+        FALSE) {
+      error = "Не удалось обновить " + file.path + ": " +
+              ErrorText(GetLastError()) +
+              ". Игра продолжает работать, нажмите «Повторить»";
+      return false;
+    }
   }
 
   // Старый остаток от прошлой подмены не должен мешать первому rename.
@@ -670,6 +739,7 @@ auto InstallDownloadedUpdate(const std::filesystem::path& base_path,
   return true;
 #else
   (void)base_path;
+  (void)files;
   error = "автообновление поддерживается только в Windows";
   return false;
 #endif

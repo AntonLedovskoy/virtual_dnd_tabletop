@@ -261,6 +261,7 @@ mkdir -p "$STAGE"
 find "$STAGE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 rm -f "$DIST_DIR/$EXE_NAME" "$DIST_DIR/$ZIP_NAME" \
   "$DIST_DIR/latest.json" "$DIST_DIR/notes.txt"
+rm -rf "$DIST_DIR/upload"
 cp "$EXE" "$STAGE/$EXE_NAME"
 # Шрифт кладём в архив, если он есть в репозитории: без него игра возьмёт
 # системный, но тогда вёрстка у игроков будет разной.
@@ -284,6 +285,32 @@ cp "$EXE" "$DIST_DIR/$EXE_NAME"
 (cd "$STAGE" &&
   "$CMAKE_BIN" -E tar cf "$(cygpath -m "$DIST_DIR/$ZIP_NAME")" --format=zip .)
 
+# Файлы рядом с exe, которые обновляются вместе с ним. В релиз они уходят
+# отдельными ассетами с плоскими именами (`assets__fonts__…`): GitHub не
+# принимает '/' в имени файла, а манифест хранит и путь назначения, и ссылку.
+ASSET_PATHS=(
+  assets/fonts/DejaVuSans.ttf
+  assets/fonts/LICENSE-DejaVu.txt
+)
+UPLOAD_DIR="$DIST_DIR/upload"
+mkdir -p "$UPLOAD_DIR"
+FILES_JSON=""
+UPLOAD_ARGS=()
+for rel in "${ASSET_PATHS[@]}"; do
+  [[ -f "$ROOT_DIR/$rel" ]] || {
+    echo "error: $rel не найден; без него манифест не собрать" >&2
+    exit 1
+  }
+  flat=${rel//\//__}
+  cp "$ROOT_DIR/$rel" "$UPLOAD_DIR/$flat"
+  asset_sha=$(sha256sum "$UPLOAD_DIR/$flat" | cut -d' ' -f1)
+  asset_size=$(stat -c %s "$UPLOAD_DIR/$flat")
+  entry="{\"path\": \"$rel\", \"url\": \"$REPO_URL/releases/download/v$VERSION/$flat\", \"sha256\": \"$asset_sha\", \"size\": $asset_size}"
+  [[ -z "$FILES_JSON" ]] || FILES_JSON+=", "
+  FILES_JSON+=$entry
+  UPLOAD_ARGS+=("dist/upload/$flat")
+done
+
 SHA256=$(sha256sum "$DIST_DIR/$EXE_NAME" | cut -d' ' -f1)
 PUBLISHED=$(date -u +%Y-%m-%d)
 printf '%s\n' "$NOTES" >"$DIST_DIR/notes.txt"
@@ -293,6 +320,7 @@ cat >"$DIST_DIR/latest.json" <<EOF
   "protocol": $PROTOCOL,
   "url": "$REPO_URL/releases/download/v$VERSION/$EXE_NAME",
   "sha256": "$SHA256",
+  "files": [$FILES_JSON],
   "notes": "$(json_escape "$NOTES")",
   "published": "$PUBLISHED"
 }
@@ -302,9 +330,10 @@ echo "==> dist/$STAGE_NAME/$EXE_NAME"
 echo "==> dist/$ZIP_NAME"
 echo "==> dist/latest.json (version $VERSION, protocol $PROTOCOL)"
 echo "==> sha256 $SHA256"
+echo "==> ассеты: ${UPLOAD_ARGS[*]}"
 if [[ -n "$TAG" ]]; then
   echo "==> Загрузка:"
   echo "    gh release create $TAG dist/$EXE_NAME \\"
-  echo "      dist/$ZIP_NAME dist/latest.json \\"
+  echo "      dist/$ZIP_NAME dist/latest.json ${UPLOAD_ARGS[*]} \\"
   echo "      --title \"$PACKAGE $VERSION\" --notes-file dist/notes.txt"
 fi

@@ -128,6 +128,19 @@ auto Sha256(std::string_view text) -> Sha256Digest {
   return Sha256(std::span<const std::uint8_t>(bytes, text.size()));
 }
 
+auto HexDigest(const Sha256Digest& digest) -> std::string {
+  constexpr std::array<char, 16> hex_digits = {'0', '1', '2', '3', '4', '5',
+                                               '6', '7', '8', '9', 'a', 'b',
+                                               'c', 'd', 'e', 'f'};
+  std::string text;
+  text.reserve(digest.size() * 2);
+  for (const std::uint8_t byte : digest) {
+    text.push_back(hex_digits[byte >> 4]);
+    text.push_back(hex_digits[byte & 0x0F]);
+  }
+  return text;
+}
+
 auto HmacSha256(std::span<const std::uint8_t> key,
                 std::span<const std::uint8_t> message) -> Sha256Digest {
   std::array<std::uint8_t, kBlockSize> block{};

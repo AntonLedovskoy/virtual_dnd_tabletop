@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "core/update.h"
 #include "core/version.h"
@@ -28,6 +29,10 @@ struct UpdateStatus {
   UpdateManifest manifest;
   // 0..100 во время скачивания; 100 — файл проверен и лежит рядом с exe.
   int progress = 0;
+  // Сколько файлов качаем (exe плюс ассеты) и сколько уже готово: баннер
+  // показывает «Загрузка 2/3», иначе обновление шрифта выглядит зависанием.
+  int files_done = 0;
+  int files_total = 0;
   // Папка игры только для чтения (Program Files): подменить exe нельзя,
   // остаётся скачать его вручную по ссылке из манифеста.
   bool manual_only = false;
@@ -69,7 +74,10 @@ class UpdateService {
   auto RunCheck() -> void;
   auto RunDownload() -> void;
   auto SetStage(UpdateStage stage, std::string error = {}) -> void;
-  auto SetProgress(int progress) -> void;
+  auto SetFileProgress(int done, int total, int percent) -> void;
+  // Один файл: URL или путь рядом с манифестом (офлайн-проверка цикла).
+  auto FetchFile(std::string_view url, std::size_t max_bytes, int done,
+                 int total, std::string& out, std::string& error) -> bool;
 
   std::filesystem::path base_path_;
   // Откуда читать манифест: пусто — стабильная ссылка GitHub, иначе файл
@@ -85,10 +93,13 @@ class UpdateService {
   std::thread worker_;
 };
 
-// Подмена exe в меню: `virtual_dnd_tabletop.exe` → `.old.exe`,
-// `.update.exe` → `virtual_dnd_tabletop.exe`, запуск нового процесса.
-// false — подмена не удалась, error объясняет что делать.
+// Подмена в меню: сначала ассеты из манифеста (`assets/**`), потом exe —
+// новый exe не должен запуститься со старым шрифтом. `files` пусто — старый
+// манифест, обновляется только exe.
+// `virtual_dnd_tabletop.exe` → `.old.exe`, `.update.exe` → `.exe`, запуск
+// нового процесса. false — подмена не удалась, error объясняет что делать.
 auto InstallDownloadedUpdate(const std::filesystem::path& base_path,
+                             const std::vector<UpdateFile>& files,
                              std::string& error) -> bool;
 
 }  // namespace dnd

@@ -1781,7 +1781,14 @@ auto App::MenuUpdateState() const -> MenuUpdate {
       break;
     case UpdateStage::kDownloading:
       update.visible = true;
-      update.message = std::string(strings::kUpdateDownloading);
+      if (status.files_total > 1) {
+        const int current = std::min(status.files_done + 1, status.files_total);
+        update.message = std::string(strings::kUpdateDownloadingFile) + " " +
+                         std::to_string(current) + "/" +
+                         std::to_string(status.files_total);
+      } else {
+        update.message = std::string(strings::kUpdateDownloading);
+      }
       if (status.progress > 0) {
         update.message += ": " + std::to_string(status.progress) + "%";
       }
@@ -1969,9 +1976,13 @@ auto App::HandleUpdateAction() -> void {
   switch (status.stage) {
     case UpdateStage::kUpdateAvailable:
       if (status.manual_only) {
-        // Папка только для чтения: автоматическая подмена невозможна,
-        // открываем ссылку на exe в браузере.
-        if (!SDL_OpenURL(status.manifest.url.c_str())) {
+        // Папка только для чтения: автоматическая подмена невозможна. Если в
+        // релизе есть ассеты, одного exe мало — ведём на страницу релизов,
+        // где лежит zip.
+        const std::string url = status.manifest.files.empty()
+                                    ? status.manifest.url
+                                    : std::string(kReleasesUrl);
+        if (!SDL_OpenURL(url.c_str())) {
           SDL_Log("SDL_OpenURL failed: %s", SDL_GetError());
         }
       } else {
@@ -1993,7 +2004,8 @@ auto App::ApplyUpdate() -> void {
   if (update_service_ == nullptr || in_game_) {
     return;
   }
-  if (update_service_->Status().stage != UpdateStage::kReady) {
+  const UpdateStatus status = update_service_->Status();
+  if (status.stage != UpdateStage::kReady) {
     return;
   }
   // Окно автосейва не должно потеряться при подмене exe.
@@ -2001,8 +2013,8 @@ auto App::ApplyUpdate() -> void {
   overlay_saver_.Flush();
   update_service_->MarkApplying();
   std::string error;
-  const bool installed =
-      InstallDownloadedUpdate(update_service_->BasePath(), error);
+  const bool installed = InstallDownloadedUpdate(update_service_->BasePath(),
+                                                 status.manifest.files, error);
   if (!installed) {
     SDL_Log("update install failed: %s", error.c_str());
     update_service_->Fail(error);
