@@ -11,9 +11,10 @@ Local rules win where stricter than global (language, live UI checks).
 Rules: always the latest D&D edition (2024, 5e revised). Where legacy 2014
 rules differ, follow 2024 — level-up, AC, conditions, rests, movement.
 Old rules appear only as a deliberate note in `PLAN.md`.
-Справочник по правилам — `docs/rules/cheatsheet-ru.md`, первоисточник —
-`docs/rules/SRD_CC_v5.2.1.pdf` (SRD 5.2.1, CC-BY-4.0); в спорных местах прав
-SRD.
+При разработке, проверке и обсуждении правил обязательно руководствуйтесь
+шпаргалкой `docs/rules/cheatsheet-ru.md`; первоисточник —
+`docs/rules/SRD_CC_v5.2.1.pdf` (SRD 5.2.1, CC-BY-4.0). В спорных местах прав
+SRD, а не память и не сторонние сайты.
 
 ## Build and tests
 
