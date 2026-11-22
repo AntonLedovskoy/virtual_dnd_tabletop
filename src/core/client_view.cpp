@@ -71,6 +71,8 @@ auto ClientView::Apply(const Event& event) -> void {
       event);
 }
 
+auto ClientView::ClearLog() -> void { log_.clear(); }
+
 auto ClientView::AddLocalLine(std::string text) -> void {
   log_.push_back(LogLine{
       .author = {},

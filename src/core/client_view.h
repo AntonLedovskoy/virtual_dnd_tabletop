@@ -34,6 +34,9 @@ class ClientView {
   // после загрузки сохранения. История лога сохраняется.
   auto Reset(GameSnapshot snapshot, const FogSnapshot& fog) -> void;
   auto Apply(const Event& event) -> void;
+  // Новая сессия за столом: строки прошлой партии в неё не переезжают.
+  // Счётчик отправленных в файл строк остаётся, иначе App запишет их снова.
+  auto ClearLog() -> void;
   // Локальная подсказка клиента, другим игрокам не отправляется.
   auto AddLocalLine(std::string text) -> void;
 

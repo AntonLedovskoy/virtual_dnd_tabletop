@@ -5358,6 +5358,16 @@ auto TestChatAndDice() -> void {
          "local feedback stays in the client log");
   Expect(view.AppendedLogLines() == 2,
          "local feedback is counted for the session log");
+
+  view.ClearLog();
+  Expect(view.Log().empty(), "a new party starts with an empty log");
+  Expect(view.AppendedLogLines() == 2,
+         "clearing the log keeps the session log counter");
+  view.AddLocalLine("fresh party");
+  Expect(view.Log().size() == 1 && view.Log().back().text == "fresh party",
+         "the first line after clearing opens a new log");
+  Expect(view.AppendedLogLines() == 3,
+         "cleared lines are not counted twice for the session log");
 }
 
 auto TestChatCommandParsing() -> void {

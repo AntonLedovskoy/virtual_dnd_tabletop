@@ -560,6 +560,8 @@ auto App::StartHost() -> bool {
   help_active_ = false;
   log_scroll_.ToNewest();
   log_top_ = 0.0F;
+  // Новая партия не должна начинаться с чужого разговора.
+  view_.ClearLog();
   players_.clear();
   players_.emplace_back("DM (хост)");
   player_owners_.clear();
@@ -4249,6 +4251,10 @@ auto App::PumpClient() -> void {
 
   if (update.welcome.has_value()) {
     const bool reconnected = in_game_ && !client_connected_;
+    if (!reconnected) {
+      // Вход за новый стол: подсказки прошлой игры остаются в журнале F3.
+      view_.ClearLog();
+    }
     view_.Reset(update.welcome->snapshot, update.welcome->fog);
     PruneStaleViewState();
     client_connected_ = true;
@@ -4725,6 +4731,7 @@ auto App::StartNewParty() -> void {
   party_error_ = false;
   party_mismatch_ = false;
   new_party_confirm_.Clear();
+  view_.ClearLog();
   ApplyPartyToCampaign();
   if (campaign_.scenes.empty()) {
     return;
