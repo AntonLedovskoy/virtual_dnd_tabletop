@@ -127,8 +127,8 @@ fi
 # api-ms-win-* из UCRT. Новая строка в списке — повод разобраться, откуда она.
 SYSTEM_DLLS=(
   advapi32 bcrypt cfgmgr32 dwmapi gdi32 hid imm32 kernel32 ole32 oleaut32
-  powrprof rpcrt4 setupapi shcore shell32 user32 userenv usp10 version winmm
-  ws2_32 ucrtbase
+  powrprof rpcrt4 setupapi shcore shell32 user32 userenv usp10 version
+  winhttp winmm ws2_32 ucrtbase
 )
 
 check_dependencies() {

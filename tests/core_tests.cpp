@@ -54,6 +54,7 @@
 #include "core/status_message.h"
 #include "core/ui_hint.h"
 #include "core/units.h"
+#include "core/update.h"
 #include "core/utf8.h"
 #include "core/version.h"
 #include "core/visibility.h"
@@ -3018,6 +3019,149 @@ auto TestVersion() -> void {
          "dirty does not change the numeric order");
   Expect(dnd::FormatVersion(dirty_same) == "1.2.3-dirty",
          "a developer build is formatted with -dirty");
+}
+
+auto TestUpdateManifest() -> void {
+  const std::string json = R"json( {
+  "version": "v0.3.0",
+  "protocol": 42,
+  "url": "https://example.com/v0.3.0/virtual_dnd_tabletop.exe",
+  "sha256": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+  "notes": "строка\nс \u00e9 и \"кавычками\"",
+  "published": "2026-11-22",
+  "unknown": {"nested": [1, true, null, "x"]}
+ } )json";
+  dnd::UpdateManifest manifest;
+  Expect(dnd::ParseUpdateManifest(json, manifest),
+         "a full manifest with unknown fields parses");
+  Expect(manifest.version.major == 0 && manifest.version.minor == 3 &&
+             manifest.version.patch == 0,
+         "the manifest version is parsed");
+  Expect(manifest.protocol == 42, "the protocol number is parsed");
+  Expect(manifest.sha256 ==
+             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+         "sha256 is normalized to lower case");
+  Expect(manifest.notes == "строка\nс é и \"кавычками\"",
+         "JSON escapes and unicode are decoded");
+  Expect(manifest.published == "2026-11-22", "published is kept as text");
+
+  dnd::UpdateManifest unchanged = manifest;
+  const auto rejects = [&unchanged](std::string_view text) -> bool {
+    dnd::UpdateManifest candidate = unchanged;
+    return !dnd::ParseUpdateManifest(text, candidate) &&
+           candidate.url == unchanged.url &&
+           candidate.sha256 == unchanged.sha256 &&
+           candidate.version.major == unchanged.version.major;
+  };
+  Expect(rejects(R"json({"version":"0.2.0"})json"),
+         "a manifest without url and sha256 is rejected");
+  Expect(rejects(R"json({"version":"0.2.0","url":"x","sha256":"0123"})json"),
+         "a short sha256 is rejected");
+  Expect(rejects(R"json({"version":"0.2.0","url":"x","sha256":
+      "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"})json"),
+         "a non-hex sha256 is rejected");
+  Expect(rejects(R"json({"version":"0.2.0","url":"x","sha256":
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",})json"),
+         "trailing commas are rejected");
+  Expect(rejects(R"json({"version":"0.2.0","url":"x","sha256":
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"} garbage)json"),
+         "trailing garbage is rejected");
+  Expect(rejects(R"json({"version":nope})json"), "broken JSON is rejected");
+
+  const dnd::Version current{.major = 0, .minor = 2, .patch = 0};
+  dnd::UpdateManifest newer;
+  Expect(dnd::ParseUpdateManifest(
+             R"json({"version":"0.2.1","url":"x","sha256":
+              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})json",
+             newer),
+         "a minimal manifest parses");
+  Expect(dnd::IsUpdateAvailable(current, newer), "a newer manifest is offered");
+  Expect(!dnd::IsUpdateAvailable(newer.version, newer),
+         "the same version is not offered again");
+  Expect(!dnd::IsUpdateAvailable(dnd::Version{.major = 1}, newer),
+         "an older manifest is not offered");
+  dnd::Version dirty = current;
+  dirty.dirty = true;
+  Expect(!dnd::IsUpdateAvailable(dirty, newer),
+         "a developer build never offers updates");
+  Expect(dnd::IsUpdateAvailable(dirty, newer, true),
+         "DND_UPDATE_MANIFEST lets a developer build test the cycle");
+}
+
+auto TestStartupRecovery() -> void {
+  using dnd::StartupAction;
+  Expect(dnd::PlanStartupRecovery(true, false, false) == StartupAction::kNone,
+         "a clean folder needs nothing");
+  Expect(dnd::PlanStartupRecovery(true, true, false) == StartupAction::kCleanup,
+         "a leftover old exe is cleaned up");
+  Expect(dnd::PlanStartupRecovery(true, false, true) == StartupAction::kCleanup,
+         "a stale download is cleaned up");
+  Expect(dnd::PlanStartupRecovery(true, true, true) == StartupAction::kCleanup,
+         "old and downloaded files are cleaned up after a swap");
+  Expect(dnd::PlanStartupRecovery(false, true, false) ==
+             StartupAction::kRestoreOld,
+         "a missing exe with an old one is restored");
+  Expect(
+      dnd::PlanStartupRecovery(false, true, true) == StartupAction::kRestoreOld,
+      "the old exe wins over an unfinished download");
+  Expect(dnd::PlanStartupRecovery(false, false, true) ==
+             StartupAction::kFinishSwap,
+         "a missing exe is finished from the downloaded one");
+  Expect(dnd::PlanStartupRecovery(false, false, false) == StartupAction::kNone,
+         "an empty folder has nothing to recover");
+
+  const std::filesystem::path directory =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_update";
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(directory, cleanup_error);
+  std::filesystem::create_directories(directory);
+  const auto write = [&directory](std::string_view name,
+                                  std::string_view text) -> void {
+    std::ofstream file(directory / std::string(name),
+                       std::ios::binary | std::ios::trunc);
+    file.write(text.data(), static_cast<std::streamsize>(text.size()));
+  };
+  const auto read = [&directory](std::string_view name) -> std::string {
+    std::ifstream file(directory / std::string(name), std::ios::binary);
+    return {std::istreambuf_iterator<char>(file),
+            std::istreambuf_iterator<char>()};
+  };
+  const auto exists = [&directory](std::string_view name) -> bool {
+    std::error_code code;
+    return std::filesystem::exists(directory / std::string(name), code);
+  };
+
+  // Подмена завершена: old и недокачанный update убираются, exe не тронут.
+  write(dnd::kExecutableName, "new");
+  write(dnd::kPreviousExeName, "old");
+  write(dnd::kUpdateExeName, "half");
+  std::string error;
+  Expect(dnd::ApplyStartupRecovery(directory, StartupAction::kCleanup, error),
+         "cleanup succeeds");
+  Expect(read(dnd::kExecutableName) == "new" &&
+             !exists(dnd::kPreviousExeName) && !exists(dnd::kUpdateExeName),
+         "cleanup keeps the current exe and removes leftovers");
+
+  // Обрыв после первого rename: старый бинарник возвращается на место.
+  write(dnd::kPreviousExeName, "old");
+  Expect(
+      dnd::ApplyStartupRecovery(directory, StartupAction::kRestoreOld, error),
+      "restore old succeeds");
+  Expect(read(dnd::kExecutableName) == "old" && !exists(dnd::kPreviousExeName),
+         "restore old puts the previous exe back");
+
+  // Обрыв после скачивания: update становится exe.
+  write(dnd::kUpdateExeName, "downloaded");
+  Expect(
+      dnd::ApplyStartupRecovery(directory, StartupAction::kFinishSwap, error),
+      "finish swap succeeds");
+  Expect(read(dnd::kExecutableName) == "downloaded" &&
+             !exists(dnd::kUpdateExeName),
+         "finish swap installs the downloaded exe");
+
+  Expect(dnd::ApplyStartupRecovery(directory, StartupAction::kNone, error),
+         "nothing to do is not an error");
+  std::filesystem::remove_all(directory, cleanup_error);
 }
 
 auto TestCaseInsensitiveOwnership() -> void {
@@ -6754,6 +6898,8 @@ auto main() -> int {
     TestUtf8();
     TestPlayerNames();
     TestVersion();
+    TestUpdateManifest();
+    TestStartupRecovery();
     TestCaseInsensitiveOwnership();
     TestTokenManagement();
     TestEncounter();

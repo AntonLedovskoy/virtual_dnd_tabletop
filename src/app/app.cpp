@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "app/strings.h"
+#include "app/update_service.h"
 #include "core/bestiary.h"
 #include "core/clock.h"
 #include "core/conditions.h"
@@ -297,6 +298,16 @@ App::App(AppOptions options)
   menu_.password = options_.password;
   menu_.tab =
       options_.mode == AppMode::kClient ? MenuTab::kJoin : MenuTab::kHost;
+  Version version;
+  if (ParseVersion(DND_VERSION, version)) {
+    menu_.version = FormatVersion(version);
+    if (version.dirty) {
+      menu_.version += " (developer build)";
+    }
+  } else {
+    menu_.version = DND_VERSION;
+  }
+  menu_.protocol = kProtocolVersion;
 }
 
 App::~App() { Shutdown(); }
@@ -329,6 +340,23 @@ auto App::Initialize() -> bool {
   }
   local_addresses_ = LocalIpv4Addresses();
   OpenSessionLog();
+
+  // Проверка обновлений: developer build молчит, DND_UPDATE_MANIFEST — явный
+  // отладочный обход, который разрешает весь цикл без нового релиза.
+  Version current_version;
+  const bool version_parsed = ParseVersion(DND_VERSION, current_version);
+  const char* manifest_env = std::getenv("DND_UPDATE_MANIFEST");
+  std::string manifest_override =
+      manifest_env == nullptr ? std::string{} : std::string(manifest_env);
+  const bool update_enabled =
+      !options_.no_update_check && version_parsed &&
+      (!current_version.dirty || !manifest_override.empty());
+  SDL_Log("update service: enabled=%d, manifest override='%s'",
+          update_enabled ? 1 : 0, manifest_override.c_str());
+  update_service_ = std::make_unique<UpdateService>(
+      BaseDirectory(), current_version, kProtocolVersion, update_enabled,
+      std::move(manifest_override));
+  update_service_->StartCheck();
 
   RefreshCampaignLibrary();
   if (!LoadSelectedCampaign()) {
@@ -1409,6 +1437,22 @@ auto App::HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void {
   }
   const MenuLayout layout =
       ComputeMenuLayout(window_width, window_height, menu_.tab);
+  const MenuUpdate update = MenuUpdateState();
+  if (update.visible) {
+    if (PointInside(layout.update_action, button.x, button.y)) {
+      if (update.action_enabled) {
+        HandleUpdateAction();
+      }
+      return;
+    }
+    if (PointInside(layout.update_dismiss, button.x, button.y)) {
+      update_dismissed_ = true;
+      return;
+    }
+    if (PointInside(layout.update_banner, button.x, button.y)) {
+      return;
+    }
+  }
   if (PointInside(layout.host_tab, button.x, button.y)) {
     menu_.tab = MenuTab::kHost;
     menu_.active_field = MenuField::kNone;
@@ -1455,6 +1499,125 @@ auto App::HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void {
   } else if (PointInside(layout.password_field, button.x, button.y)) {
     menu_.active_field = MenuField::kPassword;
   }
+}
+
+auto App::MenuUpdateState() const -> MenuUpdate {
+  MenuUpdate update;
+  if (update_service_ == nullptr || update_dismissed_) {
+    return update;
+  }
+  const UpdateStatus status = update_service_->Status();
+  const std::string version = FormatVersion(status.manifest.version);
+  switch (status.stage) {
+    case UpdateStage::kUpdateAvailable:
+      update.visible = true;
+      update.message = std::string(strings::kUpdateAvailable) + version;
+      update.action = status.manual_only ? std::string(strings::kUpdateManual)
+                                         : std::string(strings::kUpdateAction);
+      update.dismiss = std::string(strings::kUpdateLater);
+      break;
+    case UpdateStage::kDownloading:
+      update.visible = true;
+      update.message = std::string(strings::kUpdateDownloading);
+      if (status.progress > 0) {
+        update.message += ": " + std::to_string(status.progress) + "%";
+      }
+      update.action = std::string(strings::kUpdateBusy);
+      update.action_enabled = false;
+      update.dismiss = std::string(strings::kUpdateLater);
+      break;
+    case UpdateStage::kReady:
+      update.visible = true;
+      update.message = std::string(strings::kUpdateReady) + version;
+      update.action = std::string(strings::kUpdateRestart);
+      update.dismiss = std::string(strings::kUpdateLater);
+      break;
+    case UpdateStage::kFailed:
+      update.visible = true;
+      update.message = status.error.empty()
+                           ? std::string(strings::kUpdateFailed)
+                           : status.error;
+      update.action = std::string(strings::kUpdateRetry);
+      update.dismiss = std::string(strings::kUpdateLater);
+      break;
+    default:
+      break;
+  }
+  return update;
+}
+
+auto App::SessionUpdateText() const -> std::string {
+  if (update_service_ == nullptr || !IsDm()) {
+    return {};
+  }
+  const UpdateStatus status = update_service_->Status();
+  if (status.stage != UpdateStage::kUpdateAvailable &&
+      status.stage != UpdateStage::kDownloading &&
+      status.stage != UpdateStage::kReady) {
+    return {};
+  }
+  return std::string(strings::kUpdateAvailable) +
+         FormatVersion(status.manifest.version) +
+         std::string(strings::kUpdateSession);
+}
+
+auto App::HandleUpdateAction() -> void {
+  if (update_service_ == nullptr || in_game_) {
+    return;
+  }
+  const UpdateStatus status = update_service_->Status();
+  switch (status.stage) {
+    case UpdateStage::kUpdateAvailable:
+      if (status.manual_only) {
+        // Папка только для чтения: автоматическая подмена невозможна,
+        // открываем ссылку на exe в браузере.
+        if (!SDL_OpenURL(status.manifest.url.c_str())) {
+          SDL_Log("SDL_OpenURL failed: %s", SDL_GetError());
+        }
+      } else {
+        update_service_->StartDownload();
+      }
+      break;
+    case UpdateStage::kReady:
+      ApplyUpdate();
+      break;
+    case UpdateStage::kFailed:
+      update_service_->StartCheck();
+      break;
+    default:
+      break;
+  }
+}
+
+auto App::ApplyUpdate() -> void {
+  if (update_service_ == nullptr || in_game_) {
+    return;
+  }
+  if (update_service_->Status().stage != UpdateStage::kReady) {
+    return;
+  }
+  // Окно автосейва не должно потеряться при подмене exe.
+  campaign_saver_.Flush();
+  update_service_->MarkApplying();
+  std::string error;
+  const bool installed =
+      InstallDownloadedUpdate(update_service_->BasePath(), error);
+  if (!installed) {
+    SDL_Log("update install failed: %s", error.c_str());
+    update_service_->Fail(error);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "virtual_dnd_tabletop",
+                             error.c_str(), window_);
+    return;
+  }
+  if (!error.empty()) {
+    SDL_Log("update relaunch failed: %s", error.c_str());
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "virtual_dnd_tabletop",
+                             error.c_str(), window_);
+  }
+  SDL_Log("update installed, closing the old process");
+  SDL_Event quit{};
+  quit.type = SDL_EVENT_QUIT;
+  SDL_PushEvent(&quit);
 }
 
 auto App::UpdatePlayersFromRoster(const std::vector<RosterEntry>& roster)
@@ -4515,7 +4678,8 @@ auto App::Iterate() -> void {
     menu_.campaign_file = campaign_files_.empty()
                               ? std::string{}
                               : campaign_files_[campaign_index_];
-    DrawMenu(renderer_, text_.get(), menu_, local_addresses_);
+    DrawMenu(renderer_, text_.get(), menu_, local_addresses_,
+             MenuUpdateState());
     SDL_RenderPresent(renderer_);
     return;
   }
@@ -4714,6 +4878,13 @@ auto App::Iterate() -> void {
   // нужен, чтобы он не принял замороженный стол за настоящий.
   if (is_client && !client_connected_) {
     DrawConnectionBanner(renderer_, text_.get(), strings::kConnectionLost);
+  } else {
+    // Подмена exe возможна только из меню: во время партии DM видит, что
+    // обновление ждёт выхода, и стол не теряется.
+    const std::string update = SessionUpdateText();
+    if (!update.empty()) {
+      DrawConnectionBanner(renderer_, text_.get(), update);
+    }
   }
   // Справка рисуется последней и перекрывает все остальные панели.
   if (help_active_) {

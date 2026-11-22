@@ -3,6 +3,8 @@
 
 #include <charconv>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -10,8 +12,11 @@
 
 #include "app/app.h"
 #include "app/file_log.h"
+#include "app/instance_lock.h"
+#include "app/strings.h"
 #include "core/campaign_io.h"
 #include "core/scene_io.h"
+#include "core/update.h"
 #include "core/version.h"
 #include "net/protocol.h"
 
@@ -27,7 +32,8 @@ constexpr const char* kUsage =
     "usage: virtual_dnd_tabletop [--menu] [--host] [--editor] [--port N] "
     "[--name NAME] [--password PASS] [--connect HOST[:PORT]] [--version] "
     "[--no-update-check]\n\n"
-    "--no-update-check зарезервирован: проверка обновлений пока не сделана.";
+    "--no-update-check отключает проверку обновлений. "
+    "DND_UPDATE_MANIFEST=путь — локальный latest.json для отладки.";
 
 // `--version` — тоже диалогом: консоли нет. В developer build видно, почему
 // автообновление выключено.
@@ -46,6 +52,17 @@ auto VersionInfo() -> std::string {
   text += "\nСохранения: " + std::to_string(dnd::kSaveVersion);
   text += "\nКампании: " + std::to_string(dnd::kCampaignVersion);
   return text;
+}
+
+// Папка рядом с exe: в ней лежат данные стола и файлы подмены. SDL держит
+// строку сама (в SDL3 это const char*), освобождать её нельзя.
+auto BasePath() -> std::filesystem::path {
+  const char* text = SDL_GetBasePath();
+  if (text == nullptr) {
+    return {};
+  }
+  return {
+      std::u8string(reinterpret_cast<const char8_t*>(text), std::strlen(text))};
 }
 
 auto ParsePort(std::string_view text, std::uint16_t& port) -> bool {
@@ -153,6 +170,37 @@ auto SDL_AppInit(void** appstate, int argc, char* argv[]) -> SDL_AppResult {
                              kUsage, nullptr);
     dnd::ShutdownFileLog();
     return SDL_APP_SUCCESS;
+  }
+
+  // Один экземпляр на папку: иначе два процесса из одной папки ломают
+  // подмену exe, а `old.exe` остаётся залоченным.
+  const std::filesystem::path base = BasePath();
+  if (!base.empty()) {
+    if (!dnd::AcquireInstanceLock(base)) {
+      SDL_Log("another instance already runs from %s", base.string().c_str());
+      SDL_ShowSimpleMessageBox(
+          SDL_MESSAGEBOX_WARNING, "virtual_dnd_tabletop",
+          std::string(dnd::strings::kAlreadyRunning).c_str(), nullptr);
+      dnd::ShutdownFileLog();
+      return SDL_APP_SUCCESS;
+    }
+
+    // Обрыв между шагами подмены лечится до создания окна.
+    std::error_code code;
+    const bool have_exe =
+        std::filesystem::exists(base / std::string(dnd::kExecutableName), code);
+    const bool have_old = std::filesystem::exists(
+        base / std::string(dnd::kPreviousExeName), code);
+    const bool have_update =
+        std::filesystem::exists(base / std::string(dnd::kUpdateExeName), code);
+    const dnd::StartupAction action =
+        dnd::PlanStartupRecovery(have_exe, have_old, have_update);
+    std::string recovery_error;
+    if (!dnd::ApplyStartupRecovery(base, action, recovery_error)) {
+      SDL_Log("startup recovery failed: %s", recovery_error.c_str());
+    } else if (action != dnd::StartupAction::kNone) {
+      SDL_Log("startup recovery: %d", static_cast<int>(action));
+    }
   }
 
   auto app = std::make_unique<dnd::App>(command_line.options);

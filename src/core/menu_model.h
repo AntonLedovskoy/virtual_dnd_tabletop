@@ -36,6 +36,9 @@ struct MenuState {
   std::string campaign_file;
   std::size_t campaign_index = 0;
   std::size_t campaign_count = 0;
+  // Версия сборки и версия протокола для вкладки хоста.
+  std::string version;
+  int protocol = 0;
 };
 
 // Поля вкладки в порядке обхода Tab.

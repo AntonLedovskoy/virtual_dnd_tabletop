@@ -22,6 +22,20 @@ struct MenuLayout {
   SDL_FRect action_button;
   // Строка выбора кампании на вкладке хоста.
   SDL_FRect campaign_line;
+  // Баннер обновления в шапке панели: вся полоса и две кнопки.
+  SDL_FRect update_banner;
+  SDL_FRect update_action;
+  SDL_FRect update_dismiss;
+};
+
+// Баннер обновления над вкладками. Пока он виден, подзаголовок меню уступает
+// место версии и кнопкам: места в шапке ровно на одну строку.
+struct MenuUpdate {
+  bool visible = false;
+  std::string message;
+  std::string action;
+  std::string dismiss;
+  bool action_enabled = true;
 };
 
 auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
@@ -29,6 +43,7 @@ auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
 
 auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
               const MenuState& state,
-              const std::vector<std::string>& local_addresses) -> void;
+              const std::vector<std::string>& local_addresses,
+              const MenuUpdate& update) -> void;
 
 }  // namespace dnd

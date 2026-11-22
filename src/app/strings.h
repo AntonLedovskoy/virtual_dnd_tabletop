@@ -185,6 +185,24 @@ inline constexpr std::string_view kTabHint =
 inline constexpr std::string_view kConnecting = "Подключение...";
 inline constexpr std::string_view kPlayers = "Игроки";
 
+// Версия и протокол на вкладке хоста и баннер обновления в меню.
+inline constexpr std::string_view kVersionLabel = "Версия ";
+inline constexpr std::string_view kProtocolLabel = "протокол ";
+inline constexpr std::string_view kUpdateAvailable = "Доступна версия ";
+inline constexpr std::string_view kUpdateDownloading = "Загрузка обновления";
+inline constexpr std::string_view kUpdateReady = "Скачано: ";
+inline constexpr std::string_view kUpdateAction = "Обновить и перезапустить";
+inline constexpr std::string_view kUpdateRestart = "Перезапустить";
+inline constexpr std::string_view kUpdateManual = "Скачать в браузере";
+inline constexpr std::string_view kUpdateRetry = "Повторить";
+inline constexpr std::string_view kUpdateLater = "Позже";
+inline constexpr std::string_view kUpdateBusy = "Загрузка...";
+inline constexpr std::string_view kUpdateFailed = "Ошибка обновления";
+inline constexpr std::string_view kUpdateSession =
+    " — обновление после выхода в меню";
+inline constexpr std::string_view kAlreadyRunning =
+    "Игра уже запущена из этой папки. Закройте её и попробуйте снова.";
+
 // Подтверждение возврата в стартовое меню.
 inline constexpr std::string_view kExitMenuTitle = "Выйти в меню?";
 inline constexpr std::string_view kExitMenuHost =

@@ -152,6 +152,7 @@ add_library(dnd_core STATIC
   src/core/sha256.cpp
   src/core/status_message.cpp
   src/core/ui_hint.cpp
+  src/core/update.cpp
   src/core/utf8.cpp
   src/core/version.cpp
   src/core/visibility.cpp
@@ -182,6 +183,8 @@ add_executable(${PROJECT_NAME}
   src/main.cpp
   src/app/app.cpp
   src/app/file_log.cpp
+  src/app/instance_lock.cpp
+  src/app/update_service.cpp
   src/render/editor_renderer.cpp
   src/render/grid_renderer.cpp
   src/render/menu_renderer.cpp
@@ -210,6 +213,12 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   SDL3_image::SDL3_image
   SDL3_ttf::SDL3_ttf
 )
+
+# WinHTTP только в exe-цели: dnd_core остаётся без сокетов и системных
+# библиотек, а тесты не тянут сеть.
+if(WIN32)
+  target_link_libraries(${PROJECT_NAME} PRIVATE winhttp)
+endif()
 
 # MinGW по умолчанию тянет libstdc++-6.dll, libgcc_s_seh-1.dll и
 # libwinpthread-1.dll из MSYS2: на машине игрока их нет, и exe не стартует.

@@ -41,6 +41,8 @@ struct TTF_Font;
 namespace dnd {
 
 class TextRenderer;
+class UpdateService;
+struct MenuUpdate;
 
 enum class AppMode : std::uint8_t { kHost, kClient };
 
@@ -148,6 +150,13 @@ class App {
   auto HandleMenuKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleMenuTextInput(const char* text) -> void;
   auto HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void;
+  // Баннер обновления в меню: что показать и что делает кнопка.
+  [[nodiscard]] auto MenuUpdateState() const -> MenuUpdate;
+  // Баннер во время партии: подменять exe можно только из меню.
+  [[nodiscard]] auto SessionUpdateText() const -> std::string;
+  auto HandleUpdateAction() -> void;
+  // Автосейв кампании дописывается, затем exe подменяется и игра выходит.
+  auto ApplyUpdate() -> void;
   auto FocusNextMenuField(int direction) -> void;
   auto MenuTextBuffer() -> std::string*;
   auto UpdatePlayersFromRoster(const std::vector<RosterEntry>& roster) -> void;
@@ -359,6 +368,11 @@ class App {
   bool editor_scene_edit_ignore_text_ = false;
   DeleteConfirm delete_editor_scene_;
   bool client_connecting_ = false;
+  // Проверка обновлений работает в фоне; сервис создаётся в Initialize даже
+  // при --no-update-check, просто с выключенной проверкой.
+  std::unique_ptr<UpdateService> update_service_;
+  // «Позже» в баннере: до перезапуска игры больше не показываем.
+  bool update_dismissed_ = false;
 
   EditorBrush editor_brush_ = EditorBrush::kWall;
   StatusMessage editor_status_;

@@ -76,6 +76,19 @@ auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
   layout.join_tab = SDL_FRect{panel_x + 230.0F, panel_y + 80.0F, 180.0F, 44.0F};
   layout.editor_tab =
       SDL_FRect{panel_x + 430.0F, panel_y + 80.0F, 180.0F, 44.0F};
+  // Шапка: строка названия и, при обновлении, полоса с кнопками вместо
+  // подзаголовка. Раскладка полей ниже не сдвигается.
+  layout.update_banner =
+      SDL_FRect{field_x, panel_y + 36.0F, field_width, 38.0F};
+  constexpr float button_height = 30.0F;
+  constexpr float dismiss_width = 84.0F;
+  constexpr float action_width = 252.0F;
+  layout.update_dismiss =
+      SDL_FRect{field_x + field_width - dismiss_width, panel_y + 40.0F,
+                dismiss_width, button_height};
+  layout.update_action =
+      SDL_FRect{layout.update_dismiss.x - 8.0F - action_width, panel_y + 40.0F,
+                action_width, button_height};
   if (tab == MenuTab::kEditor) {
     layout.action_button =
         SDL_FRect{field_x, panel_y + 200.0F, field_width, 50.0F};
@@ -105,7 +118,8 @@ auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
 
 auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
               const MenuState& state,
-              const std::vector<std::string>& local_addresses) -> void {
+              const std::vector<std::string>& local_addresses,
+              const MenuUpdate& update) -> void {
   int window_width = 0;
   int window_height = 0;
   if (text == nullptr || !RenderSize(renderer, window_width, window_height)) {
@@ -124,13 +138,44 @@ auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
   SDL_RenderRect(renderer, &panel);
 
   const auto field_width = kPanelWidth - 80.0F;
-  text->Draw(std::string(strings::kMenuTitle), panel_x + 40.0F, panel_y + 20.0F,
+  text->Draw(std::string(strings::kMenuTitle), panel_x + 40.0F, panel_y + 8.0F,
              kText, field_width);
-  text->Draw(std::string(strings::kMenuSubtitle), panel_x + 40.0F,
-             panel_y + 48.0F, kHint, field_width);
+  if (state.tab == MenuTab::kHost && !state.version.empty()) {
+    const std::string version =
+        std::string(strings::kVersionLabel) + state.version + " | " +
+        std::string(strings::kProtocolLabel) + std::to_string(state.protocol);
+    const TextMetrics metrics = text->Measure(version);
+    text->Draw(version, panel_x + kPanelWidth - 40.0F - metrics.width,
+               panel_y + 8.0F, kHint);
+  }
+  if (!update.visible) {
+    text->Draw(std::string(strings::kMenuSubtitle), panel_x + 40.0F,
+               panel_y + 48.0F, kHint, field_width);
+  }
 
   const MenuLayout layout =
       ComputeMenuLayout(window_width, window_height, state.tab);
+
+  if (update.visible) {
+    // Версия и кнопки на месте подзаголовка: шапка не раздвигает поля.
+    SetDrawColor(renderer, kPanel);
+    SDL_RenderFillRect(renderer, &layout.update_banner);
+    SetDrawColor(renderer, kActive);
+    SDL_RenderRect(renderer, &layout.update_banner);
+    const float text_width =
+        layout.update_action.x - (layout.update_banner.x + 12.0F) - 10.0F;
+    text->Draw(update.message, layout.update_banner.x + 12.0F,
+               layout.update_banner.y +
+                   ((layout.update_banner.h - text->LineHeight()) / 2.0F),
+               kText, text_width);
+    SetDrawColor(renderer, update.action_enabled ? kButton : kButtonDisabled);
+    SDL_RenderFillRect(renderer, &layout.update_action);
+    SetDrawColor(renderer, kBorder);
+    SDL_RenderRect(renderer, &layout.update_action);
+    SDL_RenderRect(renderer, &layout.update_dismiss);
+    text->DrawCentered(update.action, layout.update_action, kButtonText);
+    text->DrawCentered(update.dismiss, layout.update_dismiss, kText);
+  }
 
   SetDrawColor(renderer, state.tab == MenuTab::kHost ? kActive : kPanel);
   SDL_RenderFillRect(renderer, &layout.host_tab);
