@@ -3105,6 +3105,129 @@ auto TestEncounter() -> void {
   Expect(!empty.StartEncounter(), "empty encounter is rejected");
 }
 
+auto TestEncounterComposition() -> void {
+  // Герой видит двух монстров рядом; третий стоит за пределами обзора и в
+  // бой при старте не попадает.
+  const dnd::GridMap map(12, 4);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 20,
+                         .max_hp = 20,
+                         .speed = 9,
+                         .attack_bonus = 100,
+                         .initiative_bonus = 100,
+                         .damage = "1d4",
+                         .attack_range = 10,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .hp = 20,
+                         .max_hp = 20,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 3,
+                         .name = "orc",
+                         .owner = "dm",
+                         .hp = 20,
+                         .max_hp = 20,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(2, 0)},
+              dnd::Token{.id = 4,
+                         .name = "far",
+                         .owner = "dm",
+                         .hp = 20,
+                         .max_hp = 20,
+                         .ac = 10,
+                         .conditions = {dnd::Condition{"застигнут врасплох"}},
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(8, 0)},
+          },
+      .next_token_id = 5,
+  };
+  dnd::GameServer server(snapshot, 6, 7);
+  const dnd::CommandOutcome start =
+      server.HandleCommand(dnd::StartEncounter{}, "", true);
+  Expect(start.accepted, "the DM starts a composed encounter");
+  const dnd::Encounter before = server.State().EncounterState();
+  Expect(before.order.size() == 3 &&
+             std::ranges::find(before.order, 4) == before.order.end(),
+         "unseen monsters stay out of the encounter");
+  Expect(server.State().ActiveTokenId() == 1,
+         "the visible party acts first by initiative");
+
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(3, 0)},
+                            "alice", false)
+             .accepted,
+         "the hero moves closer to the hidden monster");
+  const dnd::CommandOutcome attack = server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 4}, "alice", false);
+  Expect(attack.accepted, "the hero strikes the newly seen monster");
+  const dnd::Encounter after = server.State().EncounterState();
+  Expect(after.order.size() == 4 && after.order.back() == 4,
+         "a struck monster joins at the end of the round");
+  Expect(after.turn_index == before.turn_index,
+         "joining does not shift the current turn");
+  const dnd::Token joined = TokenOf(server.State(), 4);
+  Expect(joined.initiative >= 1 && joined.initiative <= 20,
+         "the joining monster rolls a real initiative");
+  Expect(!HasCondition(joined, "застигнут врасплох"),
+         "the surprise condition is spent when the monster joins");
+  Expect(std::ranges::any_of(
+             attack.events,
+             [](const dnd::Event& event) -> bool {
+               if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+                 return false;
+               }
+               return std::get<dnd::LogLineAdded>(event).line.text.find(
+                          "вступает в бой") != std::string::npos;
+             }),
+         "the log announces the joining monster");
+
+  // Игрок состав не правит.
+  Expect(!server
+              .HandleCommand(
+                  dnd::SetEncounterComposition{.id = 4, .joined = false},
+                  "alice", false)
+              .accepted,
+         "players cannot edit the encounter composition");
+
+  // DM выводит монстра из боя.
+  Expect(
+      server
+          .HandleCommand(dnd::SetEncounterComposition{.id = 4, .joined = false},
+                         "", true)
+          .accepted,
+      "the DM removes a monster from the encounter");
+  Expect(server.State().EncounterState().order.size() == 3,
+         "the removed monster leaves the order");
+
+  // Новый токен в бою получает настоящий бросок, а не нулевую инициативу.
+  const dnd::CommandOutcome added =
+      server.HandleCommand(dnd::AddToken{.name = "troll",
+                                         .cell = CellAt(10, 3),
+                                         .owner = "dm",
+                                         .kind = dnd::TokenKind::kMonster,
+                                         .max_hp = 10},
+                           "", true);
+  Expect(added.accepted, "the DM adds a monster during the encounter");
+  const dnd::Encounter with_troll = server.State().EncounterState();
+  Expect(with_troll.order.size() == 4 && with_troll.order.back() == 5,
+         "the added monster joins the encounter");
+  const dnd::Token troll = TokenOf(server.State(), 5);
+  Expect(troll.initiative >= 1 && troll.initiative <= 20,
+         "the added monster gets a real initiative roll");
+}
+
 auto TestEncounterCommands() -> void {
   const dnd::GridMap map(10, 10);
   const dnd::GameSnapshot snapshot{
@@ -5242,6 +5365,21 @@ auto TestCommandEventSerialization() -> void {
              std::holds_alternative<dnd::StartEncounter>(*start_decoded),
          "encounter command survives serialization");
 
+  const dnd::Command composition{
+      dnd::SetEncounterComposition{.id = 7, .joined = true}};
+  const std::vector<std::uint8_t> composition_bytes =
+      dnd::EncodeCommand(composition);
+  const std::optional<dnd::Command> composition_decoded =
+      dnd::DecodeCommand(composition_bytes.data(), composition_bytes.size());
+  Expect(
+      composition_decoded.has_value() &&
+          std::holds_alternative<dnd::SetEncounterComposition>(
+              *composition_decoded) &&
+          std::get<dnd::SetEncounterComposition>(*composition_decoded).id ==
+              7 &&
+          std::get<dnd::SetEncounterComposition>(*composition_decoded).joined,
+      "encounter composition command survives serialization");
+
   const dnd::Event encounter{dnd::EncounterUpdated{
       .encounter =
           dnd::Encounter{
@@ -6058,6 +6196,7 @@ auto main() -> int {
     TestCaseInsensitiveOwnership();
     TestTokenManagement();
     TestEncounter();
+    TestEncounterComposition();
     TestEncounterCommands();
     TestMovementBudget();
     TestTurnEconomy();

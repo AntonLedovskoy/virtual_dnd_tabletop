@@ -172,6 +172,10 @@ class GameServer {
   [[nodiscard]] auto HandleStartEncounter(bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleEndEncounter(bool can_control_all) -> CommandOutcome;
+  // DM правит состав боя: вступление с броском инициативы или выход.
+  [[nodiscard]] auto HandleSetEncounterComposition(
+      const SetEncounterComposition& command, bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleSetAoe(const SetAoe& command, bool can_control_all)
       -> CommandOutcome;
   // Метка «сюда»: любой участник, клетка проверяется по карте.
@@ -193,6 +197,18 @@ class GameServer {
   [[nodiscard]] auto HandleNextTurn(bool can_control_all) -> CommandOutcome;
 
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;
+  // Виден ли стол клетке: общий обзор партии и ручные открытия DM.
+  [[nodiscard]] auto IsPartyVisible(Cell cell) const -> bool;
+  // Состав боя по умолчанию: все персонажи и замеченные ими не-персонажи
+  // (в поле зрения партии, живые). Без персонажей — все токены.
+  [[nodiscard]] auto DefaultParticipants() const -> std::vector<TokenId>;
+  // Бросок инициативы d20 + бонус − истощение; «застигнут врасплох» даёт
+  // помеху и снимается после броска.
+  auto RollInitiative(TokenId id) -> int;
+  // Добавляет токена в идущий бой, если его там нет: бросок, вставка в конец
+  // раунда, событие порядка и строка «X вступает в бой». Возвращает true,
+  // если токен действительно вступил.
+  auto JoinEncounterIfNeeded(TokenId id, std::vector<Event>& events) -> bool;
   [[nodiscard]] auto PlayerFog(std::string_view actor) const -> const FogOfWar*;
   // Туман сцены: переживает смену мира, карту другой формы не переносит.
   auto RestoreFog(const std::vector<FogRecord>& records) -> void;

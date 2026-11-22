@@ -17,6 +17,8 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
                             : Hint::kConditionsViewKeys};
     case HintMode::kActions:
       return {Hint::kActionsKeys};
+    case HintMode::kCombat:
+      return {Hint::kCombatKeys};
     case HintMode::kTable:
       break;
   }
@@ -51,8 +53,9 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
     }
   }
   if (context.is_dm) {
-    hints.insert(hints.end(), {Hint::kDmSpawn, Hint::kAoe, Hint::kBestiary,
-                               Hint::kScenes, Hint::kDmUndo});
+    hints.insert(hints.end(),
+                 {Hint::kDmSpawn, Hint::kAoe, Hint::kBestiary, Hint::kScenes,
+                  Hint::kDmComposition, Hint::kDmUndo});
   }
   return hints;
 }

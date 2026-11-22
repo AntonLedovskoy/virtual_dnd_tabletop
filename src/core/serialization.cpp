@@ -61,6 +61,7 @@ constexpr std::uint8_t kCommandAttackToken = 32;
 constexpr std::uint8_t kCommandHideArea = 33;
 constexpr std::uint8_t kCommandAdvanceTime = 34;
 constexpr std::uint8_t kCommandUseTurnAction = 35;
+constexpr std::uint8_t kCommandSetEncounterComposition = 36;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -529,6 +530,16 @@ auto DecodeNextTurnCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{NextTurn{}};
+}
+
+auto DecodeSetEncounterCompositionCommand(ByteReader& reader)
+    -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::uint8_t joined = 0;
+  if (!reader.U32(id) || !reader.U8(joined) || joined > 1 || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{SetEncounterComposition{.id = id, .joined = joined != 0}};
 }
 
 auto DecodeMoveCommand(ByteReader& reader) -> std::optional<Command> {
@@ -1285,6 +1296,10 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandEndEncounter);
         } else if constexpr (std::is_same_v<T, NextTurn>) {
           writer.U8(kCommandNextTurn);
+        } else if constexpr (std::is_same_v<T, SetEncounterComposition>) {
+          writer.U8(kCommandSetEncounterComposition);
+          writer.U32(cmd.id);
+          writer.U8(cmd.joined ? 1 : 0);
         } else if constexpr (std::is_same_v<T, SetAoe>) {
           writer.U8(kCommandSetAoe);
           WriteAoe(writer, cmd.aoe);
@@ -1410,6 +1425,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeEndEncounterCommand(reader);
     case kCommandNextTurn:
       return DecodeNextTurnCommand(reader);
+    case kCommandSetEncounterComposition:
+      return DecodeSetEncounterCompositionCommand(reader);
     case kCommandSetAoe:
       return DecodeSetAoeCommand(reader);
     case kCommandDamageToken:

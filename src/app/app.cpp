@@ -551,6 +551,7 @@ auto App::ExitToMenu() -> void {
   bestiary_active_ = false;
   conditions_active_ = false;
   scenes_active_ = false;
+  combat_active_ = false;
   aoe_mode_ = false;
   show_movement_range_ = false;
   measuring_ = false;
@@ -1331,6 +1332,13 @@ auto App::HandleEvent(SDL_Event event) -> void {
     return;
   }
 
+  if (combat_active_) {
+    if (event.type == SDL_EVENT_KEY_DOWN) {
+      HandleCombatKeyDown(event.key);
+    }
+    return;
+  }
+
   if (bestiary_active_) {
     switch (event.type) {
       case SDL_EVENT_MOUSE_MOTION:
@@ -1581,6 +1589,17 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SDLK_TAB:
       OpenScenes();
       break;
+    case SDLK_T:
+      if ((key.mod & SDL_KMOD_SHIFT) != 0) {
+        OpenCombat();
+      } else if (options_.mode == AppMode::kHost) {
+        if (view_.EncounterState().active) {
+          SendCommand(EndEncounter{});
+        } else {
+          SendCommand(StartEncounter{});
+        }
+      }
+      break;
     default:
       HandleDmHotkey(key.key);
       break;
@@ -1635,13 +1654,6 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
     case SDLK_LEFTBRACKET:
       AdjustSelectedInitiative(-1);
       break;
-    case SDLK_T:
-      if (view_.EncounterState().active) {
-        SendCommand(EndEncounter{});
-      } else {
-        SendCommand(StartEncounter{});
-      }
-      break;
     case SDLK_G:
       SendCommand(NextTurn{});
       break;
@@ -1654,8 +1666,8 @@ auto App::HandleMouseDown(const SDL_MouseButtonEvent& button) -> void {
   // Панели списков рисуются поверх карты и первыми забирают клик.
   const TokenId listed =
       view_.EncounterState().active
-          ? InitiativeTokenAt(renderer_, text_.get(), view_.Tokens(), button.x,
-                              button.y)
+          ? InitiativeTokenAt(renderer_, text_.get(), view_.Tokens(),
+                              view_.EncounterState(), button.x, button.y)
           : 0;
   if (listed != 0) {
     selected_id_ = listed;
@@ -1906,6 +1918,8 @@ auto App::BottomHintText() const -> std::string {
     context.mode = HintMode::kConditions;
   } else if (actions_active_) {
     context.mode = HintMode::kActions;
+  } else if (combat_active_) {
+    context.mode = HintMode::kCombat;
   }
   std::string text;
   for (const Hint hint : BottomHints(context)) {
@@ -2000,6 +2014,7 @@ auto App::OpenSheet() -> void {
   conditions_read_only_ = false;
   bestiary_active_ = false;
   actions_active_ = false;
+  combat_active_ = false;
   sheet_token_id_ = token->id;
   sheet_field_ = SheetField::kAc;
   sheet_ac_ = std::to_string(token->ac);
@@ -2315,6 +2330,7 @@ auto App::OpenBestiary() -> void {
   conditions_active_ = false;
   conditions_read_only_ = false;
   actions_active_ = false;
+  combat_active_ = false;
 }
 
 auto App::HandleBestiaryKeyDown(const SDL_KeyboardEvent& key) -> void {
@@ -2458,6 +2474,83 @@ auto App::HandleActionsKeyDown(const SDL_KeyboardEvent& key) -> void {
     SendCommand(UseTurnAction{.id = actions_token_id_,
                               .kind = static_cast<TurnActionKind>(index)});
     CloseActions();
+  }
+}
+
+auto App::OpenCombat() -> void {
+  if (options_.mode != AppMode::kHost) {
+    view_.AddLocalLine(std::string(strings::kCombatDmOnly));
+    return;
+  }
+  if (!view_.EncounterState().active) {
+    view_.AddLocalLine(std::string(strings::kCombatNoEncounter));
+    return;
+  }
+  if (view_.Tokens().empty()) {
+    return;
+  }
+  combat_active_ = true;
+  // Курсор панели сразу на текущем ходу: DM чаще правит его состав.
+  combat_selected_ = 0;
+  const Encounter& encounter = view_.EncounterState();
+  const TokenId active = encounter.turn_index < encounter.order.size()
+                             ? encounter.order[encounter.turn_index]
+                             : 0;
+  const std::vector<Token>& tokens = view_.Tokens();
+  for (std::size_t i = 0; i < tokens.size(); ++i) {
+    if (tokens[i].id == active) {
+      combat_selected_ = i;
+      break;
+    }
+  }
+  sheet_active_ = false;
+  sheet_read_only_ = false;
+  conditions_active_ = false;
+  actions_active_ = false;
+  bestiary_active_ = false;
+}
+
+auto App::CloseCombat() -> void {
+  combat_active_ = false;
+  combat_selected_ = 0;
+}
+
+auto App::ToggleCombatParticipant() -> void {
+  const std::vector<Token>& tokens = view_.Tokens();
+  if (!combat_active_ || combat_selected_ >= tokens.size()) {
+    return;
+  }
+  const Token& token = tokens[combat_selected_];
+  const Encounter& encounter = view_.EncounterState();
+  const bool joined =
+      std::ranges::find(encounter.order, token.id) != encounter.order.end();
+  SendCommand(SetEncounterComposition{.id = token.id, .joined = !joined});
+}
+
+auto App::HandleCombatKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (key.repeat && key.key != SDLK_UP && key.key != SDLK_DOWN) {
+    return;
+  }
+  if (key.key == SDLK_ESCAPE || key.key == SDLK_T) {
+    CloseCombat();
+    return;
+  }
+  const std::size_t count = view_.Tokens().size();
+  if (count == 0) {
+    CloseCombat();
+    return;
+  }
+  if (key.key == SDLK_UP) {
+    combat_selected_ = (combat_selected_ + count - 1) % count;
+    return;
+  }
+  if (key.key == SDLK_DOWN) {
+    combat_selected_ = (combat_selected_ + 1) % count;
+    return;
+  }
+  if (key.key == SDLK_SPACE || key.key == SDLK_RETURN ||
+      key.key == SDLK_KP_ENTER) {
+    ToggleCombatParticipant();
   }
 }
 
@@ -3668,6 +3761,7 @@ auto App::OpenScenes() -> void {
   conditions_active_ = false;
   conditions_read_only_ = false;
   actions_active_ = false;
+  combat_active_ = false;
   chat_.Close();
 }
 
@@ -4098,6 +4192,17 @@ auto App::Iterate() -> void {
           (encounter.turn_index < encounter.order.size() &&
            encounter.order[encounter.turn_index] == action_token->id);
       DrawActionsPanel(renderer_, text_.get(), *action_token, own_turn);
+    }
+  }
+  if (combat_active_) {
+    if (!encounter.active || view_.Tokens().empty()) {
+      CloseCombat();
+    } else {
+      if (combat_selected_ >= view_.Tokens().size()) {
+        combat_selected_ = view_.Tokens().size() - 1;
+      }
+      DrawCombatPanel(renderer_, text_.get(), view_.Tokens(), encounter,
+                      combat_selected_);
     }
   }
   if (history_active_) {

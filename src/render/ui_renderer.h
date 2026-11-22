@@ -49,14 +49,21 @@ auto DrawLogHistoryPanel(SDL_Renderer* renderer, TextRenderer* text,
 // прокрутка считала те же строки, что и отрисовка.
 auto LogHistoryVisibleRows(SDL_Renderer* renderer, TextRenderer* text) -> int;
 
-// Порядок инициативы справа сверху для видимых клиенту токенов.
+// Порядок инициативы справа сверху для видимых клиенту участников боя.
 auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
                          const std::vector<Token>& tokens,
                          const Encounter& encounter) -> void;
 
+// Модальный состав боя: все токены стола, `[+]` — участник. selected —
+// строка списка; окно прокручивается вокруг неё.
+auto DrawCombatPanel(SDL_Renderer* renderer, TextRenderer* text,
+                     const std::vector<Token>& tokens,
+                     const Encounter& encounter, std::size_t selected) -> void;
+
 // Токен из панели инициативы под точкой; 0 — мимо панели.
 auto InitiativeTokenAt(SDL_Renderer* renderer, TextRenderer* text,
-                       const std::vector<Token>& tokens, float px, float py)
+                       const std::vector<Token>& tokens,
+                       const Encounter& encounter, float px, float py)
     -> TokenId;
 
 // Что писать о запасе движения: игрок вне боя не ограничен, DM — тоже.

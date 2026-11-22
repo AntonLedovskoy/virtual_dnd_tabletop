@@ -210,6 +210,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleStartEncounter(can_control_all);
         } else if constexpr (std::is_same_v<T, EndEncounter>) {
           return HandleEndEncounter(can_control_all);
+        } else if constexpr (std::is_same_v<T, SetEncounterComposition>) {
+          return HandleSetEncounterComposition(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, SetAoe>) {
           return HandleSetAoe(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, AttackToken>) {
@@ -365,6 +367,11 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   }
   if (updated.has_value()) {
     outcome.events.emplace_back(TokenUpdated{.token = std::move(*updated)});
+  }
+  // Подошедшего к столу монстра замечают: он вступает в идущий бой. Это
+  // случай «приближение»; шум и решение DM идут через состав боя.
+  if (token->kind != TokenKind::kPlayer && IsPartyVisible(token->cell)) {
+    (void)JoinEncounterIfNeeded(command.id, outcome.events);
   }
   return outcome;
 }
@@ -522,8 +529,8 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   outcome.accepted = true;
   outcome.events.emplace_back(TokenAdded{.token = *token});
   if (encounter_active) {
-    outcome.events.emplace_back(
-        EncounterUpdated{.encounter = state_.EncounterState()});
+    // Новый токен получает настоящий бросок, а не нулевую инициативу.
+    (void)JoinEncounterIfNeeded(id, outcome.events);
   }
   if (command.kind == TokenKind::kPlayer) {
     // Новый персонаж может изменить обзор партии.
@@ -595,6 +602,9 @@ auto GameServer::HandleDamage(const DamageToken& command,
   }
   CommandOutcome outcome;
   outcome.accepted = true;
+  // Удар по токену, который ещё не в бою, втягивает его: он бросает
+  // инициативу и встаёт в конец раунда.
+  (void)JoinEncounterIfNeeded(command.id, outcome.events);
   DamageAndLog(command.id, command.amount, false, command.damage_type, actor,
                outcome.events);
   return outcome;
@@ -833,6 +843,8 @@ auto GameServer::HandleAttack(const AttackToken& command,
 
   CommandOutcome outcome;
   outcome.accepted = true;
+  // Даже промах — это шум: цель, которая ещё не в бою, вступает в него.
+  (void)JoinEncounterIfNeeded(command.target, outcome.events);
   int applied_damage = 0;
   const TokenId target_id = target->id;
   if (!check.hit) {
@@ -1066,6 +1078,8 @@ auto GameServer::HandleAoeDamage(const AoeDamage& command, bool can_control_all)
     if (std::ranges::find(cells, token.cell) == cells.end()) {
       continue;
     }
+    // Область задевает и тех, кто ещё не в бою: шум втягивает их.
+    (void)JoinEncounterIfNeeded(token.id, outcome.events);
     const std::string name = token.name;
     const int save_bonus = token.save_bonus - ExhaustionPenalty(token);
     const int roll = d20(rng_) + save_bonus;
@@ -1650,42 +1664,127 @@ auto GameServer::HandleSetMapBackground(const SetMapBackground& command,
   return outcome;
 }
 
+auto GameServer::IsPartyVisible(Cell cell) const -> bool {
+  return party_fog_.IsVisible(cell) || state_.IsRevealed(cell);
+}
+
+auto GameServer::DefaultParticipants() const -> std::vector<TokenId> {
+  const bool has_players =
+      std::ranges::any_of(state_.Tokens(), [](const Token& token) -> bool {
+        return token.kind == TokenKind::kPlayer;
+      });
+  std::vector<TokenId> participants;
+  participants.reserve(state_.Tokens().size());
+  for (const Token& token : state_.Tokens()) {
+    if (token.kind == TokenKind::kPlayer) {
+      // Персонажи в бою всегда: они — сторона, которая бьётся.
+      participants.push_back(token.id);
+      continue;
+    }
+    // Без персонажей решать не по чему: бой начинает весь стол.
+    if (!has_players) {
+      participants.push_back(token.id);
+      continue;
+    }
+    // Враждовать или нет, в токене не хранится (упрощение): замеченный
+    // столом не-персонаж вступает в бой, лежащий на нуле — нет.
+    if (token.hp > 0 && IsPartyVisible(token.cell)) {
+      participants.push_back(token.id);
+    }
+  }
+  return participants;
+}
+
+auto GameServer::RollInitiative(TokenId id) -> int {
+  int value = 0;
+  if (const std::optional<Token> token = state_.TokenCopy(id)) {
+    std::uniform_int_distribution<int> d20(1, 20);
+    const int bonus = token->initiative_bonus - ExhaustionPenalty(*token);
+    value = d20(rng_) + bonus;
+    // Застигнутый врасплох бросает с помехой и теряет состояние: отдельного
+    // раунда неожиданности в 2024 нет.
+    if (IsSurprised(*token)) {
+      value = std::min(value, d20(rng_) + bonus);
+      (void)state_.RemoveTokenCondition(id, kSurprised);
+    }
+  }
+  (void)state_.SetInitiative(id, value);
+  return value;
+}
+
+auto GameServer::JoinEncounterIfNeeded(TokenId id, std::vector<Event>& events)
+    -> bool {
+  if (!state_.EncounterState().active || state_.IsEncounterParticipant(id)) {
+    return false;
+  }
+  const std::optional<Token> token = state_.TokenCopy(id);
+  if (!token.has_value() || token->hp <= 0) {
+    return false;
+  }
+  const int initiative = RollInitiative(id);
+  if (!state_.JoinEncounter(id)) {
+    return false;
+  }
+  if (const std::optional<Token> joined = state_.TokenCopy(id)) {
+    events.emplace_back(TokenUpdated{.token = *joined});
+  }
+  events.emplace_back(EncounterUpdated{.encounter = state_.EncounterState()});
+  events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = "DM",
+                      .text = token->name + " вступает в бой (инициатива " +
+                              std::to_string(initiative) + ")",
+                      .timestamp = CurrentTimeSeconds()},
+  });
+  return true;
+}
+
 auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
   if (!can_control_all) {
     return CommandOutcome{.reject_reason = "бой начинает только DM"};
   }
+  if (state_.EncounterState().active) {
+    return CommandOutcome{.reject_reason = "бой уже идёт"};
+  }
+  const std::vector<TokenId> participants = DefaultParticipants();
+  if (participants.empty()) {
+    return CommandOutcome{.reject_reason = "некого включать в бой"};
+  }
   const std::vector<TokenId> spent = TokensWithTurnState(state_);
-  // Инициатива бросается за всех сразу: d20 + бонус из листа, минус
-  // истощение. Застигнутый врасплох бросает с помехой (два d20, меньший) и
-  // после броска теряет состояние: отдельного раунда неожиданности в 2024
-  // нет. Это же значение потом можно поправить вручную через [ и ].
+  // Инициатива бросается только за участников: спящий за стеной или ещё не
+  // замеченный монстр в порядок не попадает и вступит позже, когда его
+  // заметят или ударят. Это же значение потом можно поправить через [ и ].
   std::uniform_int_distribution<int> d20(1, 20);
   std::vector<std::pair<int, std::string>> rolls;
-  const std::vector<Token> all_tokens = state_.Tokens();
-  rolls.reserve(all_tokens.size());
+  rolls.reserve(participants.size());
   std::vector<TokenId> changed = spent;
-  for (const Token& token : all_tokens) {
-    const int bonus = token.initiative_bonus - ExhaustionPenalty(token);
-    const bool surprised = IsSurprised(token);
+  const auto remember = [&changed](TokenId id) -> void {
+    if (std::ranges::find(changed, id) == changed.end()) {
+      changed.push_back(id);
+    }
+  };
+  for (const TokenId id : participants) {
+    const std::optional<Token> token = state_.TokenCopy(id);
+    if (!token.has_value()) {
+      continue;
+    }
+    const int bonus = token->initiative_bonus - ExhaustionPenalty(*token);
+    const bool surprised = IsSurprised(*token);
     int value = d20(rng_) + bonus;
     if (surprised) {
       value = std::min(value, d20(rng_) + bonus);
     }
     const std::string label =
-        surprised ? token.name + " (застигнут врасплох)" : token.name;
+        surprised ? token->name + " (застигнут врасплох)" : token->name;
     rolls.emplace_back(value, label);
-    if (state_.SetInitiative(token.id, value).has_value() &&
-        std::ranges::find(changed, token.id) == changed.end()) {
-      changed.push_back(token.id);
+    if (state_.SetInitiative(id, value).has_value()) {
+      remember(id);
     }
-    if (surprised &&
-        state_.RemoveTokenCondition(token.id, kSurprised).has_value() &&
-        std::ranges::find(changed, token.id) == changed.end()) {
-      changed.push_back(token.id);
+    if (surprised && state_.RemoveTokenCondition(id, kSurprised).has_value()) {
+      remember(id);
     }
   }
-  if (!state_.StartEncounter()) {
-    return CommandOutcome{.reject_reason = "нет токенов для инициативы"};
+  if (!state_.StartEncounter(participants)) {
+    return CommandOutcome{.reject_reason = "некого включать в бой"};
   }
   std::ranges::sort(rolls, [](const auto& left, const auto& right) -> bool {
     return left.first > right.first;
@@ -1709,6 +1808,51 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
     }
   }
+  return outcome;
+}
+
+auto GameServer::HandleSetEncounterComposition(
+    const SetEncounterComposition& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "состав боя правит только DM"};
+  }
+  if (!state_.EncounterState().active) {
+    return CommandOutcome{.reject_reason = "бой не начат"};
+  }
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  const std::string name = token->name;
+  if (command.joined) {
+    if (state_.IsEncounterParticipant(command.id)) {
+      return CommandOutcome{.accepted = true};
+    }
+    CommandOutcome outcome;
+    outcome.accepted = true;
+    if (!JoinEncounterIfNeeded(command.id, outcome.events)) {
+      return CommandOutcome{.reject_reason = "лежащий не вступает в бой"};
+    }
+    return outcome;
+  }
+  if (!state_.LeaveEncounter(command.id)) {
+    return CommandOutcome{.accepted = true};
+  }
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(
+      EncounterUpdated{.encounter = state_.EncounterState()});
+  // Ход перешёл к следующему: у него сброшены движение, действие и реакция.
+  if (const std::optional<Token> active =
+          state_.TokenCopy(state_.ActiveTokenId())) {
+    outcome.events.emplace_back(TokenUpdated{.token = *active});
+  }
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = "DM",
+                      .text = name + " выведен из боя",
+                      .timestamp = CurrentTimeSeconds()},
+  });
   return outcome;
 }
 

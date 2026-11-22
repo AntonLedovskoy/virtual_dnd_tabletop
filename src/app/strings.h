@@ -64,6 +64,7 @@ inline constexpr std::string_view kHintSpawn = "P — персонаж";
 inline constexpr std::string_view kHintAdjust = "+/- — HP, [ ] — инициатива";
 inline constexpr std::string_view kHintDelete = "Del дважды — удалить";
 inline constexpr std::string_view kHintCombat = "T — бой";
+inline constexpr std::string_view kHintComposition = "Shift+T — состав боя";
 inline constexpr std::string_view kHintTurn = "G — следующий ход";
 inline constexpr std::string_view kHintUndo = "Ctrl+Z — отмена";
 inline constexpr std::string_view kAoeHint =
@@ -133,13 +134,14 @@ inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "R — освободить своего персонажа",
     "/portrait файл.png — портрет своего персонажа",
 };
-inline constexpr std::array<std::string_view, 17> kHelpDm = {
+inline constexpr std::array<std::string_view, 18> kHelpDm = {
     "P — персонаж под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
     "B — бестиарий (Shift+цифра — группа)",
     "Tab — сцены (R имя, E заметка)",
     "T — бой, G — следующий ход",
+    "Shift+T — состав боя: кто в инициативе, а кто вне её",
     "F — шаблон области, Shift+F — убрать",
     "F5 — сохранить, F9 — загрузить",
     "Команды: /rename, /owner, /maxhp, /kick",
@@ -317,6 +319,16 @@ inline constexpr std::string_view kScenesHint =
     "N — новая копия | Del дважды — удалить | Esc — закрыть";
 inline constexpr std::string_view kScenesDmOnly = "Сцены переключает только DM";
 inline constexpr std::string_view kScenesEmpty = "Сцена не найдена";
+
+// Состав боя: DM решает, кто в нём участвует, остальные вне порядка хода.
+inline constexpr std::string_view kCombatTitle = "Состав боя";
+inline constexpr std::string_view kCombatRoundPrefix = "Раунд ";
+inline constexpr std::string_view kCombatJoined = ", в бою: ";
+inline constexpr std::string_view kCombatHint =
+    "↑ ↓ — выбор | Пробел или Enter — в бой / из боя | Esc — закрыть";
+inline constexpr std::string_view kCombatNoEncounter =
+    "Сначала начните бой (T)";
+inline constexpr std::string_view kCombatDmOnly = "Состав боя правит только DM";
 inline constexpr std::string_view kSceneNameLabel = "Новое имя: ";
 inline constexpr std::string_view kSceneNoteLabel = "Заметка: ";
 inline constexpr std::string_view kSceneNameEmpty =
@@ -415,6 +427,8 @@ inline constexpr std::string_view kTimeDmOnly =
       return kHintDelete;
     case Hint::kDmCombat:
       return kHintCombat;
+    case Hint::kDmComposition:
+      return kHintComposition;
     case Hint::kDmTurn:
       return kHintTurn;
     case Hint::kDmUndo:
@@ -435,6 +449,8 @@ inline constexpr std::string_view kTimeDmOnly =
       return kConditionsViewHint;
     case Hint::kActionsKeys:
       return kActionsHint;
+    case Hint::kCombatKeys:
+      return kCombatHint;
   }
   return {};
 }

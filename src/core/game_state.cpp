@@ -180,7 +180,6 @@ auto GameState::AddToken(std::string name, Cell cell, std::string owner,
                          int save_bonus, std::string damage, int attack_range,
                          std::uint32_t resist, std::uint32_t vulnerable,
                          std::uint32_t immune) -> TokenId {
-  const TokenId active = ActiveTokenId();
   const TokenId id = next_token_id_++;
   const int resolved_max_hp = std::max(1, max_hp);
   tokens_.push_back(Token{.id = id,
@@ -201,9 +200,8 @@ auto GameState::AddToken(std::string name, Cell cell, std::string owner,
                           .kind = kind,
                           .color = color,
                           .cell = cell});
-  if (encounter_.active) {
-    RebuildOrder(active);
-  }
+  // В бой новый токен добавляет сервер: он бросает инициативу и ставит
+  // участника в конец раунда.
   return id;
 }
 
@@ -611,8 +609,27 @@ auto GameState::ActiveTokenId() const -> TokenId {
   return encounter_.order[encounter_.turn_index];
 }
 
-auto GameState::StartEncounter() -> bool {
+auto GameState::StartEncounter(std::vector<TokenId> participants) -> bool {
   if (tokens_.empty()) {
+    return false;
+  }
+  if (participants.empty()) {
+    participants.reserve(tokens_.size());
+    for (const Token& token : tokens_) {
+      participants.push_back(token.id);
+    }
+  }
+  // Участники приходят от сервера: чужой или удалённый id отбрасываем,
+  // повторы не нужны.
+  std::vector<TokenId> valid;
+  valid.reserve(participants.size());
+  for (const TokenId id : participants) {
+    if (FindToken(id) != nullptr &&
+        std::ranges::find(valid, id) == valid.end()) {
+      valid.push_back(id);
+    }
+  }
+  if (valid.empty()) {
     return false;
   }
   encounter_ = Encounter{};
@@ -621,8 +638,56 @@ auto GameState::StartEncounter() -> bool {
   for (Token& token : tokens_) {
     ResetTurnEconomy(token);
   }
+  encounter_.order = std::move(valid);
   RebuildOrder(0);
+  return encounter_.active;
+}
+
+auto GameState::JoinEncounter(TokenId id) -> bool {
+  if (!encounter_.active) {
+    return false;
+  }
+  Token* token = FindToken(id);
+  if (token == nullptr || IsEncounterParticipant(id)) {
+    return false;
+  }
+  ResetTurnEconomy(*token);
+  encounter_.order.push_back(id);
   return true;
+}
+
+auto GameState::LeaveEncounter(TokenId id) -> bool {
+  if (!encounter_.active) {
+    return false;
+  }
+  const auto it = std::ranges::find(encounter_.order, id);
+  if (it == encounter_.order.end()) {
+    return false;
+  }
+  const auto index = static_cast<std::size_t>(it - encounter_.order.begin());
+  encounter_.order.erase(it);
+  if (encounter_.order.empty()) {
+    encounter_ = Encounter{};
+    return true;
+  }
+  if (index < encounter_.turn_index) {
+    --encounter_.turn_index;
+  } else if (index == encounter_.turn_index) {
+    if (encounter_.turn_index >= encounter_.order.size()) {
+      encounter_.turn_index = 0;
+      ++encounter_.round;
+    }
+    // Следующий по порядку начинает свой ход с чистым запасом движения.
+    if (Token* next = FindToken(encounter_.order[encounter_.turn_index])) {
+      ResetTurnEconomy(*next);
+    }
+  }
+  return true;
+}
+
+auto GameState::IsEncounterParticipant(TokenId id) const -> bool {
+  return encounter_.active &&
+         std::ranges::find(encounter_.order, id) != encounter_.order.end();
 }
 
 auto GameState::EndEncounter() -> void {
@@ -723,26 +788,26 @@ auto GameState::AdvanceTime(int seconds) -> std::vector<Token> {
 }
 
 auto GameState::RebuildOrder(TokenId keep) -> void {
-  std::vector<TokenId> order;
-  order.reserve(tokens_.size());
-  for (const Token& token : tokens_) {
-    order.push_back(token.id);
-  }
-  std::ranges::sort(order, [this](TokenId left, TokenId right) -> bool {
-    const Token* left_token = FindToken(left);
-    const Token* right_token = FindToken(right);
-    if (left_token == nullptr || right_token == nullptr) {
-      return left < right;
-    }
-    if (left_token->initiative != right_token->initiative) {
-      return left_token->initiative > right_token->initiative;
-    }
-    if (left_token->name != right_token->name) {
-      return left_token->name < right_token->name;
-    }
-    return left < right;
+  // Порядок хранит только участников боя: токены вне его остаются вне боя,
+  // пока сервер не добавит их отдельно.
+  std::erase_if(encounter_.order, [this](TokenId id) -> bool {
+    return FindToken(id) == nullptr;
   });
-  encounter_.order = std::move(order);
+  std::ranges::sort(encounter_.order,
+                    [this](TokenId left, TokenId right) -> bool {
+                      const Token* left_token = FindToken(left);
+                      const Token* right_token = FindToken(right);
+                      if (left_token == nullptr || right_token == nullptr) {
+                        return left < right;
+                      }
+                      if (left_token->initiative != right_token->initiative) {
+                        return left_token->initiative > right_token->initiative;
+                      }
+                      if (left_token->name != right_token->name) {
+                        return left_token->name < right_token->name;
+                      }
+                      return left < right;
+                    });
   if (encounter_.order.empty()) {
     encounter_.active = false;
     encounter_.round = 0;

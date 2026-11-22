@@ -52,19 +52,30 @@ constexpr int kPlayersPanelX = 12;
 constexpr int kPlayersMaxRows = 8;
 constexpr float kScenesPanelWidth = 760.0F;
 constexpr float kScenesPanelHeight = 420.0F;
+constexpr float kCombatPanelWidth = 640.0F;
+constexpr float kCombatPanelHeight = 460.0F;
+constexpr std::size_t kVisibleCombatRows = 14;
 
 auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
 }
 
-auto SortByInitiative(std::vector<const Token*>& sorted) -> void {
-  std::ranges::stable_sort(sorted,
-                           [](const Token* left, const Token* right) -> bool {
-                             if (left->initiative != right->initiative) {
-                               return left->initiative > right->initiative;
-                             }
-                             return left->name < right->name;
-                           });
+auto ParticipantsInTurnOrder(const std::vector<Token>& tokens,
+                             const Encounter& encounter)
+    -> std::vector<const Token*> {
+  // В панели только участники боя и в том порядке, в каком они ходят. Токен,
+  // скрытый туманом игрока, в его срезе отсутствует — строку не рисуем.
+  std::vector<const Token*> ordered;
+  ordered.reserve(encounter.order.size());
+  for (const TokenId id : encounter.order) {
+    for (const Token& token : tokens) {
+      if (token.id == id) {
+        ordered.push_back(&token);
+        break;
+      }
+    }
+  }
+  return ordered;
 }
 
 auto KindLabel(TokenKind kind) -> std::string_view {
@@ -377,12 +388,7 @@ auto DrawInitiativePanel(SDL_Renderer* renderer, TextRenderer* text,
     return;
   }
 
-  std::vector<const Token*> sorted;
-  sorted.reserve(tokens.size());
-  for (const Token& token : tokens) {
-    sorted.push_back(&token);
-  }
-  SortByInitiative(sorted);
+  std::vector<const Token*> sorted = ParticipantsInTurnOrder(tokens, encounter);
 
   const int line_height = static_cast<int>(text->LineHeight()) + 4;
   const int rows =
@@ -615,7 +621,8 @@ auto DrawPlayersPanel(SDL_Renderer* renderer, TextRenderer* text,
 }
 
 auto InitiativeTokenAt(SDL_Renderer* renderer, TextRenderer* text,
-                       const std::vector<Token>& tokens, float px, float py)
+                       const std::vector<Token>& tokens,
+                       const Encounter& encounter, float px, float py)
     -> TokenId {
   if (renderer == nullptr || text == nullptr || tokens.empty()) {
     return 0;
@@ -630,9 +637,13 @@ auto InitiativeTokenAt(SDL_Renderer* renderer, TextRenderer* text,
   if (px < panel_x || px > panel_x + kInitiativePanelWidth) {
     return 0;
   }
+  std::vector<const Token*> sorted = ParticipantsInTurnOrder(tokens, encounter);
+  if (sorted.empty()) {
+    return 0;
+  }
   const int line_height = static_cast<int>(text->LineHeight()) + 4;
   const int rows =
-      std::min<int>(kInitiativeMaxRows, static_cast<int>(tokens.size()));
+      std::min<int>(kInitiativeMaxRows, static_cast<int>(sorted.size()));
   const auto first_row_y =
       static_cast<float>(kInitiativePanelTop + kPanelPadding + line_height);
   if (py < first_row_y) {
@@ -643,12 +654,6 @@ auto InitiativeTokenAt(SDL_Renderer* renderer, TextRenderer* text,
   if (row < 0 || row >= rows) {
     return 0;
   }
-  std::vector<const Token*> sorted;
-  sorted.reserve(tokens.size());
-  for (const Token& token : tokens) {
-    sorted.push_back(&token);
-  }
-  SortByInitiative(sorted);
   return sorted[static_cast<std::size_t>(row)]->id;
 }
 
@@ -1098,6 +1103,75 @@ auto DrawActionsPanel(SDL_Renderer* renderer, TextRenderer* text,
   }
   text->Draw(std::string(strings::kActionsHint), left, y + height - 30.0F,
              kHintText, content_width);
+}
+
+auto DrawCombatPanel(SDL_Renderer* renderer, TextRenderer* text,
+                     const std::vector<Token>& tokens,
+                     const Encounter& encounter, std::size_t selected) -> void {
+  if (renderer == nullptr || text == nullptr || tokens.empty()) {
+    return;
+  }
+  int window_width = 0;
+  int window_height = 0;
+  if (!RenderSize(renderer, window_width, window_height)) {
+    return;
+  }
+  constexpr float width = kCombatPanelWidth;
+  constexpr float height = kCombatPanelHeight;
+  const float x = (static_cast<float>(window_width) - width) / 2.0F;
+  const float y = (static_cast<float>(window_height) - height) / 2.0F;
+  const SDL_FRect panel{x, y, width, height};
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kModalBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const auto left = x + 30.0F;
+  const auto content_width = width - 60.0F;
+  auto cursor_y = y + 18.0F;
+  text->Draw(std::string(strings::kCombatTitle), left, cursor_y, kAuthorText,
+             content_width);
+  cursor_y += text->LineHeight() + 6.0F;
+  const std::string count = std::string(strings::kCombatRoundPrefix) +
+                            std::to_string(encounter.round) +
+                            std::string(strings::kCombatJoined) +
+                            std::to_string(encounter.order.size()) + "/" +
+                            std::to_string(tokens.size());
+  text->Draw(count, left, cursor_y, kHintText, content_width);
+  cursor_y += text->LineHeight() + 10.0F;
+
+  // Окно прокрутки держит выбранный токен в середине списка.
+  std::size_t first = 0;
+  if (tokens.size() > kVisibleCombatRows) {
+    first = selected > kVisibleCombatRows / 2
+                ? selected - (kVisibleCombatRows / 2)
+                : 0;
+    first = std::min(first, tokens.size() - kVisibleCombatRows);
+  }
+  const float line_step = text->LineHeight() + 4.0F;
+  for (std::size_t row = 0; row < kVisibleCombatRows; ++row) {
+    const std::size_t index = first + row;
+    if (index >= tokens.size()) {
+      break;
+    }
+    const Token& token = tokens[index];
+    const bool joined =
+        std::ranges::find(encounter.order, token.id) != encounter.order.end();
+    const bool is_selected = index == selected;
+    const std::string line =
+        (joined ? "[+] " : "[ ] ") + token.name + "   " +
+        std::string(strings::kInitiativeShort) + " " +
+        (joined ? std::to_string(token.initiative) : std::string("—")) + "   " +
+        std::string(strings::kHp) + " " + std::to_string(token.hp) + "/" +
+        std::to_string(token.max_hp);
+    text->Draw(line, left, cursor_y, is_selected ? kAuthorText : kLogText,
+               content_width);
+    cursor_y += line_step;
+  }
+  text->DrawWrapped(std::string(strings::kCombatHint), left, y + height - 34.0F,
+                    kHintText, content_width);
 }
 
 auto DrawScenesPanel(SDL_Renderer* renderer, TextRenderer* text,

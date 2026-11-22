@@ -240,6 +240,12 @@ struct UpdateTokenCombat {
 struct StartEncounter {};
 struct EndEncounter {};
 struct NextTurn {};
+// Правка состава идущего боя: joined=true добавляет токена в конец раунда,
+// false выводит его из боя. Инициатива при вступлении бросается заново.
+struct SetEncounterComposition {
+  TokenId id = 0;
+  bool joined = false;
+};
 
 // DM показывает столу шаблон области; kNone убирает его с карты.
 struct SetAoe {
@@ -271,14 +277,13 @@ struct HideArea {
 };
 struct ClearRevealed {};
 
-using Command =
-    std::variant<MoveToken, Say, RollDice, RollExpression, AddToken,
-                 RemoveToken, SetTokenHp, SetInitiative, ClaimToken,
-                 ReleaseToken, SetTokenOwner, RenameToken, SetTokenMaxHp,
-                 SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
-                 StartEncounter, EndEncounter, NextTurn, SetAoe, AttackToken,
-                 DamageToken, HealToken, RestParty, AdvanceTime, AoeDamage,
-                 DeathSave, PingAt, SetMapBackground, SetTokenPortrait,
-                 RevealArea, HideArea, ClearRevealed, AwardXp, UseTurnAction>;
+using Command = std::variant<
+    MoveToken, Say, RollDice, RollExpression, AddToken, RemoveToken, SetTokenHp,
+    SetInitiative, ClaimToken, ReleaseToken, SetTokenOwner, RenameToken,
+    SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
+    StartEncounter, EndEncounter, NextTurn, SetEncounterComposition, SetAoe,
+    AttackToken, DamageToken, HealToken, RestParty, AdvanceTime, AoeDamage,
+    DeathSave, PingAt, SetMapBackground, SetTokenPortrait, RevealArea, HideArea,
+    ClearRevealed, AwardXp, UseTurnAction>;
 
 }  // namespace dnd

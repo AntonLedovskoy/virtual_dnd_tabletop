@@ -177,6 +177,11 @@ class App {
   auto OpenActions() -> void;
   auto CloseActions() -> void;
   auto HandleActionsKeyDown(const SDL_KeyboardEvent& key) -> void;
+  // Состав боя: DM решает, кто ходит в инициативе, а кто ждёт за сценой.
+  auto OpenCombat() -> void;
+  auto CloseCombat() -> void;
+  auto HandleCombatKeyDown(const SDL_KeyboardEvent& key) -> void;
+  auto ToggleCombatParticipant() -> void;
   auto ToggleAoeMode() -> void;
   auto ClearAoe() -> void;
   auto SendAoe(const AoeTemplate& aoe) -> void;
@@ -325,6 +330,9 @@ class App {
 
   bool actions_active_ = false;
   TokenId actions_token_id_ = 0;
+  // Модальный состав боя: строка списка всех видимых токенов.
+  bool combat_active_ = false;
+  std::size_t combat_selected_ = 0;
 
   bool scenes_active_ = false;
   std::size_t scenes_selected_ = 0;

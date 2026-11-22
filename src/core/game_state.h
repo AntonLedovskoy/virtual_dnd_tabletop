@@ -126,8 +126,19 @@ class GameState {
     return encounter_;
   }
   [[nodiscard]] auto ActiveTokenId() const -> TokenId;
-  [[nodiscard]] auto StartEncounter() -> bool;
+  // Начинает бой из списка участников: кто не попал в него, в порядке хода
+  // не появляется. Пустой список означает «все токены» (старое поведение и
+  // прямые тесты GameState); сервер сам решает состав по видимости.
+  [[nodiscard]] auto StartEncounter(std::vector<TokenId> participants = {})
+      -> bool;
   auto EndEncounter() -> void;
+  // Вступление в идущий бой: токен встаёт в конец раунда, текущий ход не
+  // сдвигается. Повторное вступление и пустой бой отклоняются.
+  [[nodiscard]] auto JoinEncounter(TokenId id) -> bool;
+  // Выводит токен из идущего боя. Если уходил текущий, ход переходит к
+  // следующему в порядке; если порядок опустел, бой завершается.
+  [[nodiscard]] auto LeaveEncounter(TokenId id) -> bool;
+  [[nodiscard]] auto IsEncounterParticipant(TokenId id) const -> bool;
   [[nodiscard]] auto NextTurn() -> bool;
   // Прокручивает игровое время вне боя: срочные состояния всех токенов
   // уменьшаются, истёкшие снимаются. Возвращает изменённые токены.
