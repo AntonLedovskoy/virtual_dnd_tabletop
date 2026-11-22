@@ -23,7 +23,9 @@
 #include "core/bestiary.h"
 #include "core/clock.h"
 #include "core/conditions.h"
+#include "core/damage.h"
 #include "core/dice.h"
+#include "core/editor_token.h"
 #include "core/levels.h"
 #include "core/movement.h"
 #include "core/navigation.h"
@@ -68,6 +70,20 @@ constexpr std::size_t kAutoTokenColorCount = 4;
 // Предел подписи броска с именем токена: совпадает с kMaxRollLabel
 // в game_server.cpp.
 constexpr std::size_t kMaxLabelBytes = 64;
+
+// Следующий цвет палитры после текущего; токен без своего цвета начинает
+// с автоматического цвета по id.
+auto NextTokenColor(const Token& token) -> std::uint32_t {
+  const std::uint32_t current =
+      token.color != 0 ? token.color
+                       : kTokenPalette[(token.id - 1) % kAutoTokenColorCount];
+  for (std::size_t i = 0; i < kTokenPalette.size(); ++i) {
+    if (current == kTokenPalette[i]) {
+      return kTokenPalette[(i + 1) % kTokenPalette.size()];
+    }
+  }
+  return kTokenPalette.front();
+}
 
 auto BuildSnapshot() -> GameSnapshot {
   GridMap map(kMapWidth, kMapHeight);
@@ -377,14 +393,14 @@ auto App::StartHost() -> bool {
   if (!ParsePort(menu_.port, port)) {
     menu_.status = "Некорректный порт";
     if (in_editor_) {
-      editor_status_ = menu_.status;
+      editor_status_.Set(menu_.status);
     }
     return false;
   }
   if (!net_server_.Start(port, menu_.password)) {
     menu_.status = "Не удалось открыть порт " + std::to_string(port);
     if (in_editor_) {
-      editor_status_ = menu_.status;
+      editor_status_.Set(menu_.status);
     }
     return false;
   }
@@ -486,7 +502,11 @@ auto App::StartEditor() -> void {
   in_game_ = false;
   client_connecting_ = false;
   menu_.status.clear();
-  editor_status_.clear();
+  editor_status_.Clear();
+  delete_editor_token_.Clear();
+  editor_drag_token_ = 0;
+  CancelEditorTokenRename();
+  CloseSheet();
   editor_panel_visible_ = true;
   // Редактор начинает с активной сцены кампании; F5 пишет именно её.
   if (campaign_.active < campaign_.scenes.size()) {
@@ -498,7 +518,7 @@ auto App::StartEditor() -> void {
   }
   editor_scenes_active_ = false;
   editor_scenes_selected_ = editor_scene_;
-  editor_scenes_status_.clear();
+  editor_scenes_status_.Clear();
   editor_scene_edit_ = false;
   editor_scene_edit_buffer_.clear();
   editor_scene_edit_ignore_text_ = false;
@@ -582,28 +602,28 @@ auto App::ExitToMenu() -> void {
 
 auto App::SaveScene() -> void {
   if (editor_scene_ >= campaign_.scenes.size()) {
-    editor_status_ = "Сцена не выбрана";
+    editor_status_.Set("Сцена не выбрана");
     return;
   }
   // Отдельный файл сцены — шаблон карты: туман прошлой партии в него не пишем.
   GameSnapshot stored = scene_;
   stored.fog.clear();
   if (!WriteSnapshot(stored, ScenePath())) {
-    editor_status_ = "Не удалось сохранить сцену";
+    editor_status_.Set("Не удалось сохранить сцену");
     return;
   }
   // F5 пишет ту сцену, которую выбрал DM в панели редактора.
   campaign_.scenes[editor_scene_].snapshot = scene_;
   campaign_.active = editor_scene_;
   SaveCampaign();
-  editor_status_ = std::string(strings::kEditorSceneSaved) + ": " +
-                   campaign_.scenes[editor_scene_].name;
+  editor_status_.Set(std::string(strings::kEditorSceneSaved) + ": " +
+                     campaign_.scenes[editor_scene_].name);
 }
 
 auto App::LoadScene() -> void {
   const std::optional<GameSnapshot> loaded = ReadSnapshot(ScenePath());
   if (!loaded.has_value()) {
-    editor_status_ = std::string(strings::kEditorSceneMissing);
+    editor_status_.Set(std::string(strings::kEditorSceneMissing));
     return;
   }
   scene_ = *loaded;
@@ -611,7 +631,11 @@ auto App::LoadScene() -> void {
   selected_id_ = 0;
   dragging_ = false;
   drag_target_.reset();
-  editor_status_ = std::string(strings::kEditorSceneLoaded);
+  delete_editor_token_.Clear();
+  editor_drag_token_ = 0;
+  CancelEditorTokenRename();
+  CloseSheet();
+  editor_status_.Set(std::string(strings::kEditorSceneLoaded));
   CenterCamera();
 }
 
@@ -638,8 +662,8 @@ auto App::ResizeScene(int width, int height) -> void {
   selected_id_ = 0;
   dragging_ = false;
   drag_target_.reset();
-  editor_status_ =
-      "Размер карты: " + std::to_string(width) + " x " + std::to_string(height);
+  editor_status_.Set("Размер карты: " + std::to_string(width) + " x " +
+                     std::to_string(height));
 }
 
 auto App::CenterCamera() -> void {
@@ -656,12 +680,12 @@ auto App::CenterCamera() -> void {
 
 auto App::AddEditorToken(Cell cell, TokenKind kind) -> void {
   if (!scene_.map.Contains(cell) || scene_.map.IsBlocked(cell)) {
-    editor_status_ = "Нельзя поставить токен в эту клетку";
+    editor_status_.Set("Нельзя поставить токен в эту клетку");
     return;
   }
   for (const Token& token : scene_.tokens) {
     if (token.cell == cell) {
-      editor_status_ = "Клетка уже занята токеном";
+      editor_status_.Set("Клетка уже занята токеном");
       return;
     }
   }
@@ -684,7 +708,7 @@ auto App::SpawnEditorBestiary(int index, bool group) -> void {
   }
   const Cell origin = CellFromPixel(mouse_x_, mouse_y_);
   if (!scene_.map.Contains(origin) || scene_.map.IsBlocked(origin)) {
-    editor_status_ = "Нельзя поставить монстра в эту клетку";
+    editor_status_.Set("Нельзя поставить монстра в эту клетку");
     return;
   }
   const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(index)];
@@ -692,7 +716,7 @@ auto App::SpawnEditorBestiary(int index, bool group) -> void {
   const std::vector<Cell> cells =
       MonsterGroupCells(scene_.map, origin, count, scene_.tokens);
   if (cells.empty()) {
-    editor_status_ = "Нельзя поставить монстра в эту клетку";
+    editor_status_.Set("Нельзя поставить монстра в эту клетку");
     return;
   }
   const bool numbered = cells.size() > 1;
@@ -717,7 +741,7 @@ auto App::SpawnEditorBestiary(int index, bool group) -> void {
     scene_.tokens.push_back(std::move(token));
   }
   scene_.encounter = Encounter{};
-  editor_status_ = "Добавлен монстр: " + monster.name;
+  editor_status_.Set("Добавлен монстр: " + monster.name);
   bestiary_active_ = false;
 }
 
@@ -725,12 +749,13 @@ auto App::ApplyEditorBrush(Cell cell) -> void {
   if (!scene_.map.Contains(cell)) {
     return;
   }
+  // Кисть не рисует поверх токена: его убирают ПКМ с подтверждением.
+  if (EditorTokenAt(cell) != nullptr) {
+    return;
+  }
   switch (editor_brush_) {
     case EditorBrush::kWall:
       scene_.map.SetTerrain(cell, Terrain::kWall);
-      std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
-        return token.cell == cell;
-      });
       break;
     case EditorBrush::kFloor:
       scene_.map.SetTerrain(cell, Terrain::kFloor);
@@ -740,21 +765,12 @@ auto App::ApplyEditorBrush(Cell cell) -> void {
       break;
     case EditorBrush::kWater:
       scene_.map.SetTerrain(cell, Terrain::kWater);
-      std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
-        return token.cell == cell;
-      });
       break;
     case EditorBrush::kPit:
       scene_.map.SetTerrain(cell, Terrain::kPit);
-      std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
-        return token.cell == cell;
-      });
       break;
     case EditorBrush::kLava:
       scene_.map.SetTerrain(cell, Terrain::kLava);
-      std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
-        return token.cell == cell;
-      });
       break;
   }
   scene_.encounter = Encounter{};
@@ -795,20 +811,146 @@ auto App::EraseEditorCell(Cell cell) -> void {
   if (!scene_.map.Contains(cell)) {
     return;
   }
-  // ПКМ убирает сначала токен, иначе возвращает полу; туман не трогаем.
-  const auto before = scene_.tokens.size();
-  std::erase_if(scene_.tokens, [cell](const Token& token) -> bool {
-    return token.cell == cell;
-  });
-  if (scene_.tokens.size() == before) {
-    scene_.map.SetTerrain(cell, Terrain::kFloor);
+  // Штрих ПКМ возвращает полу и не трогает токены: токен под клеткой
+  // удаляется только отдельным подтверждённым кликом.
+  if (EditorTokenAt(cell) != nullptr) {
+    return;
+  }
+  scene_.map.SetTerrain(cell, Terrain::kFloor);
+  scene_.encounter = Encounter{};
+}
+
+auto App::EditorTokenAt(Cell cell) const -> const Token* {
+  for (const Token& token : scene_.tokens) {
+    if (token.cell == cell) {
+      return &token;
+    }
+  }
+  return nullptr;
+}
+
+auto App::RequestDeleteEditorToken(TokenId id) -> void {
+  if (delete_editor_token_.Request(static_cast<std::size_t>(id),
+                                   std::chrono::steady_clock::now())) {
+    const auto before = scene_.tokens.size();
+    std::erase_if(scene_.tokens,
+                  [id](const Token& token) -> bool { return token.id == id; });
+    if (scene_.tokens.size() != before) {
+      if (selected_id_ == id) {
+        selected_id_ = 0;
+      }
+      drag_target_.reset();
+      scene_.encounter = Encounter{};
+      editor_status_.Set(std::string(strings::kEditorTokenDeleted));
+    }
+    return;
+  }
+  editor_status_.Set(std::string(strings::kEditorTokenDeleteConfirm));
+}
+
+auto App::FindEditorToken(TokenId id) const -> const Token* {
+  if (id == 0) {
+    return nullptr;
+  }
+  for (const Token& token : scene_.tokens) {
+    if (token.id == id) {
+      return &token;
+    }
+  }
+  return nullptr;
+}
+
+auto App::FindEditorToken(TokenId id) -> Token* {
+  if (id == 0) {
+    return nullptr;
+  }
+  for (Token& token : scene_.tokens) {
+    if (token.id == id) {
+      return &token;
+    }
+  }
+  return nullptr;
+}
+
+auto App::MoveEditorToken(TokenId id, Cell cell) -> void {
+  if (!MoveTokenToCell(scene_.tokens, scene_.map, id, cell)) {
+    return;
   }
   scene_.encounter = Encounter{};
+  editor_status_.Clear();
+}
+
+auto App::BeginEditorTokenRename() -> void {
+  if (FindEditorToken(selected_id_) == nullptr) {
+    editor_status_.Set(std::string(strings::kSelectToken));
+    return;
+  }
+  editor_token_edit_ = true;
+  editor_token_edit_id_ = selected_id_;
+  editor_token_edit_buffer_.clear();
+  editor_token_edit_ignore_text_ = true;
+  editor_status_.Clear();
+}
+
+auto App::CancelEditorTokenRename() -> void {
+  editor_token_edit_ = false;
+  editor_token_edit_id_ = 0;
+  editor_token_edit_buffer_.clear();
+  editor_token_edit_ignore_text_ = false;
+}
+
+auto App::CommitEditorTokenRename() -> void {
+  if (!editor_token_edit_) {
+    return;
+  }
+  Token* token = FindEditorToken(editor_token_edit_id_);
+  if (token == nullptr) {
+    CancelEditorTokenRename();
+    return;
+  }
+  std::string name = TrimTokenName(editor_token_edit_buffer_);
+  if (name.empty()) {
+    editor_status_.Set(std::string(strings::kEditorTokenNameEmpty));
+    return;
+  }
+  TruncateUtf8(name, kMaxTokenNameLength);
+  token->name = std::move(name);
+  editor_status_.Set(std::string(strings::kEditorTokenRenamed) + token->name);
+  CancelEditorTokenRename();
+}
+
+auto App::HandleEditorTokenTextInput(const char* text) -> void {
+  if (!editor_token_edit_ || text == nullptr) {
+    return;
+  }
+  // Первый TEXT_INPUT — это сама клавиша R, её не вводим.
+  if (editor_token_edit_ignore_text_) {
+    editor_token_edit_ignore_text_ = false;
+    return;
+  }
+  AppendUtf8(editor_token_edit_buffer_, text, kMaxTokenNameLength);
+  editor_status_.Clear();
+}
+
+auto App::HandleEditorTokenEditKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (!editor_token_edit_) {
+    return;
+  }
+  if (key.key == SDLK_ESCAPE) {
+    CancelEditorTokenRename();
+  } else if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
+    CommitEditorTokenRename();
+  } else if (key.key == SDLK_BACKSPACE) {
+    EraseLastCodePoint(editor_token_edit_buffer_);
+    editor_status_.Clear();
+  }
 }
 
 auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
   switch (key.key) {
     case SDLK_ESCAPE:
+      CancelEditorTokenRename();
+      editor_drag_token_ = 0;
       in_editor_ = false;
       menu_.tab = MenuTab::kHost;
       menu_.status.clear();
@@ -863,6 +1005,15 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SDLK_P:
       AddEditorToken(CellFromPixel(mouse_x_, mouse_y_), TokenKind::kPlayer);
       return;
+    case SDLK_L:
+      OpenSheet();
+      return;
+    case SDLK_R:
+      BeginEditorTokenRename();
+      return;
+    case SDLK_V:
+      CycleEditorTokenColor();
+      return;
     case SDLK_B:
       OpenBestiary();
       return;
@@ -876,9 +1027,11 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
 
 auto App::OpenEditorScenes() -> void {
   EndEditorStroke();
+  editor_drag_token_ = 0;
+  CancelEditorTokenRename();
   editor_scenes_active_ = true;
   editor_scenes_selected_ = editor_scene_;
-  editor_scenes_status_.clear();
+  editor_scenes_status_.Clear();
   editor_scene_edit_ = false;
   editor_scene_edit_buffer_.clear();
   editor_scene_edit_ignore_text_ = false;
@@ -887,7 +1040,7 @@ auto App::OpenEditorScenes() -> void {
 
 auto App::CloseEditorScenes() -> void {
   editor_scenes_active_ = false;
-  editor_scenes_status_.clear();
+  editor_scenes_status_.Clear();
   CancelEditorSceneRename();
   delete_editor_scene_.Clear();
 }
@@ -904,7 +1057,7 @@ auto App::HandleEditorScenesMouseDown(const SDL_MouseButtonEvent& button)
     return;
   }
   editor_scenes_selected_ = index;
-  editor_scenes_status_.clear();
+  editor_scenes_status_.Clear();
   if (button.clicks >= 2) {
     SwitchEditorScene(index);
   }
@@ -918,7 +1071,7 @@ auto App::HandleEditorScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       CommitEditorSceneRename();
     } else if (key.key == SDLK_BACKSPACE) {
       EraseLastCodePoint(editor_scene_edit_buffer_);
-      editor_scenes_status_.clear();
+      editor_scenes_status_.Clear();
     }
     return;
   }
@@ -974,7 +1127,7 @@ auto App::HandleEditorScenesTextInput(const char* text) -> void {
     return;
   }
   AppendUtf8(editor_scene_edit_buffer_, text, kMaxSceneNameLength);
-  editor_scenes_status_.clear();
+  editor_scenes_status_.Clear();
 }
 
 auto App::BeginEditorSceneRename() -> void {
@@ -985,7 +1138,7 @@ auto App::BeginEditorSceneRename() -> void {
   // Имя набирается с нуля: старое стирать не нужно.
   editor_scene_edit_buffer_.clear();
   editor_scene_edit_ignore_text_ = true;
-  editor_scenes_status_.clear();
+  editor_scenes_status_.Clear();
 }
 
 auto App::CancelEditorSceneRename() -> void {
@@ -1002,19 +1155,19 @@ auto App::CommitEditorSceneRename() -> void {
   }
   std::string name(TrimText(editor_scene_edit_buffer_));
   if (name.empty()) {
-    editor_scenes_status_ = std::string(strings::kSceneNameEmpty);
+    editor_scenes_status_.Set(std::string(strings::kSceneNameEmpty));
     return;
   }
   TruncateUtf8(name, kMaxSceneNameLength);
   // Проверки те же, что у панели сцен DM: пусто, длина и занятое имя.
   if (!dnd::RenameScene(campaign_, editor_scenes_selected_, std::move(name))) {
-    editor_scenes_status_ = std::string(strings::kSceneNameTaken);
+    editor_scenes_status_.Set(std::string(strings::kSceneNameTaken));
     return;
   }
-  editor_status_ = std::string(strings::kEditorSceneRenamed) +
-                   campaign_.scenes[editor_scenes_selected_].name;
+  editor_status_.Set(std::string(strings::kEditorSceneRenamed) +
+                     campaign_.scenes[editor_scenes_selected_].name);
   CancelEditorSceneRename();
-  editor_scenes_status_.clear();
+  editor_scenes_status_.Clear();
   SaveCampaign();
 }
 
@@ -1023,7 +1176,7 @@ auto App::RequestDeleteEditorScene() -> void {
     return;
   }
   if (!CanDeleteScene(campaign_)) {
-    editor_scenes_status_ = std::string(strings::kEditorLastScene);
+    editor_scenes_status_.Set(std::string(strings::kEditorLastScene));
     delete_editor_scene_.Clear();
     return;
   }
@@ -1032,7 +1185,7 @@ auto App::RequestDeleteEditorScene() -> void {
     DeleteEditorScene(editor_scenes_selected_);
     return;
   }
-  editor_scenes_status_ = std::string(strings::kDeleteConfirm);
+  editor_scenes_status_.Set(std::string(strings::kDeleteConfirm));
 }
 
 auto App::DeleteEditorScene(std::size_t index) -> void {
@@ -1065,8 +1218,12 @@ auto App::DeleteEditorScene(std::size_t index) -> void {
   }
   campaign_.active = editor_scene_;
   editor_scenes_selected_ = next;
-  editor_scenes_status_.clear();
-  editor_status_ = std::string(strings::kEditorSceneDeleted) + name;
+  delete_editor_token_.Clear();
+  editor_drag_token_ = 0;
+  CancelEditorTokenRename();
+  CloseSheet();
+  editor_scenes_status_.Clear();
+  editor_status_.Set(std::string(strings::kEditorSceneDeleted) + name);
   SaveCampaign();
 }
 
@@ -1090,18 +1247,22 @@ auto App::SwitchEditorScene(std::size_t index) -> void {
   dragging_ = false;
   drag_target_.reset();
   panning_ = false;
+  delete_editor_token_.Clear();
+  editor_drag_token_ = 0;
+  CancelEditorTokenRename();
+  CloseSheet();
   CenterCamera();
   SaveCampaign();
-  editor_status_ =
-      std::string(strings::kEditorSceneOpened) + campaign_.scenes[index].name;
+  editor_status_.Set(std::string(strings::kEditorSceneOpened) +
+                     campaign_.scenes[index].name);
   CloseEditorScenes();
 }
 
 auto App::CreateEditorScene() -> void {
-  editor_scenes_status_.clear();
+  editor_scenes_status_.Clear();
   CancelEditorSceneRename();
   if (campaign_.scenes.size() >= kMaxCampaignScenes) {
-    editor_scenes_status_ = "Достигнут предел числа сцен";
+    editor_scenes_status_.Set("Достигнут предел числа сцен");
     return;
   }
   if (editor_scene_ < campaign_.scenes.size()) {
@@ -1109,7 +1270,7 @@ auto App::CreateEditorScene() -> void {
   }
   std::string name = NextSceneName(campaign_);
   if (!IsSceneNameAvailable(campaign_, name)) {
-    editor_scenes_status_ = std::string(strings::kSceneNameTaken);
+    editor_scenes_status_.Set(std::string(strings::kSceneNameTaken));
     return;
   }
   Scene scene{.name = std::move(name), .snapshot = scene_};
@@ -1119,8 +1280,8 @@ auto App::CreateEditorScene() -> void {
   editor_scene_ = campaign_.active;
   editor_scenes_selected_ = editor_scene_;
   SaveCampaign();
-  editor_status_ = std::string(strings::kEditorSceneCreated) +
-                   campaign_.scenes[editor_scene_].name;
+  editor_status_.Set(std::string(strings::kEditorSceneCreated) +
+                     campaign_.scenes[editor_scene_].name);
 }
 
 auto App::HandleEditorMouseDown(const SDL_MouseButtonEvent& button) -> void {
@@ -1137,14 +1298,28 @@ auto App::HandleEditorMouseDown(const SDL_MouseButtonEvent& button) -> void {
   }
   const Cell cell = CellFromPixel(button.x, button.y);
   if (button.button == SDL_BUTTON_LEFT) {
+    // ЛКМ по токену выбирает его и тащит; кисть по токену не рисует.
+    if (const Token* token = EditorTokenAt(cell); token != nullptr) {
+      selected_id_ = token->id;
+      editor_drag_token_ = token->id;
+      EndEditorStroke();
+      return;
+    }
+    selected_id_ = 0;
     BeginEditorStroke(EditorPaintMode::kBrush, cell);
   } else if (button.button == SDL_BUTTON_RIGHT) {
+    if (const Token* token = EditorTokenAt(cell); token != nullptr) {
+      selected_id_ = token->id;
+      RequestDeleteEditorToken(token->id);
+      return;
+    }
     BeginEditorStroke(EditorPaintMode::kErase, cell);
   }
 }
 
 auto App::HandleEditorMouseUp(const SDL_MouseButtonEvent& button) -> void {
   // Любая отпущенная кнопка заканчивает штрих, а не только та, что начала.
+  editor_drag_token_ = 0;
   EndEditorStroke();
   if (button.button == SDL_BUTTON_MIDDLE) {
     panning_ = false;
@@ -1559,6 +1734,19 @@ auto App::HandleEvent(SDL_Event event) -> void {
   }
 
   if (in_editor_) {
+    if (editor_token_edit_) {
+      switch (event.type) {
+        case SDL_EVENT_TEXT_INPUT:
+          HandleEditorTokenTextInput(event.text.text);
+          break;
+        case SDL_EVENT_KEY_DOWN:
+          HandleEditorTokenEditKeyDown(event.key);
+          break;
+        default:
+          break;
+      }
+      return;
+    }
     if (editor_scenes_active_) {
       switch (event.type) {
         case SDL_EVENT_TEXT_INPUT:
@@ -1588,6 +1776,9 @@ auto App::HandleEvent(SDL_Event event) -> void {
         HandlePanMotion(event.motion);
         if (panning_) {
           EndEditorStroke();
+        } else if (editor_drag_token_ != 0) {
+          MoveEditorToken(editor_drag_token_,
+                          CellFromPixel(event.motion.x, event.motion.y));
         } else {
           ContinueEditorStroke(CellFromPixel(event.motion.x, event.motion.y));
         }
@@ -1600,6 +1791,7 @@ auto App::HandleEvent(SDL_Event event) -> void {
         break;
       case SDL_EVENT_WINDOW_FOCUS_LOST:
         // Потеря фокуса отпускает кнопку мыши, не дожидаясь MOUSE_UP.
+        editor_drag_token_ = 0;
         EndEditorStroke();
         panning_ = false;
         break;
@@ -2222,39 +2414,82 @@ auto App::IsDm() const -> bool {
 }
 
 auto App::OpenSheet() -> void {
-  const Token* token = FindSelectedToken();
+  const Token* token =
+      in_editor_ ? FindEditorToken(selected_id_) : FindSelectedToken();
   if (token == nullptr) {
-    view_.AddLocalLine(std::string(strings::kSelectToken));
+    ShowStatus(std::string(strings::kSelectToken));
     return;
   }
   // Чужой лист персонажа открыт на просмотр: правит листы только DM.
-  if (!CanOpenSheet(*token)) {
-    view_.AddLocalLine(std::string(strings::kSheetNoAccess));
+  // В редакторе лист всегда правит DM.
+  if (!in_editor_ && !CanOpenSheet(*token)) {
+    ShowStatus(std::string(strings::kSheetNoAccess));
     return;
   }
   sheet_active_ = true;
-  sheet_read_only_ = !IsDm();
+  sheet_read_only_ = !in_editor_ && !IsDm();
   conditions_active_ = false;
   conditions_read_only_ = false;
   bestiary_active_ = false;
   actions_active_ = false;
   combat_active_ = false;
+  editor_token_edit_ = false;
+  editor_token_edit_buffer_.clear();
+  editor_token_edit_ignore_text_ = false;
   sheet_token_id_ = token->id;
   sheet_field_ = SheetField::kAc;
-  sheet_ac_ = std::to_string(token->ac);
-  sheet_speed_ = std::to_string(token->speed);
-  sheet_attack_ = std::to_string(token->attack_bonus);
-  sheet_save_ = std::to_string(token->save_bonus);
-  sheet_initiative_ = std::to_string(token->initiative_bonus);
-  sheet_temp_hp_ = std::to_string(token->temp_hp);
-  sheet_hit_die_ = std::to_string(token->hit_die);
-  sheet_con_ = std::to_string(token->con_modifier);
-  sheet_range_ = std::to_string(token->attack_range);
-  sheet_damage_ = token->damage;
-  sheet_resist_ = FormatDamageTypeList(token->resist);
-  sheet_vulnerable_ = FormatDamageTypeList(token->vulnerable);
-  sheet_immune_ = FormatDamageTypeList(token->immune);
-  sheet_notes_ = token->notes;
+  LoadSheetFields(*token);
+}
+
+auto App::LoadSheetFields(const Token& token) -> void {
+  sheet_ac_ = std::to_string(token.ac);
+  sheet_speed_ = std::to_string(token.speed);
+  sheet_attack_ = std::to_string(token.attack_bonus);
+  sheet_save_ = std::to_string(token.save_bonus);
+  sheet_initiative_ = std::to_string(token.initiative_bonus);
+  sheet_temp_hp_ = std::to_string(token.temp_hp);
+  sheet_hit_die_ = std::to_string(token.hit_die);
+  sheet_con_ = std::to_string(token.con_modifier);
+  sheet_range_ = std::to_string(token.attack_range);
+  sheet_damage_ = token.damage;
+  sheet_resist_ = FormatDamageTypeList(token.resist);
+  sheet_vulnerable_ = FormatDamageTypeList(token.vulnerable);
+  sheet_immune_ = FormatDamageTypeList(token.immune);
+  sheet_notes_ = token.notes;
+}
+
+auto App::ShowStatus(std::string_view message) -> void {
+  if (in_editor_) {
+    editor_status_.Set(std::string(message));
+    return;
+  }
+  view_.AddLocalLine(std::string(message));
+}
+
+auto App::DrawActiveSheet() -> void {
+  if (!sheet_active_) {
+    return;
+  }
+  const Token* token = nullptr;
+  if (in_editor_) {
+    token = FindEditorToken(sheet_token_id_);
+  } else {
+    for (const Token& candidate : view_.Tokens()) {
+      if (candidate.id == sheet_token_id_) {
+        token = &candidate;
+        break;
+      }
+    }
+  }
+  if (token == nullptr) {
+    CloseSheet();
+    return;
+  }
+  DrawSheetPanel(renderer_, text_.get(), *token, sheet_field_, sheet_ac_,
+                 sheet_speed_, sheet_attack_, sheet_save_, sheet_initiative_,
+                 sheet_temp_hp_, sheet_hit_die_, sheet_con_, sheet_range_,
+                 sheet_damage_, sheet_resist_, sheet_vulnerable_, sheet_immune_,
+                 sheet_notes_, sheet_read_only_);
 }
 
 auto App::CloseSheet() -> void {
@@ -2268,55 +2503,33 @@ auto App::SaveSheet() -> void {
     CloseSheet();
     return;
   }
-  int ac = 0;
-  int speed = 0;
-  int attack = 0;
-  int save = 0;
-  int initiative = 0;
-  int temp_hp = 0;
-  if (!ParseNumber(sheet_ac_, ac) || ac > 1000 ||
-      !ParseSignedNumber(sheet_speed_, speed) || speed < 0 || speed > 1000 ||
-      !ParseSignedNumber(sheet_attack_, attack) || attack < -100 ||
-      attack > 100 || !ParseSignedNumber(sheet_save_, save) || save < -100 ||
-      save > 100 || !ParseSignedNumber(sheet_initiative_, initiative) ||
-      initiative < -100 || initiative > 100 ||
-      !ParseSignedNumber(sheet_temp_hp_, temp_hp) || temp_hp < 0 ||
-      temp_hp > 1000) {
-    view_.AddLocalLine("Некорректные значения полей листа");
+  SheetValues values;
+  if (!ReadSheetValues(values)) {
     return;
   }
-  int hit_die = 0;
-  int con = 0;
-  if (!ParseNumber(sheet_hit_die_, hit_die) || !IsValidHitDie(hit_die)) {
-    view_.AddLocalLine(std::string(strings::kSheetBadHitDie));
-    return;
-  }
-  if (!ParseSignedNumber(sheet_con_, con) || con < -kMaxConModifier ||
-      con > kMaxConModifier) {
-    view_.AddLocalLine(std::string(strings::kSheetBadCon));
-    return;
-  }
-  int attack_range = 0;
-  if (!ParseSignedNumber(sheet_range_, attack_range) || attack_range < 0 ||
-      attack_range > 1000) {
-    view_.AddLocalLine(std::string(strings::kSheetBadRange));
-    return;
-  }
-  if (!sheet_damage_.empty()) {
-    DiceExpression damage;
-    DamageType damage_type = DamageType::kNone;
-    if (!ParseDamageProfile(sheet_damage_, damage, damage_type)) {
-      view_.AddLocalLine(std::string(strings::kSheetBadDamage));
+  if (in_editor_) {
+    Token* token = FindEditorToken(sheet_token_id_);
+    if (token == nullptr) {
+      CloseSheet();
       return;
     }
-  }
-  std::uint32_t resist = 0;
-  std::uint32_t vulnerable = 0;
-  std::uint32_t immune = 0;
-  if (!ParseDamageTypeList(sheet_resist_, resist) ||
-      !ParseDamageTypeList(sheet_vulnerable_, vulnerable) ||
-      !ParseDamageTypeList(sheet_immune_, immune)) {
-    view_.AddLocalLine(std::string(strings::kSheetBadDamageType));
+    token->ac = values.ac;
+    token->speed = values.speed;
+    token->notes = std::move(values.notes);
+    token->attack_bonus = values.attack;
+    token->save_bonus = values.save;
+    token->initiative_bonus = values.initiative;
+    token->damage = std::move(values.damage);
+    // Как и в игре, временные HP не складываются: остаётся большее.
+    token->temp_hp = std::max(token->temp_hp, values.temp_hp);
+    token->hit_die = values.hit_die;
+    token->con_modifier = values.con;
+    token->attack_range = values.attack_range;
+    token->resist = values.resist & kAllDamageTypes;
+    token->vulnerable = values.vulnerable & kAllDamageTypes;
+    token->immune = values.immune & kAllDamageTypes;
+    editor_status_.Set(std::string(strings::kEditorSheetSaved) + token->name);
+    CloseSheet();
     return;
   }
   const Token* token = nullptr;
@@ -2331,21 +2544,69 @@ auto App::SaveSheet() -> void {
     return;
   }
   SendCommand(UpdateTokenSheet{.id = token->id,
-                               .ac = ac,
-                               .speed = speed,
-                               .notes = sheet_notes_,
-                               .attack_bonus = attack,
-                               .save_bonus = save,
-                               .initiative_bonus = initiative,
-                               .damage = sheet_damage_,
-                               .temp_hp = temp_hp,
-                               .hit_die = hit_die,
-                               .con_modifier = con,
-                               .attack_range = attack_range,
-                               .resist = resist,
-                               .vulnerable = vulnerable,
-                               .immune = immune});
+                               .ac = values.ac,
+                               .speed = values.speed,
+                               .notes = std::move(values.notes),
+                               .attack_bonus = values.attack,
+                               .save_bonus = values.save,
+                               .initiative_bonus = values.initiative,
+                               .damage = std::move(values.damage),
+                               .temp_hp = values.temp_hp,
+                               .hit_die = values.hit_die,
+                               .con_modifier = values.con,
+                               .attack_range = values.attack_range,
+                               .resist = values.resist,
+                               .vulnerable = values.vulnerable,
+                               .immune = values.immune});
   CloseSheet();
+}
+
+auto App::ReadSheetValues(SheetValues& values) -> bool {
+  if (!ParseNumber(sheet_ac_, values.ac) || values.ac > 1000 ||
+      !ParseSignedNumber(sheet_speed_, values.speed) || values.speed < 0 ||
+      values.speed > 1000 || !ParseSignedNumber(sheet_attack_, values.attack) ||
+      values.attack < -100 || values.attack > 100 ||
+      !ParseSignedNumber(sheet_save_, values.save) || values.save < -100 ||
+      values.save > 100 ||
+      !ParseSignedNumber(sheet_initiative_, values.initiative) ||
+      values.initiative < -100 || values.initiative > 100 ||
+      !ParseSignedNumber(sheet_temp_hp_, values.temp_hp) ||
+      values.temp_hp < 0 || values.temp_hp > 1000) {
+    ShowStatus("Некорректные значения полей листа");
+    return false;
+  }
+  if (!ParseNumber(sheet_hit_die_, values.hit_die) ||
+      !IsValidHitDie(values.hit_die)) {
+    ShowStatus(std::string(strings::kSheetBadHitDie));
+    return false;
+  }
+  if (!ParseSignedNumber(sheet_con_, values.con) ||
+      values.con < -kMaxConModifier || values.con > kMaxConModifier) {
+    ShowStatus(std::string(strings::kSheetBadCon));
+    return false;
+  }
+  if (!ParseSignedNumber(sheet_range_, values.attack_range) ||
+      values.attack_range < 0 || values.attack_range > 1000) {
+    ShowStatus(std::string(strings::kSheetBadRange));
+    return false;
+  }
+  if (!sheet_damage_.empty()) {
+    DiceExpression damage;
+    DamageType damage_type = DamageType::kNone;
+    if (!ParseDamageProfile(sheet_damage_, damage, damage_type)) {
+      ShowStatus(std::string(strings::kSheetBadDamage));
+      return false;
+    }
+  }
+  if (!ParseDamageTypeList(sheet_resist_, values.resist) ||
+      !ParseDamageTypeList(sheet_vulnerable_, values.vulnerable) ||
+      !ParseDamageTypeList(sheet_immune_, values.immune)) {
+    ShowStatus(std::string(strings::kSheetBadDamageType));
+    return false;
+  }
+  values.damage = sheet_damage_;
+  values.notes = sheet_notes_;
+  return true;
 }
 
 auto App::AttackTarget(bool advantage, bool disadvantage) -> void {
@@ -3095,17 +3356,17 @@ auto App::CycleSelectedColor() -> void {
     view_.AddLocalLine(std::string(strings::kColorDmOnly));
     return;
   }
-  const std::uint32_t current =
-      token->color != 0 ? token->color
-                        : kTokenPalette[(token->id - 1) % kAutoTokenColorCount];
-  std::uint32_t next = kTokenPalette.front();
-  for (std::size_t i = 0; i < kTokenPalette.size(); ++i) {
-    if (current == kTokenPalette[i]) {
-      next = kTokenPalette[(i + 1) % kTokenPalette.size()];
-      break;
-    }
+  SendCommand(SetTokenColor{.id = token->id, .color = NextTokenColor(*token)});
+}
+
+auto App::CycleEditorTokenColor() -> void {
+  Token* token = FindEditorToken(selected_id_);
+  if (token == nullptr) {
+    editor_status_.Set(std::string(strings::kSelectToken));
+    return;
   }
-  SendCommand(SetTokenColor{.id = token->id, .color = next});
+  token->color = NextTokenColor(*token);
+  editor_status_.Set(std::string(strings::kEditorTokenColorChanged));
 }
 
 auto App::SubmitChat() -> void {
@@ -3890,16 +4151,16 @@ auto App::RequestDeleteActiveScene() -> void {
     return;
   }
   if (campaign_.scenes.size() <= 1) {
-    scenes_status_ = "Нельзя удалить последнюю сцену";
+    scenes_status_.Set("Нельзя удалить последнюю сцену");
     return;
   }
   if (delete_scene_.Request(campaign_.active,
                             std::chrono::steady_clock::now())) {
-    scenes_status_.clear();
+    scenes_status_.Clear();
     DeleteActiveScene();
     return;
   }
-  scenes_status_ = std::string(strings::kDeleteConfirm);
+  scenes_status_.Set(std::string(strings::kDeleteConfirm));
 }
 
 auto App::SwitchScene(std::size_t index) -> void {
@@ -3992,7 +4253,7 @@ auto App::OpenScenes() -> void {
   scenes_selected_ = campaign_.active;
   scenes_edit_ = SceneEditField::kNone;
   scenes_edit_buffer_.clear();
-  scenes_status_.clear();
+  scenes_status_.Clear();
   bestiary_active_ = false;
   sheet_active_ = false;
   sheet_read_only_ = false;
@@ -4006,7 +4267,7 @@ auto App::OpenScenes() -> void {
 auto App::CloseScenes() -> void {
   scenes_active_ = false;
   CancelSceneEdit();
-  scenes_status_.clear();
+  scenes_status_.Clear();
 }
 
 auto App::HandleScenesMouseDown(const SDL_MouseButtonEvent& button) -> void {
@@ -4020,7 +4281,7 @@ auto App::HandleScenesMouseDown(const SDL_MouseButtonEvent& button) -> void {
     return;
   }
   scenes_selected_ = index;
-  scenes_status_.clear();
+  scenes_status_.Clear();
   if (button.clicks >= 2) {
     CloseScenes();
     SwitchScene(index);
@@ -4035,7 +4296,7 @@ auto App::HandleScenesKeyDown(const SDL_KeyboardEvent& key) -> void {
       CommitSceneEdit();
     } else if (key.key == SDLK_BACKSPACE) {
       EraseLastCodePoint(scenes_edit_buffer_);
-      scenes_status_.clear();
+      scenes_status_.Clear();
     }
     return;
   }
@@ -4096,7 +4357,7 @@ auto App::HandleScenesTextInput(const char* text) -> void {
   AppendUtf8(scenes_edit_buffer_, text,
              scenes_edit_ == SceneEditField::kName ? kMaxSceneNameLength
                                                    : kMaxSceneNoteLength);
-  scenes_status_.clear();
+  scenes_status_.Clear();
 }
 
 auto App::RenameSceneAt(std::size_t index, std::string name) -> bool {
@@ -4148,7 +4409,7 @@ auto App::BeginSceneEdit(SceneEditField field) -> void {
   scenes_edit_buffer_ =
       field == SceneEditField::kName ? std::string{} : scene.note;
   scenes_edit_ignore_text_ = true;
-  scenes_status_.clear();
+  scenes_status_.Clear();
 }
 
 auto App::CancelSceneEdit() -> void {
@@ -4165,11 +4426,11 @@ auto App::CommitSceneEdit() -> void {
   if (scenes_edit_ == SceneEditField::kName) {
     std::string name(TrimText(scenes_edit_buffer_));
     if (name.empty()) {
-      scenes_status_ = std::string(strings::kSceneNameEmpty);
+      scenes_status_.Set(std::string(strings::kSceneNameEmpty));
       return;
     }
     if (!RenameSceneAt(scenes_selected_, std::move(name))) {
-      scenes_status_ = std::string(strings::kSceneNameTaken);
+      scenes_status_.Set(std::string(strings::kSceneNameTaken));
       return;
     }
   } else if (scenes_edit_ == SceneEditField::kNote) {
@@ -4179,10 +4440,16 @@ auto App::CommitSceneEdit() -> void {
     SaveCampaign();
   }
   CancelSceneEdit();
-  scenes_status_.clear();
+  scenes_status_.Clear();
 }
 
 auto App::Iterate() -> void {
+  // Статусы панелей гаснут сами: подсказка возвращается через 3 секунды.
+  const auto status_now = std::chrono::steady_clock::now();
+  editor_status_.Expire(status_now);
+  editor_scenes_status_.Expire(status_now);
+  scenes_status_.Expire(status_now);
+
   if (text_ != nullptr) {
     text_->BeginFrame();
   }
@@ -4199,14 +4466,18 @@ auto App::Iterate() -> void {
           TokenArt{.portrait = PortraitTexture(token.portrait)});
     }
     DrawTokens(renderer_, scene_.tokens, camera_.cell_size, camera_.x,
-               camera_.y, text_.get(), 0, 0, &editor_art);
+               camera_.y, text_.get(), selected_id_, 0, &editor_art);
     if (editor_panel_visible_) {
       const std::string map_name = editor_scene_ < campaign_.scenes.size()
                                        ? campaign_.scenes[editor_scene_].name
                                        : std::string{};
+      const std::string edit_label =
+          editor_token_edit_ ? std::string(strings::kEditorTokenNameLabel)
+                             : std::string{};
       DrawEditorPanel(renderer_, text_.get(), scene_, editor_brush_,
                       editor_scene_, campaign_.scenes.size(), map_name,
-                      editor_status_);
+                      editor_status_.Text(), selected_id_, edit_label,
+                      editor_token_edit_buffer_);
     }
     if (editor_scenes_active_) {
       const std::string edit_label = editor_scene_edit_
@@ -4214,12 +4485,13 @@ auto App::Iterate() -> void {
                                          : std::string{};
       DrawScenesPanel(renderer_, text_.get(), campaign_.scenes,
                       campaign_.active, editor_scenes_selected_, edit_label,
-                      editor_scene_edit_buffer_, editor_scenes_status_,
+                      editor_scene_edit_buffer_, editor_scenes_status_.Text(),
                       strings::kEditorScenesHint);
     }
     if (bestiary_active_) {
       DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
     }
+    DrawActiveSheet();
     SDL_RenderPresent(renderer_);
     return;
   }
@@ -4366,25 +4638,7 @@ auto App::Iterate() -> void {
   log_top_ = DrawLogPanel(renderer_, text_.get(), view_.Log(), chat_.Active(),
                           std::string(chat_.Text()), BottomHintText(),
                           log_scroll_.Offset());
-  if (sheet_active_) {
-    const Token* sheet_token = nullptr;
-    for (const Token& token : view_.Tokens()) {
-      if (token.id == sheet_token_id_) {
-        sheet_token = &token;
-        break;
-      }
-    }
-    if (sheet_token == nullptr) {
-      CloseSheet();
-    } else {
-      DrawSheetPanel(renderer_, text_.get(), *sheet_token, sheet_field_,
-                     sheet_ac_, sheet_speed_, sheet_attack_, sheet_save_,
-                     sheet_initiative_, sheet_temp_hp_, sheet_hit_die_,
-                     sheet_con_, sheet_range_, sheet_damage_, sheet_resist_,
-                     sheet_vulnerable_, sheet_immune_, sheet_notes_,
-                     sheet_read_only_);
-    }
-  }
+  DrawActiveSheet();
   if (bestiary_active_) {
     DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
   }
@@ -4397,7 +4651,7 @@ auto App::Iterate() -> void {
     }
     DrawScenesPanel(renderer_, text_.get(), campaign_.scenes, campaign_.active,
                     scenes_selected_, edit_label, scenes_edit_buffer_,
-                    scenes_status_, strings::kScenesHint);
+                    scenes_status_.Text(), strings::kScenesHint);
   }
   if (conditions_active_) {
     const Token* condition_token = nullptr;

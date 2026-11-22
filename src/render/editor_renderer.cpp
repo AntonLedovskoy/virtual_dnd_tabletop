@@ -60,8 +60,9 @@ auto EditorPanelBounds() -> SDL_FRect {
 auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
                      const GameSnapshot& scene, EditorBrush brush,
                      std::size_t scene_index, std::size_t scene_count,
-                     const std::string& scene_name, const std::string& status)
-    -> void {
+                     const std::string& scene_name, const std::string& status,
+                     std::uint32_t selected_id, const std::string& edit_label,
+                     const std::string& edit_text) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -104,9 +105,14 @@ auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
              max_text_width);
   y += static_cast<float>(line_height);
 
-  const std::string token_count =
-      "Токенов: " + std::to_string(scene.tokens.size());
-  text->Draw(token_count, text_x, y, kText, max_text_width);
+  std::string token_line = "Токенов: " + std::to_string(scene.tokens.size());
+  for (const Token& token : scene.tokens) {
+    if (token.id == selected_id) {
+      token_line += "   выбран: " + token.name;
+      break;
+    }
+  }
+  text->Draw(token_line, text_x, y, kText, max_text_width);
   y += static_cast<float>(line_height);
 
   const std::string brush_line = std::string(strings::kEditorBrush) + ": " +
@@ -121,7 +127,10 @@ auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
                         max_text_width) +
       6.0F;
 
-  if (!status.empty()) {
+  if (!edit_label.empty()) {
+    text->DrawWrapped(edit_label + edit_text + "_", text_x, y, kTitleText,
+                      max_text_width);
+  } else if (!status.empty()) {
     text->DrawWrapped(status, text_x, y, kTitleText, max_text_width);
   }
 }

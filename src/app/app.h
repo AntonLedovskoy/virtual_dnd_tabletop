@@ -29,6 +29,7 @@
 #include "core/log_scroll.h"
 #include "core/menu_model.h"
 #include "core/session_log.h"
+#include "core/status_message.h"
 #include "net/net_client.h"
 #include "net/net_server.h"
 #include "render/editor_renderer.h"
@@ -103,6 +104,21 @@ class App {
   auto EndEditorStroke() -> void;
   auto PaintEditorCell(Cell cell, EditorPaintMode mode) -> void;
   auto EraseEditorCell(Cell cell) -> void;
+  // Токен под клеткой: по нему ЛКМ не рисует, а ПКМ просит подтверждение.
+  [[nodiscard]] auto EditorTokenAt(Cell cell) const -> const Token*;
+  [[nodiscard]] auto FindEditorToken(TokenId id) const -> const Token*;
+  [[nodiscard]] auto FindEditorToken(TokenId id) -> Token*;
+  auto RequestDeleteEditorToken(TokenId id) -> void;
+  // Перетаскивание токена ЛКМ: клетка проверяется в core/editor_token.
+  auto MoveEditorToken(TokenId id, Cell cell) -> void;
+  // Следующий цвет палитры для выбранного токена.
+  auto CycleEditorTokenColor() -> void;
+  // Переименование выбранного токена прямо в панели редактора.
+  auto BeginEditorTokenRename() -> void;
+  auto CancelEditorTokenRename() -> void;
+  auto CommitEditorTokenRename() -> void;
+  auto HandleEditorTokenTextInput(const char* text) -> void;
+  auto HandleEditorTokenEditKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto AddEditorToken(Cell cell, TokenKind kind) -> void;
   // Бестиарий в редакторе: шаблон копируется в токен прямо в сцене.
   auto SpawnEditorBestiary(int index, bool group) -> void;
@@ -167,9 +183,33 @@ class App {
   auto SubmitPing(Cell cell) -> void;
   auto SendCommand(const Command& command) -> void;
   auto SubmitChat() -> void;
+  // Разобранные поля листа: одна проверка для стола и редактора.
+  struct SheetValues {
+    int ac = 0;
+    int speed = 0;
+    int attack = 0;
+    int save = 0;
+    int initiative = 0;
+    int temp_hp = 0;
+    int hit_die = 0;
+    int con = 0;
+    int attack_range = 0;
+    std::string damage;
+    std::string notes;
+    std::uint32_t resist = 0;
+    std::uint32_t vulnerable = 0;
+    std::uint32_t immune = 0;
+  };
+
   auto OpenSheet() -> void;
   auto CloseSheet() -> void;
   auto SaveSheet() -> void;
+  // Общая отрисовка листа: в игре — токен ClientView, в редакторе — сцены.
+  auto DrawActiveSheet() -> void;
+  auto LoadSheetFields(const Token& token) -> void;
+  [[nodiscard]] auto ReadSheetValues(SheetValues& values) -> bool;
+  // Сообщение об ошибке: в редакторе в панель, в игре в лог.
+  auto ShowStatus(std::string_view message) -> void;
   auto HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleSheetTextInput(const char* text) -> void;
   auto RollSave() -> void;
@@ -311,7 +351,7 @@ class App {
   std::size_t editor_scene_ = 0;
   bool editor_scenes_active_ = false;
   std::size_t editor_scenes_selected_ = 0;
-  std::string editor_scenes_status_;
+  StatusMessage editor_scenes_status_;
   // Имя карты в панели редактора набирается с нуля; первый TEXT_INPUT — это
   // сама клавиша R.
   bool editor_scene_edit_ = false;
@@ -321,10 +361,18 @@ class App {
   bool client_connecting_ = false;
 
   EditorBrush editor_brush_ = EditorBrush::kWall;
-  std::string editor_status_;
+  StatusMessage editor_status_;
   bool editor_panel_visible_ = true;
   EditorPaintMode editor_paint_mode_ = EditorPaintMode::kNone;
   PaintDrag editor_stroke_;
+  // ПКМ по токену удаляет его только вторым нажатием в течение 3 с.
+  DeleteConfirm delete_editor_token_;
+  TokenId editor_drag_token_ = 0;
+  bool editor_token_edit_ = false;
+  TokenId editor_token_edit_id_ = 0;
+  std::string editor_token_edit_buffer_;
+  // Первый TEXT_INPUT после R — сама клавиша, её не вводим.
+  bool editor_token_edit_ignore_text_ = false;
 
   bool sheet_active_ = false;
   bool sheet_read_only_ = false;
@@ -369,7 +417,7 @@ class App {
   std::size_t scenes_selected_ = 0;
   SceneEditField scenes_edit_ = SceneEditField::kNone;
   std::string scenes_edit_buffer_;
-  std::string scenes_status_;
+  StatusMessage scenes_status_;
   // Первый TEXT_INPUT после R/E — это сама горячая клавиша, её не вводим.
   bool scenes_edit_ignore_text_ = false;
 

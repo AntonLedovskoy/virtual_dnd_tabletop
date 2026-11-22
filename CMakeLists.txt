@@ -129,6 +129,7 @@ add_library(dnd_core STATIC
   src/core/delete_confirm.cpp
   src/core/dice.cpp
   src/core/editor_paint.cpp
+  src/core/editor_token.cpp
   src/core/game_server.cpp
   src/core/game_state.cpp
   src/core/grid_map.cpp
@@ -149,6 +150,7 @@ add_library(dnd_core STATIC
   src/core/session_crypto.cpp
   src/core/session_log.cpp
   src/core/sha256.cpp
+  src/core/status_message.cpp
   src/core/ui_hint.cpp
   src/core/utf8.cpp
   src/core/version.cpp

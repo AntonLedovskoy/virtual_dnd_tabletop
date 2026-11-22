@@ -33,6 +33,7 @@
 #include "core/delete_confirm.h"
 #include "core/dice.h"
 #include "core/editor_paint.h"
+#include "core/editor_token.h"
 #include "core/game_server.h"
 #include "core/game_state.h"
 #include "core/grid_map.h"
@@ -50,6 +51,7 @@
 #include "core/session_crypto.h"
 #include "core/session_log.h"
 #include "core/sha256.h"
+#include "core/status_message.h"
 #include "core/ui_hint.h"
 #include "core/units.h"
 #include "core/utf8.h"
@@ -6315,6 +6317,33 @@ auto TestDeleteConfirm() -> void {
          "the repeat exactly on the deadline still confirms");
 }
 
+auto TestStatusMessage() -> void {
+  using Clock = dnd::StatusMessage::Clock;
+  const Clock::time_point start{};
+  dnd::StatusMessage status;
+  Expect(status.Empty(), "a status starts empty");
+
+  status.Set("нельзя удалить последнюю карту", start);
+  Expect(status.Text() == "нельзя удалить последнюю карту",
+         "a status keeps its text");
+  status.Expire(start + std::chrono::seconds{2});
+  Expect(!status.Empty(), "the status stays for three seconds");
+  status.Expire(start + dnd::kStatusMessageTtl);
+  Expect(status.Empty(), "the status expires on the deadline");
+  Expect(status.Text().empty(), "an expired status is gone");
+
+  status.Set("first", start);
+  status.Set("second", start + std::chrono::seconds{1});
+  status.Expire(start + dnd::kStatusMessageTtl);
+  Expect(status.Text() == "second", "a new text restarts the deadline");
+  status.Expire(start + std::chrono::seconds{4});
+  Expect(status.Empty(), "the restarted deadline expires");
+
+  status.Set("hidden", start);
+  status.Clear();
+  Expect(status.Empty(), "clear hides the status at once");
+}
+
 auto TestMenuModel() -> void {
   const std::span<const dnd::MenuField> host =
       dnd::MenuFieldOrder(dnd::MenuTab::kHost);
@@ -6600,6 +6629,49 @@ auto TestEditorPaint() -> void {
          "a zero-length line is one cell");
 }
 
+auto TestEditorTokenMove() -> void {
+  dnd::GridMap map(4, 4);
+  std::vector<dnd::Token> tokens;
+  dnd::Token first;
+  first.id = 1;
+  first.name = "Первый";
+  first.cell = dnd::Cell{.x = 1, .y = 1};
+  tokens.push_back(first);
+  dnd::Token second;
+  second.id = 2;
+  second.name = "Второй";
+  second.cell = dnd::Cell{.x = 2, .y = 1};
+  tokens.push_back(second);
+
+  Expect(dnd::CanPlaceToken(map, tokens, dnd::Cell{.x = 0, .y = 0}, 1),
+         "a free floor cell accepts a token");
+  Expect(!dnd::CanPlaceToken(map, tokens, dnd::Cell{.x = 2, .y = 1}, 1),
+         "a cell with another token is occupied");
+  Expect(dnd::CanPlaceToken(map, tokens, dnd::Cell{.x = 2, .y = 1}, 2),
+         "the moving token does not block its own cell");
+  Expect(!dnd::CanPlaceToken(map, tokens, dnd::Cell{.x = 4, .y = 0}, 1),
+         "a cell outside the map is rejected");
+  map.SetTerrain(dnd::Cell{.x = 3, .y = 3}, dnd::Terrain::kWall);
+  Expect(!dnd::CanPlaceToken(map, tokens, dnd::Cell{.x = 3, .y = 3}, 1),
+         "a wall cell is rejected");
+
+  Expect(dnd::MoveTokenToCell(tokens, map, 1, dnd::Cell{.x = 0, .y = 0}),
+         "a free cell moves the token");
+  Expect(tokens[0].cell == dnd::Cell{.x = 0, .y = 0}, "the token moved");
+  Expect(!dnd::MoveTokenToCell(tokens, map, 1, dnd::Cell{.x = 2, .y = 1}),
+         "a move onto another token is refused");
+  Expect(tokens[0].cell == dnd::Cell{.x = 0, .y = 0},
+         "a refused move keeps the position");
+  Expect(!dnd::MoveTokenToCell(tokens, map, 1, dnd::Cell{.x = 0, .y = 0}),
+         "a move to the same cell changes nothing");
+  Expect(!dnd::MoveTokenToCell(tokens, map, 9, dnd::Cell{.x = 0, .y = 2}),
+         "an unknown token does not move");
+
+  Expect(dnd::TrimTokenName("  Гоблин \t") == "Гоблин",
+         "a token name is trimmed");
+  Expect(dnd::TrimTokenName("   ").empty(), "a blank token name is empty");
+}
+
 auto TestSceneDeleteRules() -> void {
   dnd::Campaign campaign = dnd::MakeCampaign(dnd::GameSnapshot{}, "Одна");
   Expect(!dnd::CanDeleteScene(campaign),
@@ -6716,10 +6788,12 @@ auto main() -> int {
     TestAutosave();
     TestLogScroll();
     TestDeleteConfirm();
+    TestStatusMessage();
     TestMenuModel();
     TestBottomHints();
     TestNavigation();
     TestEditorPaint();
+    TestEditorTokenMove();
     TestSceneDeleteRules();
     TestChatInput();
   } catch (const std::exception& error) {

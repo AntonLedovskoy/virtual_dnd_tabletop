@@ -213,12 +213,13 @@ inline constexpr std::string_view kBrushLava = "лава";
 inline constexpr std::string_view kEditorSizeHint =
     "[ / ] — ширина карты, - / = — высота";
 inline constexpr std::string_view kEditorMouseHint =
-    "ЛКМ — рисовать, с зажатой — вести кисть | ПКМ — стереть | "
+    "ЛКМ — рисовать, по токену — выбрать и перетащить, с зажатой — вести "
+    "кисть (не поверх токена) | ПКМ — стереть, по токену дважды — удалить | "
     "СКМ — панорама | колесо — зум";
 inline constexpr std::string_view kEditorKeyHint =
-    "1–6 — кисть | P — персонаж | B — бестиарий | Tab — карты | "
-    "F2 — панель | F5 — сохранить | F9 — загрузить | Enter — играть | "
-    "Esc — меню";
+    "1–6 — кисть | P — персонаж | B — бестиарий | V — цвет | L — лист | "
+    "R — имя токена | Tab — карты | F2 — панель | F5 — сохранить | "
+    "F9 — загрузить | Enter — играть | Esc — меню";
 inline constexpr std::string_view kEditorScenesHint =
     "↑ ↓ — выбрать | Enter — открыть | 1–9 — карта | N — новая из этой "
     "карты | R — переименовать | Del — удалить | F5 — сохранить | "
@@ -229,6 +230,16 @@ inline constexpr std::string_view kEditorSceneRenamed = "Карта переим
 inline constexpr std::string_view kEditorSceneDeleted = "Карта удалена: ";
 inline constexpr std::string_view kEditorLastScene =
     "Нельзя удалить последнюю карту";
+inline constexpr std::string_view kEditorTokenDeleteConfirm =
+    "ПКМ ещё раз в течение 3 секунд — удалить токен";
+inline constexpr std::string_view kEditorTokenDeleted = "Токен удалён";
+inline constexpr std::string_view kEditorTokenNameLabel = "Новое имя токена: ";
+inline constexpr std::string_view kEditorTokenNameEmpty =
+    "Имя токена не может быть пустым";
+inline constexpr std::string_view kEditorTokenRenamed = "Токен переименован: ";
+inline constexpr std::string_view kEditorTokenColorChanged =
+    "Цвет токена изменён";
+inline constexpr std::string_view kEditorSheetSaved = "Лист сохранён: ";
 inline constexpr std::string_view kEditorSceneSaved = "Сцена сохранена";
 inline constexpr std::string_view kEditorSceneLoaded = "Сцена загружена";
 inline constexpr std::string_view kEditorSceneMissing =

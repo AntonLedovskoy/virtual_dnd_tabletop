@@ -24,10 +24,13 @@ enum class EditorBrush : std::uint8_t {
 // Фиксированная панель слева сверху: имя открытой карты, «N из M» и кисти.
 auto EditorPanelBounds() -> SDL_FRect;
 
+// selected_id — выбранный токен: его имя показывается в счётчике, edit_label
+// и edit_text — строка переименования вместо статуса.
 auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
                      const GameSnapshot& scene, EditorBrush brush,
                      std::size_t scene_index, std::size_t scene_count,
-                     const std::string& scene_name, const std::string& status)
-    -> void;
+                     const std::string& scene_name, const std::string& status,
+                     std::uint32_t selected_id, const std::string& edit_label,
+                     const std::string& edit_text) -> void;
 
 }  // namespace dnd
