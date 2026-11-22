@@ -1661,7 +1661,18 @@ auto App::ApplyUiScale() -> void {
       height <= 0) {
     return;
   }
-  const float scale = kUiScales[static_cast<std::size_t>(ui_scale_index_)];
+  const float requested = kUiScales[static_cast<std::size_t>(ui_scale_index_)];
+  // Меню не ужимается: если панель 640x660 с полями не влезает в логический
+  // экран, масштаб выше 100% обрезал бы её сверху и снизу.
+  constexpr float menu_min_width = 680.0F;
+  constexpr float menu_min_height = 720.0F;
+  const bool fits = static_cast<float>(width) >= menu_min_width * requested &&
+                    static_cast<float>(height) >= menu_min_height * requested;
+  const float scale = fits ? requested : 1.0F;
+  if (!fits) {
+    SDL_Log("ui scale %.0f%% does not fit the window; keeping 100%%",
+            requested * 100.0F);
+  }
   int old_width = 0;
   int old_height = 0;
   const bool had_size = RenderSize(renderer_, old_width, old_height);
@@ -1730,6 +1741,10 @@ auto App::LoadFont() -> void {
     font_ = TTF_OpenFont(path.string().c_str(), kFontSize);
     if (font_ != nullptr) {
       TTF_SetFontHinting(font_, TTF_HINTING_NORMAL);
+      // У DejaVu тесная строка: обычный хинтинг делает выносные элементы
+      // выше расчётной строки, и SDL_ttf обрезает их снизу (видно в release).
+      // Небольшой запас строки сохраняет хинтинг и возвращает «у» и «р».
+      TTF_SetFontLineSkip(font_, TTF_GetFontHeight(font_) + 2);
       return;
     }
   }

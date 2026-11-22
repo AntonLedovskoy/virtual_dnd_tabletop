@@ -79,15 +79,16 @@ auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
   // Шапка: строка названия и, при обновлении, полоса с кнопками вместо
   // подзаголовка. Раскладка полей ниже не сдвигается.
   layout.update_banner =
-      SDL_FRect{field_x, panel_y + 36.0F, field_width, 38.0F};
-  constexpr float button_height = 30.0F;
-  constexpr float dismiss_width = 84.0F;
-  constexpr float action_width = 252.0F;
+      SDL_FRect{field_x, panel_y + 34.0F, field_width, 42.0F};
+  constexpr float button_height = 32.0F;
+  constexpr float dismiss_width = 80.0F;
+  constexpr float action_width = 248.0F;
+  constexpr float banner_padding = 6.0F;
   layout.update_dismiss =
-      SDL_FRect{field_x + field_width - dismiss_width, panel_y + 40.0F,
-                dismiss_width, button_height};
+      SDL_FRect{field_x + field_width - banner_padding - dismiss_width,
+                panel_y + 39.0F, dismiss_width, button_height};
   layout.update_action =
-      SDL_FRect{layout.update_dismiss.x - 8.0F - action_width, panel_y + 40.0F,
+      SDL_FRect{layout.update_dismiss.x - 8.0F - action_width, panel_y + 39.0F,
                 action_width, button_height};
   if (tab == MenuTab::kEditor) {
     layout.action_button =
@@ -164,9 +165,10 @@ auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
     SDL_RenderRect(renderer, &layout.update_banner);
     const float text_width =
         layout.update_action.x - (layout.update_banner.x + 12.0F) - 10.0F;
+    const TextMetrics metrics = text->Measure(update.message);
     text->Draw(update.message, layout.update_banner.x + 12.0F,
                layout.update_banner.y +
-                   ((layout.update_banner.h - text->LineHeight()) / 2.0F),
+                   ((layout.update_banner.h - metrics.height) / 2.0F),
                kText, text_width);
     SetDrawColor(renderer, update.action_enabled ? kButton : kButtonDisabled);
     SDL_RenderFillRect(renderer, &layout.update_action);
