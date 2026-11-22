@@ -2721,6 +2721,28 @@ auto TestLevels() -> void {
          "player hit dice are d6, d8, d10 and d12");
   Expect(!dnd::IsValidHitDie(4) && !dnd::IsValidHitDie(20),
          "other hit dice are rejected");
+  Expect(dnd::ParseHitDie("d8") == std::optional<int>{8},
+         "the sheet accepts the rules notation d8");
+  Expect(dnd::ParseHitDie("8") == std::optional<int>{8},
+         "a bare number still means the die size");
+  Expect(dnd::ParseHitDie("D12") == std::optional<int>{12},
+         "the d prefix is case-insensitive");
+  Expect(dnd::ParseHitDie(" d10 ") == std::optional<int>{10},
+         "surrounding spaces are trimmed");
+  Expect(!dnd::ParseHitDie("2d6+12").has_value() &&
+             !dnd::ParseHitDie("d7").has_value() &&
+             !dnd::ParseHitDie("d").has_value() &&
+             !dnd::ParseHitDie("dd8").has_value() &&
+             !dnd::ParseHitDie("d 8").has_value() &&
+             !dnd::ParseHitDie("").has_value(),
+         "a hit die is a single d6, d8, d10 or d12, not a dice expression");
+  Expect(dnd::IsHitDiePrefix("") && dnd::IsHitDiePrefix("d") &&
+             dnd::IsHitDiePrefix("1") && dnd::IsHitDiePrefix("d1") &&
+             dnd::IsHitDiePrefix("10") && dnd::IsHitDiePrefix("d12"),
+         "typing accepts partial hit die notation");
+  Expect(!dnd::IsHitDiePrefix("2") && !dnd::IsHitDiePrefix("9") &&
+             !dnd::IsHitDiePrefix("d7") && !dnd::IsHitDiePrefix("d13"),
+         "typing rejects digits that cannot form a valid hit die");
   Expect(dnd::HitDieAverage(6) == 4 && dnd::HitDieAverage(8) == 5 &&
              dnd::HitDieAverage(10) == 6 && dnd::HitDieAverage(12) == 7,
          "2024 average hit points per hit die");

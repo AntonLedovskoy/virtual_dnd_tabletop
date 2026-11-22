@@ -254,6 +254,26 @@ auto AppendBoundedNumber(std::string& buffer, const char* text, int minimum,
   }
 }
 
+// Ввод кости хитов в записи правил: одна латинская «d» в начале и цифры,
+// пока запись остаётся началом d6, d8, d10 или d12. Простое число тоже
+// допустимо.
+auto AppendHitDieText(std::string& buffer, const char* text) -> void {
+  if (text == nullptr) {
+    return;
+  }
+  for (const char* it = text; *it != '\0'; ++it) {
+    const bool digit = *it >= '0' && *it <= '9';
+    if (!digit && *it != 'd' && *it != 'D') {
+      continue;
+    }
+    std::string candidate = buffer;
+    candidate.push_back(*it);
+    if (IsHitDiePrefix(candidate)) {
+      buffer = std::move(candidate);
+    }
+  }
+}
+
 // Подпись броска с именем того, кто бросает: в общем логе видно, к кому
 // относится бросок.
 auto RollLabel(std::string_view kind, std::string_view token_name)
@@ -2996,7 +3016,7 @@ auto App::LoadSheetFields(const Token& token) -> void {
   sheet_save_ = std::to_string(token.save_bonus);
   sheet_initiative_ = std::to_string(token.initiative_bonus);
   sheet_temp_hp_ = std::to_string(token.temp_hp);
-  sheet_hit_die_ = std::to_string(token.hit_die);
+  sheet_hit_die_ = "d" + std::to_string(token.hit_die);
   sheet_con_ = std::to_string(token.con_modifier);
   sheet_range_ = std::to_string(token.attack_range);
   sheet_damage_ = token.damage;
@@ -3123,11 +3143,12 @@ auto App::ReadSheetValues(SheetValues& values) -> bool {
     ShowStatus("Некорректные значения полей листа");
     return false;
   }
-  if (!ParseNumber(sheet_hit_die_, values.hit_die) ||
-      !IsValidHitDie(values.hit_die)) {
+  const std::optional<int> hit_die = ParseHitDie(sheet_hit_die_);
+  if (!hit_die.has_value()) {
     ShowStatus(std::string(strings::kSheetBadHitDie));
     return false;
   }
+  values.hit_die = *hit_die;
   if (!ParseSignedNumber(sheet_con_, values.con) ||
       values.con < -kMaxConModifier || values.con > kMaxConModifier) {
     ShowStatus(std::string(strings::kSheetBadCon));
@@ -3245,7 +3266,7 @@ auto App::HandleSheetTextInput(const char* text) -> void {
         AppendBoundedNumber(sheet_temp_hp_, text, 0, 1000, false);
         break;
       case SheetField::kHitDie:
-        AppendBoundedNumber(sheet_hit_die_, text, 1, 20, false);
+        AppendHitDieText(sheet_hit_die_, text);
         break;
       case SheetField::kCon:
         AppendBoundedNumber(sheet_con_, text, -kMaxConModifier, kMaxConModifier,

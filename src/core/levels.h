@@ -1,5 +1,8 @@
 #pragma once
 
+#include <optional>
+#include <string_view>
+
 namespace dnd {
 
 // Уровни персонажа. Опыт хранится в токене, уровень всегда вычисляется по
@@ -19,6 +22,14 @@ inline constexpr int kMaxXp = 1000000;
 
 // Кость хитов, допустимая у персонажа: d6, d8, d10 или d12.
 [[nodiscard]] auto IsValidHitDie(int hit_die) -> bool;
+
+// Разбор кости хитов из листа: запись правил «d8» (регистр d не важен) или
+// просто число «8». Возвращает размер кости либо nullopt для всего остального.
+[[nodiscard]] auto ParseHitDie(std::string_view text) -> std::optional<int>;
+
+// Возможное начало записи кости хитов для посимвольного ввода: пустая строка,
+// «d», «1» (начало d10/d12) и полные допустимые записи.
+[[nodiscard]] auto IsHitDiePrefix(std::string_view text) -> bool;
 
 // Средний прирост максимума HP за уровень выше первого (2024, «среднее
 // значение»): d6 — 4, d8 — 5, d10 — 6, d12 — 7.

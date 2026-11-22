@@ -13,6 +13,16 @@ constexpr std::array<int, kMaxLevel + 1> kXpThresholds{
     140000, 165000, 195000, 225000, 265000, 305000, 355000,
 };
 
+auto TrimHitDieText(std::string_view text) -> std::string_view {
+  while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) {
+    text.remove_suffix(1);
+  }
+  return text;
+}
+
 }  // namespace
 
 auto XpForLevel(int level) -> int {
@@ -46,6 +56,41 @@ auto IsValidHitDie(int hit_die) -> bool {
     default:
       return false;
   }
+}
+
+auto ParseHitDie(std::string_view text) -> std::optional<int> {
+  text = TrimHitDieText(text);
+  if (!text.empty() && (text.front() == 'd' || text.front() == 'D')) {
+    text.remove_prefix(1);
+  }
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  int value = 0;
+  for (const char ch : text) {
+    if (ch < '0' || ch > '9') {
+      return std::nullopt;
+    }
+    value = value * 10 + (ch - '0');
+    if (value > 1000) {
+      return std::nullopt;
+    }
+  }
+  if (!IsValidHitDie(value)) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+auto IsHitDiePrefix(std::string_view text) -> bool {
+  text = TrimHitDieText(text);
+  if (!text.empty() && (text.front() == 'd' || text.front() == 'D')) {
+    text.remove_prefix(1);
+  }
+  if (text.empty() || text == "1") {
+    return true;
+  }
+  return ParseHitDie(text).has_value();
 }
 
 auto HitDieAverage(int hit_die) -> int {

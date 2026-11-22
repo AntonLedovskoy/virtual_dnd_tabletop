@@ -400,7 +400,7 @@ inline constexpr std::string_view kSheetHint =
 inline constexpr std::string_view kSheetViewHint =
     "Только просмотр, лист правит DM | Esc — закрыть";
 inline constexpr std::string_view kSheetBadHitDie =
-    "Кость хитов: 6, 8, 10 или 12";
+    "Кость хитов: d6, d8, d10 или d12";
 inline constexpr std::string_view kSheetBadCon =
     "Модификатор Телосложения: от -20 до 20";
 inline constexpr std::string_view kSheetBadRange =
