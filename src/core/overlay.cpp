@@ -114,6 +114,21 @@ auto RemoveScene(Overlay& overlay, SceneId id) -> bool {
   return true;
 }
 
+auto ClearScene(Overlay& overlay, SceneId id) -> bool {
+  const OverlayScene* record = FindOverlayScene(overlay, id);
+  if (record == nullptr) {
+    return false;
+  }
+  overlay.scenes.erase(
+      overlay.scenes.begin() +
+      static_cast<std::ptrdiff_t>(record - overlay.scenes.data()));
+  return true;
+}
+
+auto HasOverlayChanges(const Overlay& overlay) -> bool {
+  return !overlay.scenes.empty();
+}
+
 auto SetSceneSnapshot(Overlay& overlay, SceneId id, GameSnapshot snapshot)
     -> bool {
   OverlayScene* record = EnsureRecord(overlay, id);

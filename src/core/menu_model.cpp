@@ -135,4 +135,47 @@ auto SplitHostPort(std::string_view text) -> HostAddress {
   return address;
 }
 
+auto SummarizeParty(const Overlay& overlay, bool exists, bool mismatch)
+    -> PartySummary {
+  PartySummary summary;
+  if (!exists) {
+    return summary;
+  }
+  if (mismatch) {
+    summary.state = PartyState::kMismatch;
+    return summary;
+  }
+  if (!HasOverlayChanges(overlay)) {
+    summary.state = PartyState::kNew;
+    return summary;
+  }
+  summary.state = PartyState::kContinued;
+  summary.changed_scenes = overlay.scenes.size();
+  for (const OverlayScene& scene : overlay.scenes) {
+    if (scene.snapshot.has_value()) {
+      ++summary.played_scenes;
+    }
+  }
+  return summary;
+}
+
+auto MenuCommandForChar(MenuTab tab, char key) -> MenuCommand {
+  if (tab != MenuTab::kHost) {
+    return MenuCommand::kNone;
+  }
+  switch (key) {
+    case 'n':
+    case 'N':
+      return MenuCommand::kNewParty;
+    case 'r':
+    case 'R':
+      return MenuCommand::kResetScene;
+    case 'a':
+    case 'A':
+      return MenuCommand::kAcceptParty;
+    default:
+      return MenuCommand::kNone;
+  }
+}
+
 }  // namespace dnd

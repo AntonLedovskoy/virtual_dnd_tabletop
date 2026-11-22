@@ -272,4 +272,17 @@ auto CampaignFingerprint(const Campaign& campaign) -> std::uint64_t {
   return hash;
 }
 
+auto FreshOverlay(const Campaign& campaign) -> Overlay {
+  return Overlay{.campaign_fingerprint = CampaignFingerprint(campaign),
+                 .active = 0,
+                 .next_scene_id = kOverlaySceneIdBase};
+}
+
+auto OverlayPath(const std::filesystem::path& campaign_path)
+    -> std::filesystem::path {
+  std::filesystem::path path = campaign_path;
+  path.replace_extension(".dndoverlay");
+  return path;
+}
+
 }  // namespace dnd

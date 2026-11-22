@@ -6,9 +6,42 @@
 #include <string>
 #include <string_view>
 
+#include "core/overlay.h"
+
 namespace dnd {
 
 enum class MenuTab : std::uint8_t { kHost, kJoin, kEditor };
+
+// Что меню хоста знает о партии выбранной кампании.
+enum class PartyState : std::uint8_t {
+  kNone,       // оверлея нет, начнётся новая партия
+  kNew,        // оверлей есть, но в нём ещё нет изменений
+  kContinued,  // партия продолжается
+  kMismatch,   // оверлей от другой версии кампании, нужно подтверждение
+};
+
+struct PartySummary {
+  PartyState state = PartyState::kNone;
+  // Сколько сцен партии изменено и сколько из них уже сыграно.
+  std::size_t changed_scenes = 0;
+  std::size_t played_scenes = 0;
+};
+
+// Партия читается вместе с кампанией: существование файла и отпечаток
+// приходят снаружи, потому что их знает только App.
+[[nodiscard]] auto SummarizeParty(const Overlay& overlay, bool exists,
+                                  bool mismatch) -> PartySummary;
+
+// Действия меню хоста по клавише: N — новая партия, R — сбросить сцену к
+// кампании, A — принять партию от другой версии кампании.
+enum class MenuCommand : std::uint8_t {
+  kNone,
+  kNewParty,
+  kResetScene,
+  kAcceptParty,
+};
+
+[[nodiscard]] auto MenuCommandForChar(MenuTab tab, char key) -> MenuCommand;
 
 enum class MenuField : std::int8_t {
   kNone = -1,
@@ -39,6 +72,9 @@ struct MenuState {
   // Версия сборки и версия протокола для вкладки хоста.
   std::string version;
   int protocol = 0;
+  // Строка партии: продолжение, новая партия или чужая версия кампании.
+  PartyState party_state = PartyState::kNone;
+  std::size_t party_scenes = 0;
 };
 
 // Поля вкладки в порядке обхода Tab.

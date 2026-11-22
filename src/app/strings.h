@@ -146,7 +146,7 @@ inline constexpr std::array<std::string_view, 19> kHelpDm = {
     "T — бой, G — следующий ход",
     "Shift+T — состав боя: кто в инициативе, а кто вне её",
     "F — шаблон области, Shift+F — убрать",
-    "F5 — сохранить, F9 — загрузить",
+    "F5 — сохранить партию, F9 — загрузить",
     "Команды: /rename, /owner, /maxhp, /kick",
     "/rest N — короткий отдых (до N костей), /longrest — длинный",
     "/fall N — падение с высоты N футов",
@@ -177,6 +177,38 @@ inline constexpr std::string_view kCampaignSceneCount = "сцен: ";
 inline constexpr std::string_view kCampaignFile = "Кампания: ";
 inline constexpr std::string_view kCampaignHint =
     "↑ ↓ — выбрать кампанию | клик по строке — следующая";
+inline constexpr std::string_view kPartyLabel = "Партия: ";
+inline constexpr std::string_view kPartyNone = "нет — начнётся новая";
+inline constexpr std::string_view kPartyNew = "новая";
+inline constexpr std::string_view kPartyContinued = "продолжение, сцен ";
+inline constexpr std::string_view kPartyMismatch = "от другой версии кампании";
+inline constexpr std::string_view kPartyHint =
+    "N — новая партия | R — сбросить сцену к кампании";
+inline constexpr std::string_view kPartyMismatchHint =
+    "A — принять партию | N — новая партия";
+inline constexpr std::string_view kNewPartyConfirm =
+    "N ещё раз — новая партия; текущая партия пропадёт";
+inline constexpr std::string_view kNewPartyStarted = "Начата новая партия";
+inline constexpr std::string_view kPartyAccepted = "Партия принята";
+inline constexpr std::string_view kSceneReset = "Сцена сброшена к кампании";
+inline constexpr std::string_view kSceneNotInCampaign =
+    "Этой сцены нет в кампании";
+inline constexpr std::string_view kSceneAlreadyTemplate =
+    "Сцена уже взята из кампании";
+inline constexpr std::string_view kPartySaveFailed =
+    "Не удалось сохранить партию";
+inline constexpr std::string_view kPartyReadFailed =
+    "Не удалось прочитать партию ";
+inline constexpr std::string_view kPartyMismatchBlocked =
+    "Партия от другой версии кампании: A — принять, N — новая";
+inline constexpr std::string_view kPartyMissing = "Сохранённой партии ещё нет";
+inline constexpr std::string_view kPartyLoaded = "Партия загружена";
+inline constexpr std::string_view kPartyRolledBack =
+    "Партия удалила все сцены — вернулись к кампании";
+inline constexpr std::string_view kPartyMismatchInGame =
+    "Партия от другой версии кампании";
+inline constexpr std::string_view kPartyNeedsDecision =
+    "Сначала примите партию (A) или начните новую (N)";
 inline constexpr std::string_view kNoAddress = "IP не определён";
 inline constexpr std::string_view kFirewallHint =
     "Откройте TCP-порт в Windows Firewall и на роутере. "

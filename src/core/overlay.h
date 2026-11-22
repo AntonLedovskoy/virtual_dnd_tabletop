@@ -48,6 +48,13 @@ auto AddScene(Overlay& overlay, SceneId id, std::string name,
 // Удаление: базовая сцена получает tombstone, сцена партии исчезает.
 auto RemoveScene(Overlay& overlay, SceneId id) -> bool;
 
+// «Сбросить сцену к кампании»: запись партии стирается без tombstone, сцена
+// снова берётся из файла кампании. false — записи и так не было.
+auto ClearScene(Overlay& overlay, SceneId id) -> bool;
+
+// В партии есть что продолжать: изменённая или сыгранная сцена.
+[[nodiscard]] auto HasOverlayChanges(const Overlay& overlay) -> bool;
+
 // Снимок сыгранной сцены; сцена удалена — отказ.
 auto SetSceneSnapshot(Overlay& overlay, SceneId id, GameSnapshot snapshot)
     -> bool;

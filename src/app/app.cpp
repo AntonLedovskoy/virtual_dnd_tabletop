@@ -125,11 +125,16 @@ auto BuildSnapshot() -> GameSnapshot {
   };
 }
 
-auto SavePath() -> std::filesystem::path {
-  if (const char* base = SDL_GetBasePath()) {
-    return std::filesystem::path(base) / "savegame.bin";
-  }
-  return {"savegame.bin"};
+// Шаблон кампании не несёт следов партии: туман, бой, часы и открытые
+// области остаются в оверлее. `revealed` тоже след партии: в редакторе его
+// не расставляют, а шаблон должен начинаться с чистого обзора.
+auto CleanTemplateSnapshot(GameSnapshot snapshot) -> GameSnapshot {
+  snapshot.fog.clear();
+  snapshot.revealed.clear();
+  snapshot.encounter = Encounter{};
+  snapshot.game_time_seconds = 0;
+  snapshot.last_long_rest_seconds = -1;
+  return snapshot;
 }
 
 auto ScenePath() -> std::filesystem::path {
@@ -331,7 +336,14 @@ App::App(AppOptions options)
   menu_.protocol = kProtocolVersion;
 }
 
-App::~App() { Shutdown(); }
+App::~App() noexcept {
+  // Shutdown пишет партию и может не найти память: деструктор не бросает.
+  try {
+    Shutdown();
+  } catch (...) {
+    SDL_Log("shutdown failed");
+  }
+}
 
 auto App::Initialize() -> bool {
   if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -388,18 +400,8 @@ auto App::Initialize() -> bool {
       [this]() -> VersionMismatch { return MismatchInfo(); });
 
   RefreshCampaignLibrary();
-  if (!LoadSelectedCampaign()) {
-    // Файла ещё нет: начинаем с отдельной сцены или со стартовой карты.
-    const std::optional<GameSnapshot> loaded_scene = ReadSnapshot(ScenePath());
-    if (loaded_scene.has_value()) {
-      scene_ = *loaded_scene;
-    }
-    campaign_ = MakeCampaign(scene_, "Сцена 1");
-    // Кампания — источник стартового мира; бой в новой сессии не продолжается.
-    scene_ = campaign_.scenes[campaign_.active].snapshot;
-    scene_.encounter = Encounter{};
-    server_.Reset(scene_);
-    view_.Reset(server_.DmSnapshot(), server_.FullFogState());
+  if (!LoadSelectedCampaign(LoadMode::kGame) && campaign_.scenes.empty()) {
+    PrepareDefaultCampaign();
   }
 
   if (options_.start_editor) {
@@ -415,6 +417,13 @@ auto App::Initialize() -> bool {
 }
 
 auto App::Shutdown() -> void {
+  // Последние секунды партии не должны пропасть при закрытии окна.
+  if (in_game_ && options_.mode == AppMode::kHost && campaign_file_loaded_) {
+    StoreActiveScene();
+    RequestOverlaySave();
+  }
+  campaign_saver_.Flush();
+  overlay_saver_.Flush();
   session_log_.Close();
   if (background_texture_ != nullptr) {
     SDL_DestroyTexture(background_texture_);
@@ -454,6 +463,67 @@ auto App::StartHost() -> bool {
     }
     return false;
   }
+
+  // Мир читается до открытия порта: битая партия не должна оставить хост.
+  if (in_editor_) {
+    // Редактор отдаёт игру из текущей карты, а кампания становится авторским
+    // файлом: игра дальше пишет только оверлей.
+    if (editor_scene_ < campaign_.scenes.size()) {
+      campaign_.scenes[editor_scene_].snapshot = CleanTemplateSnapshot(scene_);
+      campaign_.active = editor_scene_;
+    }
+    RequestCampaignSave();
+    if (!campaign_saver_.Flush()) {
+      menu_.status = "Не удалось сохранить кампанию";
+      editor_status_.Set(menu_.status);
+      return false;
+    }
+    campaign_file_loaded_ = true;
+    base_campaign_ = campaign_;
+    overlay_ = FreshOverlay(base_campaign_);
+    party_error_ = false;
+    party_mismatch_ = false;
+    RefreshCampaignLibrary();
+  } else {
+    const std::filesystem::path campaign_path =
+        campaign_files_.empty() ? AssetPath("campaign.dndcamp")
+                                : AssetPath(campaign_files_[campaign_index_]);
+    if (!LoadSelectedCampaign(LoadMode::kGame)) {
+      if (std::filesystem::exists(campaign_path)) {
+        // Кампания или партия не прочитались: стол не стартует.
+        if (menu_.status.empty()) {
+          menu_.status = "Не удалось прочитать кампанию";
+        }
+        return false;
+      }
+      // Пустой слот: первый старт хоста один раз создаёт авторский файл.
+      if (!WriteCampaign(campaign_, campaign_path)) {
+        menu_.status =
+            "Не удалось создать " + campaign_path.filename().string();
+        return false;
+      }
+      campaign_file_loaded_ = true;
+      base_campaign_ = campaign_;
+      overlay_ = FreshOverlay(base_campaign_);
+      party_error_ = false;
+      party_mismatch_ = false;
+      RefreshCampaignLibrary();
+    }
+    if (party_error_) {
+      menu_.status = std::string(strings::kPartyReadFailed) +
+                     OverlayFilePath().filename().string();
+      return false;
+    }
+    if (party_mismatch_) {
+      menu_.status = std::string(strings::kPartyMismatchBlocked);
+      return false;
+    }
+  }
+
+  if (campaign_.scenes.empty() || campaign_.active >= campaign_.scenes.size()) {
+    menu_.status = "Кампания без сцен";
+    return false;
+  }
   if (!net_server_.Start(port, menu_.password)) {
     menu_.status = "Не удалось открыть порт " + std::to_string(port);
     if (in_editor_) {
@@ -464,13 +534,7 @@ auto App::StartHost() -> bool {
 
   options_.mode = AppMode::kHost;
   options_.port = port;
-  // Из редактора хостится отредактированная сцена, из меню — выбранная
-  // кампания с диска.
-  if (!in_editor_) {
-    (void)LoadSelectedCampaign();
-    scene_ = campaign_.scenes[campaign_.active].snapshot;
-  }
-  GameSnapshot start = scene_;
+  GameSnapshot start = campaign_.scenes[campaign_.active].snapshot;
   start.encounter = Encounter{};
   scene_ = start;
   server_.Reset(std::move(start));
@@ -478,6 +542,7 @@ auto App::StartHost() -> bool {
   ClearUndo();
   delete_token_.Clear();
   delete_scene_.Clear();
+  new_party_confirm_.Clear();
   in_game_ = true;
   in_editor_ = false;
   client_connecting_ = false;
@@ -499,7 +564,7 @@ auto App::StartHost() -> bool {
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
   CenterCamera();
   StoreActiveScene();
-  SaveCampaign();
+  SaveOverlay();
   SDL_Log("hosting on port %u", static_cast<unsigned>(port));
   return true;
 }
@@ -560,7 +625,12 @@ auto App::StartEditor() -> void {
   in_game_ = false;
   client_connecting_ = false;
   menu_.status.clear();
+  // Редактор видит только авторский файл: партия с диска не подмешивается.
+  (void)LoadSelectedCampaign(LoadMode::kEditor);
   editor_status_.Clear();
+  if (!menu_.status.empty()) {
+    editor_status_.Set(menu_.status);
+  }
   delete_editor_token_.Clear();
   editor_drag_token_ = 0;
   CancelEditorTokenRename();
@@ -610,11 +680,14 @@ auto App::SubmitMenu() -> void {
 auto App::ExitToMenu() -> void {
   exit_confirm_active_ = false;
   const bool was_host = options_.mode == AppMode::kHost;
+  if (in_editor_) {
+    campaign_saver_.Flush();
+  }
   if (was_host) {
     if (in_game_) {
-      // Кампания — источник стартового мира: сохраняем её до закрытия порта.
+      // Партия — отдельный файл: кампания при выходе не меняется.
       StoreActiveScene();
-      SaveCampaign();
+      SaveOverlay();
     }
     net_server_.Stop();
   } else {
@@ -655,6 +728,9 @@ auto App::ExitToMenu() -> void {
   player_owners_.clear();
   ClearUndo();
   RefreshCampaignLibrary();
+  if (!LoadSelectedCampaign(LoadMode::kGame) && campaign_.scenes.empty()) {
+    PrepareDefaultCampaign();
+  }
   SDL_Log("returned to menu");
 }
 
@@ -663,15 +739,16 @@ auto App::SaveScene() -> void {
     editor_status_.Set("Сцена не выбрана");
     return;
   }
-  // Отдельный файл сцены — шаблон карты: туман прошлой партии в него не пишем.
-  GameSnapshot stored = scene_;
-  stored.fog.clear();
+  // Шаблон карты не несёт следов партии: туман, бой и часы остаются в
+  // оверлее, в кампанию и scene.dndscene уходит чистый снимок.
+  const GameSnapshot stored = CleanTemplateSnapshot(scene_);
   if (!WriteSnapshot(stored, ScenePath())) {
     editor_status_.Set("Не удалось сохранить сцену");
     return;
   }
+  scene_ = stored;
   // F5 пишет ту сцену, которую выбрал DM в панели редактора.
-  campaign_.scenes[editor_scene_].snapshot = scene_;
+  campaign_.scenes[editor_scene_].snapshot = stored;
   campaign_.active = editor_scene_;
   SaveCampaign();
   editor_status_.Set(std::string(strings::kEditorSceneSaved) + ": " +
@@ -1013,6 +1090,10 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
       menu_.tab = MenuTab::kHost;
       menu_.status.clear();
       RefreshCampaignLibrary();
+      // Кампания могла измениться в редакторе: партия сверяется заново.
+      if (!LoadSelectedCampaign(LoadMode::kGame) && campaign_.scenes.empty()) {
+        PrepareDefaultCampaign();
+      }
       return;
     case SDLK_TAB:
       OpenEditorScenes();
@@ -1449,11 +1530,21 @@ auto App::HandleMenuKeyDown(const SDL_KeyboardEvent& key) -> void {
     menu_.tab = NextMenuTab(menu_.tab, key.key == SDLK_RIGHT ? 1 : -1);
     menu_.active_field = MenuField::kNone;
     menu_.status.clear();
+    new_party_confirm_.Clear();
     return;
   }
   if (key.key == SDLK_TAB) {
     FocusNextMenuField((key.mod & SDL_KMOD_SHIFT) != 0 ? -1 : 1);
     return;
+  }
+  if (menu_.active_field == MenuField::kNone &&
+      (key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) == 0) {
+    const MenuCommand command =
+        MenuCommandForChar(menu_.tab, static_cast<char>(key.key));
+    if (command != MenuCommand::kNone) {
+      HandleMenuCommand(command);
+      return;
+    }
   }
   if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
     SubmitMenu();
@@ -1535,7 +1626,9 @@ auto App::HandleMenuMouseDown(const SDL_MouseButtonEvent& button) -> void {
 
   menu_.active_field = MenuField::kNone;
   if (menu_.tab == MenuTab::kHost) {
-    if (PointInside(layout.campaign_line, button.x, button.y)) {
+    if (party_mismatch_ && PointInside(layout.party_line, button.x, button.y)) {
+      AcceptParty();
+    } else if (PointInside(layout.campaign_line, button.x, button.y)) {
       SelectCampaign(1);
     } else if (PointInside(layout.port_field, button.x, button.y)) {
       menu_.active_field = MenuField::kPort;
@@ -1792,6 +1885,7 @@ auto App::ApplyUpdate() -> void {
   }
   // Окно автосейва не должно потеряться при подмене exe.
   campaign_saver_.Flush();
+  overlay_saver_.Flush();
   update_service_->MarkApplying();
   std::string error;
   const bool installed =
@@ -3984,7 +4078,7 @@ auto App::ApplyOutcome(PeerId from, const CommandOutcome& outcome) -> void {
         return !std::holds_alternative<LogLineAdded>(event);
       });
   if (world_changed) {
-    MarkCampaignDirty();
+    MarkPartyDirty();
   }
   const std::vector<PeerInfo> peers = net_server_.Peers();
   for (const Event& event : outcome.events) {
@@ -4296,13 +4390,12 @@ auto App::SaveGame() -> void {
     SDL_Log("saving is only available on the host");
     return;
   }
-  if (WriteSnapshot(server_.Snapshot(), SavePath())) {
-    // Кампания хранит тот же мир, что и сохранение хоста.
-    StoreActiveScene();
-    SaveCampaign();
-    SDL_Log("game saved");
-  } else {
-    SDL_Log("save failed");
+  if (!in_game_) {
+    return;
+  }
+  StoreActiveScene();
+  if (SaveOverlay()) {
+    SDL_Log("party saved");
   }
 }
 
@@ -4311,19 +4404,51 @@ auto App::LoadGame() -> void {
     SDL_Log("loading is only available on the host");
     return;
   }
-  const std::optional<GameSnapshot> snapshot = ReadSnapshot(SavePath());
-  if (!snapshot.has_value()) {
-    SDL_Log("load failed");
+  if (!in_game_ || !campaign_file_loaded_) {
     return;
   }
-  ResetWorld(*snapshot);
-  // Загруженный мир становится активной сценой кампании.
-  StoreActiveScene();
-  SaveCampaign();
-  SDL_Log("game loaded");
+  // F9 читает именно диск: незаписанную просьбу сначала доводим до конца,
+  // чтобы не смешать её с тем, что уже лежит в файле.
+  overlay_saver_.Flush();
+  const std::filesystem::path path = OverlayFilePath();
+  std::error_code error;
+  if (!std::filesystem::exists(path, error)) {
+    view_.AddLocalLine(std::string(strings::kPartyMissing));
+    SDL_Log("party load failed: no file");
+    return;
+  }
+  const std::optional<Overlay> loaded = ReadOverlay(path);
+  if (!loaded.has_value()) {
+    view_.AddLocalLine(std::string(strings::kPartyReadFailed) +
+                       path.filename().string());
+    SDL_Log("party load failed: unreadable file");
+    return;
+  }
+  if (loaded->campaign_fingerprint != CampaignFingerprint(base_campaign_)) {
+    view_.AddLocalLine(std::string(strings::kPartyMismatchInGame));
+    SDL_Log("party load failed: campaign fingerprint mismatch");
+    return;
+  }
+  overlay_ = *loaded;
+  party_error_ = false;
+  party_mismatch_ = false;
+  ApplyPartyToCampaign();
+  if (campaign_.scenes.empty()) {
+    return;
+  }
+  ResetWorld(campaign_.scenes[campaign_.active].snapshot);
+  autosave_.Saved();
+  saved_revision_ = world_revision_;
+  view_.AddLocalLine(std::string(strings::kPartyLoaded));
+  SDL_Log("party loaded");
 }
 
 auto App::SaveCampaign() -> void {
+  // Кампания — авторский файл: игра пишет только оверлей.
+  if (!in_editor_) {
+    SDL_Log("campaign save is editor-only");
+    return;
+  }
   RequestCampaignSave();
   // Явное сохранение доводим до диска: кадр подождёт, зато сообщение честное.
   if (!campaign_saver_.Flush()) {
@@ -4338,10 +4463,49 @@ auto App::RequestCampaignSave() -> void {
   const std::string file = campaign_files_.empty()
                                ? std::string("campaign.dndcamp")
                                : campaign_files_[campaign_index_];
+  // Редактор пишет авторский шаблон: следы партии в файл не попадают.
+  for (Scene& scene : campaign_.scenes) {
+    scene.snapshot = CleanTemplateSnapshot(scene.snapshot);
+  }
   // Копия кампании снимается сейчас: правки после Request ждут следующего
   // прохода, и ChangedDuringSave это учтёт.
   saved_revision_ = world_revision_;
   campaign_saver_.Request(campaign_, AssetPath(file));
+}
+
+auto App::SaveOverlay() -> bool {
+  if (!campaign_file_loaded_) {
+    return false;
+  }
+  RequestOverlaySave();
+  if (!overlay_saver_.Flush()) {
+    SDL_Log("overlay save failed");
+    if (in_game_) {
+      view_.AddLocalLine(std::string(strings::kPartySaveFailed));
+    } else {
+      menu_.status = std::string(strings::kPartySaveFailed);
+    }
+    return false;
+  }
+  autosave_.Saved();
+  party_exists_ = true;
+  return true;
+}
+
+auto App::RequestOverlaySave() -> void {
+  if (!campaign_file_loaded_) {
+    return;
+  }
+  // Копия партии снимается сейчас: игра не ждёт диск.
+  saved_revision_ = world_revision_;
+  overlay_saver_.Request(overlay_, OverlayFilePath());
+}
+
+auto App::OverlayFilePath() const -> std::filesystem::path {
+  const std::string file = campaign_files_.empty()
+                               ? std::string("campaign.dndcamp")
+                               : campaign_files_[campaign_index_];
+  return OverlayPath(AssetPath(file));
 }
 
 auto App::RefreshCampaignLibrary() -> void {
@@ -4365,17 +4529,56 @@ auto App::RefreshCampaignLibrary() -> void {
   }
 }
 
-auto App::LoadSelectedCampaign() -> bool {
+auto App::PrepareDefaultCampaign() -> void {
+  // Файла ещё нет: начинаем с отдельной сцены или со стартовой карты.
+  const std::optional<GameSnapshot> loaded_scene = ReadSnapshot(ScenePath());
+  GameSnapshot snapshot =
+      CleanTemplateSnapshot(loaded_scene.value_or(BuildSnapshot()));
+  base_campaign_ = MakeCampaign(std::move(snapshot), "Сцена 1");
+  campaign_ = base_campaign_;
+  overlay_ = FreshOverlay(base_campaign_);
+  campaign_file_loaded_ = false;
+  party_exists_ = false;
+  party_error_ = false;
+  party_mismatch_ = false;
+  scene_ = campaign_.scenes[campaign_.active].snapshot;
+  scene_.encounter = Encounter{};
+  server_.Reset(scene_);
+  view_.Reset(server_.DmSnapshot(), server_.FullFogState());
+}
+
+auto App::ApplyPartyToCampaign() -> void {
+  const OverlayMerge merged = ApplyOverlay(base_campaign_, overlay_);
+  campaign_ = merged.campaign;
+  if (!merged.rolled_back) {
+    return;
+  }
+  // Партия спрятала все сцены: продолжаем кампанию и честно об этом говорим.
+  if (in_game_) {
+    view_.AddLocalLine(std::string(strings::kPartyRolledBack));
+  } else {
+    menu_.status = std::string(strings::kPartyRolledBack);
+  }
+}
+
+auto App::LoadSelectedCampaign(LoadMode mode) -> bool {
   if (campaign_files_.empty()) {
+    PrepareDefaultCampaign();
     return false;
   }
-  const std::string& file = campaign_files_[campaign_index_];
+  const std::string file = campaign_files_[campaign_index_];
   const std::filesystem::path path = AssetPath(file);
   // Фоновая запись могла ещё не закрыть файл: читаем только после неё.
   campaign_saver_.Flush();
+  overlay_saver_.Flush();
+  if (mode == LoadMode::kEditor) {
+    // Редактор не должен унаследовать слитую с партией копию.
+    campaign_ = base_campaign_;
+  }
   std::error_code error;
   if (!std::filesystem::exists(path, error)) {
-    // Пустой слот: кампания создастся при первом сохранении.
+    // Пустой слот: кампания создастся при первом старте хоста или F5.
+    PrepareDefaultCampaign();
     return false;
   }
   const std::optional<Campaign> loaded = ReadCampaign(path);
@@ -4383,13 +4586,156 @@ auto App::LoadSelectedCampaign() -> bool {
     menu_.status = "Не удалось прочитать " + file;
     return false;
   }
+  base_campaign_ = *loaded;
   campaign_ = *loaded;
+  campaign_file_loaded_ = true;
+
+  if (mode == LoadMode::kGame) {
+    party_exists_ = false;
+    party_error_ = false;
+    party_mismatch_ = false;
+    overlay_ = FreshOverlay(base_campaign_);
+    const std::filesystem::path overlay_path = OverlayPath(path);
+    if (std::filesystem::exists(overlay_path, error)) {
+      party_exists_ = true;
+      const std::optional<Overlay> party = ReadOverlay(overlay_path);
+      if (!party.has_value()) {
+        // Повреждённый файл не затираем и не игнорируем молча.
+        party_error_ = true;
+        menu_.status = std::string(strings::kPartyReadFailed) +
+                       overlay_path.filename().string();
+      } else {
+        overlay_ = *party;
+        if (overlay_.campaign_fingerprint !=
+            CampaignFingerprint(base_campaign_)) {
+          // Чужая партия ждёт подтверждения DM.
+          party_mismatch_ = true;
+          menu_.status = std::string(strings::kPartyMismatchBlocked);
+        } else {
+          ApplyPartyToCampaign();
+        }
+      }
+    }
+  }
+
+  if (campaign_.scenes.empty()) {
+    PrepareDefaultCampaign();
+    return false;
+  }
   scene_ = campaign_.scenes[campaign_.active].snapshot;
   scene_.encounter = Encounter{};
   server_.Reset(scene_);
   view_.Reset(server_.DmSnapshot(), server_.FullFogState());
-  menu_.status.clear();
-  return true;
+  if (mode == LoadMode::kEditor) {
+    menu_.status.clear();
+    return true;
+  }
+  if (!party_error_ && !party_mismatch_) {
+    menu_.status.clear();
+  }
+  return !party_error_ && !party_mismatch_;
+}
+
+auto App::StartNewParty() -> void {
+  overlay_ = FreshOverlay(base_campaign_);
+  party_error_ = false;
+  party_mismatch_ = false;
+  new_party_confirm_.Clear();
+  ApplyPartyToCampaign();
+  if (campaign_.scenes.empty()) {
+    return;
+  }
+  GameSnapshot snapshot = campaign_.scenes[campaign_.active].snapshot;
+  snapshot.encounter = Encounter{};
+  if (in_game_) {
+    ResetWorld(std::move(snapshot));
+    view_.AddLocalLine(std::string(strings::kNewPartyStarted));
+  } else {
+    scene_ = snapshot;
+    server_.Reset(scene_);
+    view_.Reset(server_.DmSnapshot(), server_.FullFogState());
+  }
+  const bool saved = SaveOverlay();
+  if (saved || !campaign_file_loaded_) {
+    menu_.status = std::string(strings::kNewPartyStarted);
+  }
+}
+
+auto App::AcceptParty() -> void {
+  if (!party_mismatch_) {
+    return;
+  }
+  overlay_.campaign_fingerprint = CampaignFingerprint(base_campaign_);
+  party_mismatch_ = false;
+  party_error_ = false;
+  ApplyPartyToCampaign();
+  if (campaign_.scenes.empty()) {
+    return;
+  }
+  scene_ = campaign_.scenes[campaign_.active].snapshot;
+  scene_.encounter = Encounter{};
+  server_.Reset(scene_);
+  view_.Reset(server_.DmSnapshot(), server_.FullFogState());
+  if (SaveOverlay()) {
+    menu_.status = std::string(strings::kPartyAccepted);
+  }
+}
+
+auto App::ResetActiveSceneToCampaign() -> void {
+  if (party_mismatch_ || party_error_) {
+    menu_.status = std::string(strings::kPartyNeedsDecision);
+    return;
+  }
+  if (campaign_.scenes.empty() || campaign_.active >= campaign_.scenes.size()) {
+    return;
+  }
+  const SceneId id = campaign_.scenes[campaign_.active].id;
+  if (campaign_.scenes[campaign_.active].overlay_only) {
+    menu_.status = std::string(strings::kSceneNotInCampaign);
+    return;
+  }
+  if (!ClearScene(overlay_, id)) {
+    menu_.status = std::string(strings::kSceneAlreadyTemplate);
+    return;
+  }
+  ApplyPartyToCampaign();
+  const std::size_t index = FindSceneIndex(campaign_, id);
+  campaign_.active = index != kNoScene ? index : 0;
+  SetActive(overlay_, campaign_.scenes[campaign_.active].id);
+  GameSnapshot snapshot = campaign_.scenes[campaign_.active].snapshot;
+  snapshot.encounter = Encounter{};
+  if (in_game_) {
+    ResetWorld(std::move(snapshot));
+  } else {
+    scene_ = snapshot;
+    server_.Reset(scene_);
+    view_.Reset(server_.DmSnapshot(), server_.FullFogState());
+  }
+  if (SaveOverlay()) {
+    menu_.status = std::string(strings::kSceneReset);
+  }
+}
+
+auto App::HandleMenuCommand(MenuCommand command) -> void {
+  switch (command) {
+    case MenuCommand::kNewParty: {
+      const auto now = std::chrono::steady_clock::now();
+      if (new_party_confirm_.Request(1, now)) {
+        StartNewParty();
+      } else {
+        menu_.status = std::string(strings::kNewPartyConfirm);
+      }
+      break;
+    }
+    case MenuCommand::kResetScene:
+      ResetActiveSceneToCampaign();
+      break;
+    case MenuCommand::kAcceptParty:
+      AcceptParty();
+      break;
+    case MenuCommand::kNone:
+      break;
+  }
 }
 
 auto App::SelectCampaign(int delta) -> void {
@@ -4397,19 +4743,20 @@ auto App::SelectCampaign(int delta) -> void {
     return;
   }
   campaign_index_ = WrapIndex(campaign_index_, delta, campaign_files_.size());
-  (void)LoadSelectedCampaign();
+  new_party_confirm_.Clear();
+  (void)LoadSelectedCampaign(LoadMode::kGame);
 }
 
-auto App::MarkCampaignDirty() -> void {
+auto App::MarkPartyDirty() -> void {
   ++world_revision_;
   autosave_.MarkChanged(std::chrono::steady_clock::now());
 }
 
 auto App::CheckAutosave() -> void {
   const auto now = std::chrono::steady_clock::now();
-  if (const std::optional<bool> result = campaign_saver_.TakeResult()) {
+  if (const std::optional<bool> result = overlay_saver_.TakeResult()) {
     if (!*result) {
-      SDL_Log("campaign save failed");
+      SDL_Log("overlay save failed");
       // Запись не удалась: не долбим диск каждый кадр, повторим позже.
       autosave_.SaveFailed(now);
     } else if (world_revision_ != saved_revision_) {
@@ -4417,25 +4764,35 @@ auto App::CheckAutosave() -> void {
       autosave_.ChangedDuringSave(now);
     } else {
       autosave_.Saved();
-      SDL_Log("campaign autosaved");
+      SDL_Log("party autosaved");
     }
   }
   if (!autosave_.Dirty() || options_.mode != AppMode::kHost || !in_game_ ||
-      campaign_saver_.Busy()) {
+      !campaign_file_loaded_ || overlay_saver_.Busy()) {
     return;
   }
   if (!autosave_.Due(now)) {
     return;
   }
   StoreActiveScene();
-  RequestCampaignSave();
+  RequestOverlaySave();
 }
 
 auto App::StoreActiveScene() -> void {
   if (campaign_.scenes.empty() || campaign_.active >= campaign_.scenes.size()) {
     return;
   }
-  campaign_.scenes[campaign_.active].snapshot = server_.Snapshot();
+  const GameSnapshot snapshot = server_.Snapshot();
+  // scene_ — то, что видит ClientView, кампания — рабочая копия, оверлей —
+  // то, что уйдёт на диск.
+  scene_ = snapshot;
+  Scene& active = campaign_.scenes[campaign_.active];
+  active.snapshot = snapshot;
+  if (!in_game_) {
+    return;
+  }
+  (void)SetSceneSnapshot(overlay_, active.id, snapshot);
+  SetActive(overlay_, active.id);
 }
 
 auto App::BroadcastWorld() -> void {
@@ -4520,7 +4877,7 @@ auto App::UndoLastAction() -> void {
   GameSnapshot snapshot = std::move(undo_stack_.back());
   undo_stack_.pop_back();
   RestoreUndoWorld(std::move(snapshot));
-  MarkCampaignDirty();
+  MarkPartyDirty();
   view_.AddLocalLine(std::string(strings::kUndoDone));
 }
 
@@ -4566,15 +4923,16 @@ auto App::SwitchScene(std::size_t index) -> void {
   }
   StoreActiveScene();
   if (index == campaign_.active) {
-    SaveCampaign();
+    RequestOverlaySave();
     return;
   }
   campaign_.active = index;
+  SetActive(overlay_, campaign_.scenes[index].id);
   const std::string name = campaign_.scenes[index].name;
   ResetWorld(campaign_.scenes[index].snapshot);
   SDL_Log("scene '%s' is active", name.c_str());
   Announce("Сцена: " + name);
-  SaveCampaign();
+  RequestOverlaySave();
 }
 
 auto App::SwitchSceneByName(std::string_view name) -> void {
@@ -4604,14 +4962,20 @@ auto App::CreateScene() -> void {
     view_.AddLocalLine(std::string(strings::kSceneNameTaken));
     return;
   }
-  Scene scene{.id = NextSceneId(campaign_),
-              .name = std::move(name),
-              .snapshot = campaign_.scenes[campaign_.active].snapshot};
-  const std::string display_name = scene.name;
+  const SceneId id = NextOverlaySceneId(overlay_);
+  GameSnapshot snapshot = campaign_.scenes[campaign_.active].snapshot;
+  const std::string display_name = name;
+  if (!AddScene(overlay_, id, name, snapshot)) {
+    view_.AddLocalLine("Не удалось создать сцену");
+    return;
+  }
+  Scene scene{
+      .id = id, .name = std::move(name), .snapshot = std::move(snapshot)};
   campaign_.scenes.push_back(std::move(scene));
   campaign_.active = campaign_.scenes.size() - 1;
+  SetActive(overlay_, id);
   scenes_selected_ = campaign_.active;
-  SaveCampaign();
+  RequestOverlaySave();
   Announce("Новая сцена: " + display_name);
 }
 
@@ -4625,16 +4989,22 @@ auto App::DeleteActiveScene() -> void {
     return;
   }
   const std::size_t removed = campaign_.active;
+  const SceneId removed_id = campaign_.scenes[removed].id;
   const std::string name = campaign_.scenes[removed].name;
+  if (!RemoveScene(overlay_, removed_id)) {
+    view_.AddLocalLine("Не удалось удалить сцену");
+    return;
+  }
   campaign_.scenes.erase(campaign_.scenes.begin() +
                          static_cast<std::ptrdiff_t>(removed));
   const std::size_t next = IndexAfterDelete(removed, campaign_.scenes.size());
   campaign_.active = next;
+  SetActive(overlay_, campaign_.scenes[next].id);
   scenes_selected_ = next;
   ResetWorld(campaign_.scenes[next].snapshot);
   SDL_Log("scene '%s' deleted", name.c_str());
   Announce("Сцена удалена: " + name);
-  SaveCampaign();
+  RequestOverlaySave();
 }
 
 auto App::OpenScenes() -> void {
@@ -4773,7 +5143,9 @@ auto App::RenameSceneAt(std::size_t index, std::string name) -> bool {
     return false;
   }
   scenes_selected_ = index;
-  SaveCampaign();
+  (void)SetSceneName(overlay_, campaign_.scenes[index].id,
+                     campaign_.scenes[index].name);
+  RequestOverlaySave();
   Announce("Сцена переименована: " + old_name + " → " +
            campaign_.scenes[index].name);
   return true;
@@ -4830,7 +5202,9 @@ auto App::CommitSceneEdit() -> void {
     std::string note(TrimText(scenes_edit_buffer_));
     TruncateUtf8(note, kMaxSceneNoteLength);
     campaign_.scenes[scenes_selected_].note = std::move(note);
-    SaveCampaign();
+    (void)SetSceneNote(overlay_, campaign_.scenes[scenes_selected_].id,
+                       campaign_.scenes[scenes_selected_].note);
+    RequestOverlaySave();
   }
   CancelSceneEdit();
   scenes_status_.Clear();
@@ -4908,6 +5282,10 @@ auto App::Iterate() -> void {
     menu_.campaign_file = campaign_files_.empty()
                               ? std::string{}
                               : campaign_files_[campaign_index_];
+    const PartySummary party =
+        SummarizeParty(overlay_, party_exists_, party_mismatch_);
+    menu_.party_state = party.state;
+    menu_.party_scenes = party.changed_scenes;
     DrawMenu(renderer_, text_.get(), menu_, local_addresses_, MenuUpdateState(),
              MenuMismatchState());
     SDL_RenderPresent(renderer_);

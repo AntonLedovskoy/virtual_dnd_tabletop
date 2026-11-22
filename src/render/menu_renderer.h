@@ -22,6 +22,8 @@ struct MenuLayout {
   SDL_FRect action_button;
   // Строка выбора кампании на вкладке хоста.
   SDL_FRect campaign_line;
+  // Строка партии: продолжение, новая партия или чужая версия кампании.
+  SDL_FRect party_line;
   // Баннер обновления в шапке панели: вся полоса и две кнопки.
   SDL_FRect update_banner;
   SDL_FRect update_action;

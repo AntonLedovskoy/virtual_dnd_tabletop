@@ -46,6 +46,7 @@
 #include "core/navigation.h"
 #include "core/overlay.h"
 #include "core/overlay_io.h"
+#include "core/overlay_save.h"
 #include "core/password.h"
 #include "core/player_name.h"
 #include "core/scene_io.h"
@@ -4915,6 +4916,9 @@ auto TestOverlayRoundtrip() -> void {
   constexpr std::uint32_t overlay_magic = 0x4F444E44U;
   const std::filesystem::path path = std::filesystem::temp_directory_path() /
                                      "dnd_core_tests_overlay.dndoverlay";
+  Expect(dnd::OverlayPath(std::filesystem::path("campaign.dndcamp")) ==
+             std::filesystem::path("campaign.dndoverlay"),
+         "the party file sits next to the campaign with its own extension");
   WriteVersionedFile(path, overlay_magic, dnd::kOverlayVersion, payload);
   const std::optional<dnd::Overlay> loaded = dnd::ReadOverlay(path);
   Expect(loaded.has_value(), "an overlay reads back");
@@ -5019,9 +5023,100 @@ auto TestCampaignUntouched() -> void {
   std::filesystem::remove(overlay_path);
 }
 
+// Партия считается изменённой, только когда в ней есть записи сцен: пустой
+// оверлей и смена активной сцены сами по себе — ещё не продолжение.
+auto TestOverlayDirty() -> void {
+  const dnd::GameSnapshot plain{.map = dnd::GridMap(3, 3), .next_token_id = 1};
+  const dnd::Campaign campaign = dnd::MakeCampaign(plain, "Шаблон");
+  dnd::Overlay overlay = dnd::FreshOverlay(campaign);
+  Expect(overlay.campaign_fingerprint == dnd::CampaignFingerprint(campaign) &&
+             overlay.next_scene_id == dnd::kOverlaySceneIdBase,
+         "a fresh party remembers the campaign and starts its own ids");
+  Expect(!dnd::HasOverlayChanges(overlay), "a fresh party has no changes");
+  dnd::SetActive(overlay, campaign.scenes.front().id);
+  Expect(!dnd::HasOverlayChanges(overlay),
+         "the active scene alone is not a party change");
+
+  const dnd::SceneId id = campaign.scenes.front().id;
+  Expect(dnd::SetSceneSnapshot(overlay, id, plain),
+         "a played scene is recorded");
+  Expect(dnd::HasOverlayChanges(overlay),
+         "a recorded scene makes the party dirty");
+  Expect(dnd::ClearScene(overlay, id), "a scene record is cleared");
+  Expect(!dnd::HasOverlayChanges(overlay),
+         "clearing the only record makes the party clean again");
+  Expect(!dnd::ClearScene(overlay, id), "a missing record is not cleared");
+
+  const dnd::SceneId added = dnd::NextOverlaySceneId(overlay);
+  Expect(dnd::AddScene(overlay, added, "Новая", plain) &&
+             dnd::HasOverlayChanges(overlay),
+         "a party scene makes the party dirty");
+  Expect(dnd::RemoveScene(overlay, added) && !dnd::HasOverlayChanges(overlay),
+         "removing a party scene leaves no record behind");
+}
+
+// Партия уходит на диск в фоновом потоке: кадр не ждёт, а новая просьба
+// заменяет ещё не начатую запись.
+auto TestOverlaySaver() -> void {
+  const dnd::GameSnapshot plain{.map = dnd::GridMap(4, 4), .next_token_id = 1};
+  const dnd::Campaign campaign = dnd::MakeCampaign(plain, "Фон");
+  dnd::Overlay overlay = dnd::FreshOverlay(campaign);
+  const dnd::SceneId id = campaign.scenes.front().id;
+  Expect(dnd::SetSceneSnapshot(overlay, id, plain),
+         "the party has something to write");
+  dnd::SetActive(overlay, id);
+
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "dnd_core_tests_overlay_saver.dndoverlay";
+  std::error_code cleanup_error;
+  std::filesystem::remove(path, cleanup_error);
+
+  dnd::OverlaySaver saver;
+  Expect(!saver.Busy(), "an overlay saver starts idle");
+  saver.Request(overlay, path);
+  Expect(saver.Busy(), "a request keeps the saver busy until the disk answers");
+  Expect(!saver.TakeResult().has_value(),
+         "nothing is reported before the write finishes");
+
+  int waited = 0;
+  while (saver.Busy() && waited < 2000) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ++waited;
+  }
+  const std::optional<bool> result = saver.TakeResult();
+  Expect(result.has_value() && *result, "background party save succeeds");
+  Expect(!saver.TakeResult().has_value(), "a result is reported only once");
+  const std::optional<dnd::Overlay> loaded = dnd::ReadOverlay(path);
+  Expect(
+      loaded.has_value() && loaded->active == id && loaded->scenes.size() == 1,
+      "the background write produces a readable party");
+
+  overlay.active = 0;
+  saver.Request(overlay, path);
+  Expect(saver.Flush(), "Flush reports the last party write succeeded");
+  Expect(!saver.Busy(), "Flush leaves the overlay saver idle");
+  const std::optional<dnd::Overlay> newer = dnd::ReadOverlay(path);
+  Expect(newer.has_value() && newer->active == 0,
+         "the latest party request wins on disk");
+
+  saver.Request(overlay, std::filesystem::temp_directory_path() /
+                             "dnd_no_such_dir" / "party.dndoverlay");
+  Expect(!saver.Flush(), "a failed party write is reported");
+  Expect(!saver.TakeResult().has_value(), "Flush consumes the party result");
+
+  {
+    dnd::OverlaySaver last;
+    last.Request(overlay, path);
+  }
+  Expect(dnd::ReadOverlay(path).has_value(),
+         "the overlay saver destructor finishes a queued write");
+  std::filesystem::remove(path, cleanup_error);
+}
+
 // Испорченные байты — обычное дело при обрыве связи или битом файле.
-// Декодеры должны отвечать отказом, а не падать и не читать за границей
-// буфера; случайно принятые данные обязаны переживать повторное кодирование.
+// Декодеры
+// должны отвечать отказом, а не падать и не читать за границей буфера; случайно
+// принятые данные обязаны переживать повторное кодирование.
 auto TestDamagedPayloads() -> void {
   dnd::GridMap map(6, 4);
   map.SetBlocked(CellAt(2, 2), true);
@@ -6891,6 +6986,38 @@ auto TestMenuModel() -> void {
   Expect(
       empty_host.host.empty() && empty_host.has_port && empty_host.port == 7777,
       "an empty host with a port is reported as such");
+
+  // Строка партии: нет файла, новая партия, продолжение или чужая версия.
+  const dnd::GameSnapshot plain{.map = dnd::GridMap(3, 3), .next_token_id = 1};
+  const dnd::Campaign campaign = dnd::MakeCampaign(plain, "Шаблон");
+  dnd::Overlay overlay = dnd::FreshOverlay(campaign);
+  dnd::PartySummary summary = dnd::SummarizeParty(overlay, false, false);
+  Expect(summary.state == dnd::PartyState::kNone,
+         "a missing party file is reported as none");
+  summary = dnd::SummarizeParty(overlay, true, false);
+  Expect(summary.state == dnd::PartyState::kNew,
+         "an empty party file is a new party");
+  Expect(dnd::SetSceneSnapshot(overlay, campaign.scenes.front().id, plain) &&
+             dnd::SetSceneName(overlay, 7, "Имя"),
+         "the party has changes to count");
+  summary = dnd::SummarizeParty(overlay, true, false);
+  Expect(summary.state == dnd::PartyState::kContinued &&
+             summary.changed_scenes == 2 && summary.played_scenes == 1,
+         "a continued party counts changed and played scenes");
+  summary = dnd::SummarizeParty(overlay, true, true);
+  Expect(summary.state == dnd::PartyState::kMismatch,
+         "a party from another campaign needs confirmation");
+
+  Expect(dnd::MenuCommandForChar(dnd::MenuTab::kHost, 'n') ==
+                 dnd::MenuCommand::kNewParty &&
+             dnd::MenuCommandForChar(dnd::MenuTab::kHost, 'R') ==
+                 dnd::MenuCommand::kResetScene &&
+             dnd::MenuCommandForChar(dnd::MenuTab::kHost, 'a') ==
+                 dnd::MenuCommand::kAcceptParty,
+         "the host tab maps party keys");
+  Expect(dnd::MenuCommandForChar(dnd::MenuTab::kJoin, 'n') ==
+             dnd::MenuCommand::kNone,
+         "other tabs do not start a new party");
 }
 
 auto TestBottomHints() -> void {
@@ -7244,6 +7371,8 @@ auto main() -> int {
     TestOverlayMerge();
     TestOverlayRoundtrip();
     TestCampaignUntouched();
+    TestOverlayDirty();
+    TestOverlaySaver();
     TestDamagedPayloads();
     TestSessionLog();
     TestSessionLogHistory();

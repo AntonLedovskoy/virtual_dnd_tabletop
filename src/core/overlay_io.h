@@ -34,4 +34,11 @@ auto EncodeOverlayAs(const Overlay& overlay, std::uint32_t overlay_version)
 // применяется к изменившейся кампании только после подтверждения DM.
 auto CampaignFingerprint(const Campaign& campaign) -> std::uint64_t;
 
+// Партия для кампании: её отпечаток и пустой список изменений.
+auto FreshOverlay(const Campaign& campaign) -> Overlay;
+
+// Файл партии рядом с кампанией: `<имя>.dndoverlay`.
+auto OverlayPath(const std::filesystem::path& campaign_path)
+    -> std::filesystem::path;
+
 }  // namespace dnd

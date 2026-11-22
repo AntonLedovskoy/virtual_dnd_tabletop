@@ -43,6 +43,26 @@ auto SetDrawColor(SDL_Renderer* renderer, SDL_Color color) -> void {
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
 }
 
+auto PartyText(const MenuState& state) -> std::string {
+  std::string text(strings::kPartyLabel);
+  switch (state.party_state) {
+    case PartyState::kNone:
+      text += strings::kPartyNone;
+      break;
+    case PartyState::kNew:
+      text += strings::kPartyNew;
+      break;
+    case PartyState::kContinued:
+      text += strings::kPartyContinued;
+      text += std::to_string(state.party_scenes);
+      break;
+    case PartyState::kMismatch:
+      text += strings::kPartyMismatch;
+      break;
+  }
+  return text;
+}
+
 auto DrawField(SDL_Renderer* renderer, TextRenderer* text,
                const SDL_FRect& rect, const std::string& label,
                const std::string& value, bool active, bool password) -> void {
@@ -162,8 +182,10 @@ auto ComputeMenuLayout(int window_width, int window_height, MenuTab tab)
         SDL_FRect{field_x, panel_y + 290.0F, field_width, kFieldHeight};
     layout.campaign_line =
         SDL_FRect{field_x, panel_y + 344.0F, field_width, 24.0F};
+    layout.party_line =
+        SDL_FRect{field_x, panel_y + 414.0F, field_width, 44.0F};
     layout.action_button =
-        SDL_FRect{field_x, panel_y + 430.0F, field_width, 50.0F};
+        SDL_FRect{field_x, panel_y + 478.0F, field_width, 50.0F};
   } else {
     layout.address_field =
         SDL_FRect{field_x, panel_y + 160.0F, field_width, kFieldHeight};
@@ -281,6 +303,13 @@ auto DrawMenu(SDL_Renderer* renderer, TextRenderer* text,
                field_width);
     text->Draw(std::string(strings::kCampaignHint), panel_x + 40.0F,
                layout.campaign_line.y + 46.0F, kHint, field_width);
+    const bool mismatch = state.party_state == PartyState::kMismatch;
+    text->Draw(PartyText(state), layout.party_line.x, layout.party_line.y,
+               mismatch ? kError : kText, field_width);
+    text->Draw(std::string(mismatch ? strings::kPartyMismatchHint
+                                    : strings::kPartyHint),
+               layout.party_line.x, layout.party_line.y + 22.0F, kHint,
+               field_width);
   } else if (state.tab == MenuTab::kJoin) {
     DrawField(renderer, text, layout.address_field,
               std::string(strings::kAddress), state.address,

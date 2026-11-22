@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
@@ -28,6 +29,9 @@
 #include "core/log_history.h"
 #include "core/log_scroll.h"
 #include "core/menu_model.h"
+#include "core/overlay.h"
+#include "core/overlay_io.h"
+#include "core/overlay_save.h"
 #include "core/session_log.h"
 #include "core/status_message.h"
 #include "net/net_client.h"
@@ -76,7 +80,7 @@ enum class EditorPaintMode : std::uint8_t {
 class App {
  public:
   explicit App(AppOptions options);
-  ~App();
+  ~App() noexcept;
 
   App(const App&) = delete;
   auto operator=(const App&) -> App& = delete;
@@ -274,18 +278,36 @@ class App {
   auto AdjustSelectedInitiative(int delta) -> void;
   auto SaveGame() -> void;
   auto LoadGame() -> void;
+  // Кампанию пишет только редактор: игра меняет лишь оверлей партии.
   auto SaveCampaign() -> void;
   // Ставит кампанию в фоновую запись; кадр диск не ждёт.
   auto RequestCampaignSave() -> void;
+  // Партия: запись оверлея, явная и фоновая.
+  auto SaveOverlay() -> bool;
+  auto RequestOverlaySave() -> void;
+  [[nodiscard]] auto OverlayFilePath() const -> std::filesystem::path;
   // Библиотека кампаний: файлы *.dndcamp рядом с .exe и выбор при старте.
   auto RefreshCampaignLibrary() -> void;
+  // Режим загрузки: редактор видит только кампанию, игра — с партией.
+  enum class LoadMode : std::uint8_t { kEditor, kGame };
   // Читает выбранный файл в campaign_/scene_/server_/view_; false — не вышло.
-  auto LoadSelectedCampaign() -> bool;
+  auto LoadSelectedCampaign(LoadMode mode) -> bool;
+  // Пустой слот: кампания из scene.dndscene или стартовой карты.
+  auto PrepareDefaultCampaign() -> void;
+  // Собирает campaign_ из base_campaign_ и overlay_.
+  auto ApplyPartyToCampaign() -> void;
+  // «Новая партия»: оверлей выбранной кампании начинается с чистого листа.
+  auto StartNewParty() -> void;
+  // Подтверждение партии от другой версии кампании.
+  auto AcceptParty() -> void;
+  // «Сбросить сцену к кампании»: убрать запись оверлея для активной сцены.
+  auto ResetActiveSceneToCampaign() -> void;
+  auto HandleMenuCommand(MenuCommand command) -> void;
   auto SelectCampaign(int delta) -> void;
-  // Сохраняет мир хоста в активную сцену кампании.
+  // Сохраняет мир хоста в активную сцену кампании и в оверлей партии.
   auto StoreActiveScene() -> void;
-  // Изменение мира: кампания уйдёт на диск после kAutosaveDelay.
-  auto MarkCampaignDirty() -> void;
+  // Изменение мира: партия уйдёт на диск после kAutosaveDelay.
+  auto MarkPartyDirty() -> void;
   auto CheckAutosave() -> void;
   // Заменяет мир и пересобирает вид хоста, клиентам уходит ViewUpdated.
   auto ResetWorld(GameSnapshot snapshot) -> void;
@@ -345,6 +367,9 @@ class App {
 
   GameSnapshot scene_;
   Campaign campaign_;
+  // Авторский файл кампании: игра его только читает.
+  Campaign base_campaign_;
+  Overlay overlay_;
   GameServer server_;
   ClientView view_;
   LocalTransport transport_;
@@ -467,6 +492,14 @@ class App {
   AutosaveTimer autosave_;
   // Автосейв пишет кампанию в отдельном потоке, чтобы кадр не ждал диск.
   CampaignSaver campaign_saver_;
+  // Игра пишет оверлей партии, а не кампанию.
+  OverlaySaver overlay_saver_;
+  bool campaign_file_loaded_ = false;
+  bool party_exists_ = false;
+  bool party_error_ = false;
+  bool party_mismatch_ = false;
+  // «Новая партия» требует повторного N.
+  DeleteConfirm new_party_confirm_;
   // Правка мира: номер текущей версии и версии, ушедшей в последнюю запись.
   std::uint64_t world_revision_ = 0;
   std::uint64_t saved_revision_ = 0;
