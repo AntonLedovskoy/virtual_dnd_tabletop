@@ -1544,6 +1544,9 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
     });
   };
   for (const Condition& condition : command.conditions) {
+    if (condition.name == kExhaustion) {
+      continue;
+    }
     const auto before_condition = std::ranges::find_if(
         before.conditions, [&condition](const Condition& item) -> bool {
           return item.name == condition.name;
@@ -1565,9 +1568,21 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
     }
   }
   for (const Condition& condition : before.conditions) {
+    if (condition.name == kExhaustion) {
+      continue;
+    }
     if (!has_condition(command.conditions, condition.name)) {
       changes.emplace_back("−" + condition.name);
     }
+  }
+  // Истощение — несколько записей с одним именем, поэтому сравнивать его по
+  // имени бесполезно: повышение уровня писалось бы как повтор уже имеющейся
+  // записи. Уровень считаем отдельно, чтобы каждый шаг попадал в лог.
+  const int exhaustion_before = ExhaustionLevel(before);
+  const int exhaustion_after = ExhaustionLevel(*updated);
+  if (exhaustion_after != exhaustion_before) {
+    changes.push_back("истощение " + std::to_string(exhaustion_after) + "/" +
+                      std::to_string(kMaxExhaustionLevel));
   }
   if (concentration_broken) {
     changes.emplace_back("−" + std::string(kConcentration) +

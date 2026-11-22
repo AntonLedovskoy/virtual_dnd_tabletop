@@ -1565,7 +1565,41 @@ auto TestConditionPaletteAndExhaustion() -> void {
               .accepted,
          "seven exhaustion levels are rejected");
 
-  // Длинный отдых снимает ровно один уровень.
+  // Длинный отдых снимает ровно один уровень. Каждый шаг уровня истощения
+  // пишется в лог, хотя записи состояния различаются только количеством.
+  const auto log_has = [](const dnd::CommandOutcome& outcome,
+                          std::string_view text) -> bool {
+    return std::ranges::any_of(
+        outcome.events, [text](const dnd::Event& event) -> bool {
+          if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+            return false;
+          }
+          return std::get<dnd::LogLineAdded>(event).line.text.find(text) !=
+                 std::string::npos;
+        });
+  };
+  Expect(server
+             .HandleCommand(
+                 dnd::UpdateTokenCombat{
+                     .id = 1, .conditions = {dnd::Condition{"истощение"}}},
+                 "", true)
+             .accepted,
+         "the DM applies one exhaustion level");
+  const dnd::CommandOutcome raised = server.HandleCommand(
+      dnd::UpdateTokenCombat{.id = 1,
+                             .conditions = {dnd::Condition{"истощение"},
+                                            dnd::Condition{"истощение"}}},
+      "", true);
+  Expect(raised.accepted, "the DM raises exhaustion to two levels");
+  Expect(log_has(raised, "истощение 2/6"),
+         "raising exhaustion is written to the log");
+  const dnd::CommandOutcome lowered = server.HandleCommand(
+      dnd::UpdateTokenCombat{.id = 1,
+                             .conditions = {dnd::Condition{"истощение"}}},
+      "", true);
+  Expect(lowered.accepted, "the DM lowers exhaustion to one level");
+  Expect(log_has(lowered, "истощение 1/6"),
+         "lowering exhaustion is written to the log");
   Expect(server
              .HandleCommand(
                  dnd::UpdateTokenCombat{
