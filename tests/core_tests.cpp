@@ -78,6 +78,13 @@ auto TokenOf(const dnd::GameState& state, dnd::TokenId id) -> dnd::Token {
   return token.value_or(dnd::Token{});
 }
 
+auto HasCondition(const dnd::Token& token, std::string_view name) -> bool {
+  return std::ranges::any_of(token.conditions,
+                             [name](const dnd::Condition& condition) -> bool {
+                               return condition.name == name;
+                             });
+}
+
 auto FogVisibleAt(const dnd::FogSnapshot& fog, int x, int y) -> bool {
   return fog.visible[static_cast<std::size_t>(y) *
                          static_cast<std::size_t>(fog.width) +
@@ -707,10 +714,7 @@ auto TestDamageHealRest() -> void {
   Expect(hit.accepted, "damage beyond hp is accepted");
   const dnd::Token down = TokenOf(server.State(), 1);
   Expect(down.hp == 0, "hp stops at zero");
-  Expect(std::ranges::any_of(down.conditions,
-                             [](const dnd::Condition& condition) -> bool {
-                               return condition.name == dnd::kUnconscious;
-                             }),
+  Expect(HasCondition(down, dnd::kUnconscious),
          "zero hp adds the unconscious condition");
 
   const dnd::CommandOutcome heal = server.HandleCommand(
@@ -718,27 +722,41 @@ auto TestDamageHealRest() -> void {
   Expect(heal.accepted, "the owner can heal their character");
   const dnd::Token healed = TokenOf(server.State(), 1);
   Expect(healed.hp == 20, "healing stops at max hp");
-  Expect(!std::ranges::any_of(healed.conditions,
-                              [](const dnd::Condition& condition) -> bool {
-                                return condition.name == dnd::kUnconscious;
-                              }),
+  Expect(!HasCondition(healed, dnd::kUnconscious),
          "healing removes the unconscious condition");
 
   Expect(
       !server.HandleCommand(dnd::RestParty{.long_rest = true}, "alice", false)
            .accepted,
       "only the DM declares a rest");
+
+  // Отдых при 0 HP не даёт ничего: лежачий не встаёт и не тратит кости.
+  Expect(server.HandleCommand(dnd::RestParty{}, "", true).accepted,
+         "the DM declares a short rest");
+  const dnd::Token down_rested = TokenOf(server.State(), 2);
+  Expect(down_rested.hp == 0 && down_rested.hit_dice_spent == 0,
+         "a character at zero hp gains nothing from a short rest");
+  Expect(HasCondition(down_rested, dnd::kUnconscious) &&
+             HasCondition(down_rested, "отравлен") &&
+             !HasCondition(down_rested, "испуган"),
+         "time still passes: the timed condition expires, the rest stay");
+
+  const dnd::CommandOutcome wake =
+      server.HandleCommand(dnd::HealToken{.id = 2, .amount = 5}, "bob", false);
+  Expect(wake.accepted, "healing a downed character is allowed");
+  const dnd::Token woken = TokenOf(server.State(), 2);
+  Expect(woken.hp == 5 && !HasCondition(woken, dnd::kUnconscious),
+         "healing wakes the character");
+
   Expect(server.HandleCommand(dnd::RestParty{}, "", true).accepted,
          "the DM declares a short rest");
   const dnd::Token rested = TokenOf(server.State(), 2);
-  Expect(rested.hp >= 1 && rested.hp <= 8,
+  Expect(rested.hp > woken.hp && rested.hp <= rested.max_hp,
          "short rest spends a hit die instead of restoring half of max hp");
   Expect(rested.hit_dice_spent == 1,
          "short rest consumes one hit die at level 1");
-  Expect(rested.conditions.size() == 1 &&
-             rested.conditions.front().name == "отравлен",
-         "short rest wakes the character, expires timed conditions and keeps "
-         "permanent ones");
+  Expect(HasCondition(rested, "отравлен"),
+         "short rest keeps conditions that are not timed");
 
   Expect(server.HandleCommand(dnd::RestParty{}, "", true).accepted,
          "a second short rest is allowed");
@@ -746,14 +764,56 @@ auto TestDamageHealRest() -> void {
   Expect(drained.hp == rested.hp && drained.hit_dice_spent == 1,
          "a spent hit die cannot be reused before a long rest");
 
+  // Два уровня истощения: длинный отдых снимает ровно один.
+  Expect(server
+             .HandleCommand(
+                 dnd::UpdateTokenCombat{
+                     .id = 2,
+                     .conditions = {dnd::Condition{"отравлен"},
+                                    dnd::Condition{"истощение"},
+                                    dnd::Condition{"истощение"}}},
+                 "", true)
+             .accepted,
+         "the DM sets conditions on the character");
   Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
              .accepted,
          "the DM declares a long rest");
   const dnd::Token restored = TokenOf(server.State(), 2);
-  Expect(restored.hp == restored.max_hp && restored.temp_hp == 0 &&
-             restored.conditions.empty(),
-         "long rest restores hp and clears conditions");
+  Expect(restored.hp == restored.max_hp && restored.temp_hp == 0,
+         "long rest restores hp");
   Expect(restored.hit_dice_spent == 0, "long rest returns every spent hit die");
+  Expect(
+      HasCondition(restored, "отравлен") && HasCondition(restored, "истощение"),
+      "long rest keeps conditions other than one exhaustion level");
+  const int exhaustion_levels = static_cast<int>(std::ranges::count_if(
+      restored.conditions, [](const dnd::Condition& condition) -> bool {
+        return condition.name == "истощение";
+      }));
+  Expect(exhaustion_levels == 1,
+         "long rest removes exactly one exhaustion level");
+
+  // Длинный отдых не поднимает лежачего и не воскрешает мёртвого.
+  Expect(server.HandleCommand(dnd::DamageToken{.id = 2, .amount = 10}, "", true)
+             .accepted,
+         "the DM can drop the character to zero");
+  Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
+             .accepted,
+         "a long rest over a downed party is allowed");
+  const dnd::Token still_down = TokenOf(server.State(), 2);
+  Expect(still_down.hp == 0 && HasCondition(still_down, dnd::kUnconscious),
+         "long rest does not wake a character at zero hp");
+
+  Expect(server.HandleCommand(dnd::DamageToken{.id = 2, .amount = 10}, "", true)
+             .accepted,
+         "massive damage on a downed character is applied");
+  Expect(HasCondition(TokenOf(server.State(), 2), dnd::kDead),
+         "damage equal to max hp kills a downed character");
+  Expect(server.HandleCommand(dnd::RestParty{.long_rest = true}, "", true)
+             .accepted,
+         "the DM can still call a long rest");
+  const dnd::Token dead = TokenOf(server.State(), 2);
+  Expect(dead.hp == 0 && HasCondition(dead, dnd::kDead),
+         "long rest does not revive the dead");
 }
 
 auto TestShortRestHitDice() -> void {
@@ -772,8 +832,20 @@ auto TestShortRestHitDice() -> void {
                          .xp = 900,
                          .kind = dnd::TokenKind::kPlayer,
                          .cell = CellAt(1, 1)},
+              // Слабый модификатор Телосложения: кость не может вылечить
+              // меньше 1 HP, даже когда бросок ниже нуля.
+              dnd::Token{.id = 2,
+                         .name = "frail",
+                         .owner = "bob",
+                         .hp = 1,
+                         .max_hp = 100,
+                         .hit_die = 6,
+                         .con_modifier = -5,
+                         .xp = 900,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 2)},
           },
-      .next_token_id = 2,
+      .next_token_id = 3,
   };
   dnd::GameState state(snapshot);
   // Фиксированное зерно: тест проверяет границы лечения и учёт костей, а не
@@ -782,65 +854,109 @@ auto TestShortRestHitDice() -> void {
   std::mt19937 rng(2024);
 
   const std::vector<dnd::RestChange> changes = state.RestParty(false, rng);
-  Expect(changes.size() == 1, "a wounded hero is reported after the rest");
-  const dnd::Token& rested = changes.front().token;
-  Expect(rested.hit_dice_spent == 3,
+  Expect(changes.size() == 2, "both wounded heroes are reported");
+  const dnd::RestChange& hero = changes[0];
+  Expect(hero.token.hit_dice_spent == 3,
          "a short rest spends a hit die per level while hp is missing");
-  Expect(changes.front().dice_spent == 3 &&
-             changes.front().hp_restored == rested.hp - 3,
+  Expect(hero.dice_spent == 3 && hero.hp_restored == hero.token.hp - 3,
          "the rest report counts dice and restored hp");
-  Expect(rested.hp >= 3 + (3 * 5),
-         "each spent hit die heals d12 plus Constitution, at least zero");
+  Expect(hero.token.hp >= 3 + (3 * 5),
+         "each spent hit die heals d12 plus Constitution, at least one");
+  const dnd::RestChange& frail = changes[1];
+  Expect(frail.dice_spent == 3 && frail.hp_restored >= frail.dice_spent,
+         "a hit die heals at least 1 HP even with a negative modifier");
 
   Expect(state.RestParty(false, rng).empty(),
          "a short rest without dice left changes nothing");
 
   const std::vector<dnd::RestChange> long_rest = state.RestParty(true, rng);
-  Expect(long_rest.size() == 1, "a long rest reports the hero");
-  Expect(long_rest.front().token.hp == 200 &&
-             long_rest.front().token.hit_dice_spent == 0,
+  Expect(long_rest.size() == 2, "a long rest reports both heroes");
+  Expect(long_rest[0].token.hp == 200 && long_rest[0].token.hit_dice_spent == 0,
          "a long rest restores hp and every hit die");
+  Expect(long_rest[1].token.hp == 100 && long_rest[1].token.hit_dice_spent == 0,
+         "a long rest restores the frail hero too");
 }
 
 auto TestConcentration() -> void {
+  Expect(dnd::ConcentrationDc(5) == 10 && dnd::ConcentrationDc(20) == 10 &&
+             dnd::ConcentrationDc(21) == 10 && dnd::ConcentrationDc(100) == 30,
+         "concentration DC is 10 or half damage, capped at 30");
+
   const dnd::GridMap map(8, 8);
+  const auto concentrator = [](dnd::TokenId id, const char* name, int hp,
+                               int save_bonus, int x, int y) -> dnd::Token {
+    return dnd::Token{.id = id,
+                      .name = name,
+                      .owner = name,
+                      .hp = hp,
+                      .max_hp = 10,
+                      .save_bonus = save_bonus,
+                      .conditions = {dnd::Condition{"концентрация"}},
+                      .kind = dnd::TokenKind::kPlayer,
+                      .cell = CellAt(x, y)};
+  };
   const dnd::GameSnapshot snapshot{
       .map = map,
       .tokens =
           {
-              dnd::Token{.id = 1,
-                         .name = "calm",
-                         .owner = "alice",
-                         .save_bonus = 100,
-                         .conditions = {dnd::Condition{"концентрация"}},
-                         .kind = dnd::TokenKind::kPlayer,
-                         .cell = CellAt(1, 1)},
-              dnd::Token{.id = 2,
-                         .name = "shaken",
-                         .owner = "bob",
-                         .save_bonus = -100,
-                         .conditions = {dnd::Condition{"концентрация"}},
-                         .kind = dnd::TokenKind::kPlayer,
-                         .cell = CellAt(2, 2)},
+              concentrator(1, "calm", 10, 100, 1, 1),
+              concentrator(2, "shaken", 10, -100, 2, 2),
+              concentrator(3, "dying", 1, 100, 3, 3),
+              concentrator(4, "slain", 1, 100, 4, 4),
+              concentrator(5, "stunned", 10, 100, 5, 5),
           },
-      .next_token_id = 3,
+      .next_token_id = 6,
   };
   dnd::GameServer server(snapshot, 6, 9);
 
   Expect(
       server
-          .HandleCommand(dnd::DamageToken{.id = 1, .amount = 7}, "alice", false)
+          .HandleCommand(dnd::DamageToken{.id = 1, .amount = 7}, "calm", false)
           .accepted,
       "damage with concentration is accepted");
   Expect(TokenOf(server.State(), 1).conditions.size() == 1,
          "a successful save keeps concentration");
 
-  Expect(
-      server.HandleCommand(dnd::DamageToken{.id = 2, .amount = 7}, "bob", false)
-          .accepted,
-      "damage with concentration is accepted");
+  Expect(server
+             .HandleCommand(dnd::DamageToken{.id = 2, .amount = 7}, "shaken",
+                            false)
+             .accepted,
+         "damage with concentration is accepted");
   Expect(TokenOf(server.State(), 2).conditions.empty(),
          "a failed concentration save removes the condition");
+
+  // 0 HP, смерть и недееспособность рвут концентрацию без спасброска.
+  Expect(
+      server
+          .HandleCommand(dnd::DamageToken{.id = 3, .amount = 5}, "dying", false)
+          .accepted,
+      "damage dropping the character to zero is accepted");
+  Expect(!HasCondition(TokenOf(server.State(), 3), dnd::kConcentration),
+         "zero hp breaks concentration");
+
+  Expect(server
+             .HandleCommand(dnd::DamageToken{.id = 4, .amount = 20}, "slain",
+                            false)
+             .accepted,
+         "massive damage is accepted");
+  const dnd::Token slain = TokenOf(server.State(), 4);
+  Expect(HasCondition(slain, dnd::kDead) &&
+             !HasCondition(slain, dnd::kConcentration),
+         "death breaks concentration");
+
+  Expect(server
+             .HandleCommand(
+                 dnd::UpdateTokenCombat{
+                     .id = 5,
+                     .conditions = {dnd::Condition{"концентрация"},
+                                    dnd::Condition{"оглушён"}}},
+                 "", true)
+             .accepted,
+         "the DM can apply an incapacitating condition");
+  const dnd::Token stunned = TokenOf(server.State(), 5);
+  Expect(HasCondition(stunned, "оглушён") &&
+             !HasCondition(stunned, dnd::kConcentration),
+         "incapacitation breaks concentration");
 }
 
 auto TestAttack() -> void {
@@ -1060,72 +1176,100 @@ auto TestAoeDamage() -> void {
 
 auto TestDeathSaves() -> void {
   const dnd::GridMap map(8, 8);
+  const auto downed = [](dnd::TokenId id, const char* name, int x,
+                         int y) -> dnd::Token {
+    return dnd::Token{.id = id,
+                      .name = name,
+                      .owner = "party",
+                      .hp = 0,
+                      .max_hp = 10,
+                      .conditions = {dnd::Condition{"без сознания"}},
+                      .kind = dnd::TokenKind::kPlayer,
+                      .cell = CellAt(x, y)};
+  };
   const dnd::GameSnapshot snapshot{
       .map = map,
       .tokens =
           {
-              dnd::Token{.id = 1,
-                         .name = "doomed",
-                         .owner = "alice",
-                         .hp = 0,
+              downed(1, "doomed", 1, 1),
+              downed(2, "stable", 2, 2),
+              downed(3, "lucky", 3, 3),
+              downed(4, "hurt", 4, 4),
+              downed(5, "smashed", 5, 5),
+              downed(6, "critical", 6, 6),
+              dnd::Token{.id = 7,
+                         .name = "standing",
+                         .owner = "party",
+                         .hp = 10,
                          .max_hp = 10,
-                         .conditions = {dnd::Condition{"без сознания"}},
                          .kind = dnd::TokenKind::kPlayer,
-                         .cell = CellAt(1, 1)},
-              dnd::Token{.id = 2,
-                         .name = "stable",
-                         .owner = "bob",
-                         .hp = 0,
-                         .max_hp = 10,
-                         .conditions = {dnd::Condition{"без сознания"}},
+                         .cell = CellAt(7, 1)},
+              dnd::Token{.id = 8,
+                         .name = "bruised",
+                         .owner = "party",
+                         .hp = 5,
+                         .max_hp = 20,
                          .kind = dnd::TokenKind::kPlayer,
-                         .cell = CellAt(2, 2)},
-              dnd::Token{.id = 3,
-                         .name = "lucky",
-                         .owner = "carol",
-                         .hp = 0,
-                         .max_hp = 10,
-                         .conditions = {dnd::Condition{"без сознания"}},
-                         .kind = dnd::TokenKind::kPlayer,
-                         .cell = CellAt(3, 3)},
+                         .cell = CellAt(7, 2)},
           },
-      .next_token_id = 4,
+      .next_token_id = 9,
   };
   dnd::GameState state(snapshot);
 
+  // Натуральная 1 — два провала, а не один.
   (void)state.DeathSave(1, 5);
-  (void)state.DeathSave(1, 6);
-  const std::optional<dnd::Token> dead = state.DeathSave(1, 7);
-  Expect(dead.has_value() && dead->death_save_failures == 3,
-         "three failures fill the death save counter");
-  if (dead.has_value()) {
-    Expect(std::ranges::any_of(dead->conditions,
-                               [](const dnd::Condition& condition) -> bool {
-                                 return condition.name == dnd::kDead;
-                               }),
+  const std::optional<dnd::Token> doomed = state.DeathSave(1, 1);
+  Expect(doomed.has_value() && doomed->death_save_failures == 3,
+         "a natural 1 adds two death save failures");
+  if (doomed.has_value()) {
+    Expect(HasCondition(*doomed, dnd::kDead) &&
+               !HasCondition(*doomed, dnd::kUnconscious),
            "three failures kill the character");
   }
+  Expect(!state.DeathSave(1, 10).has_value(),
+         "a dead character makes no death saves");
 
+  // Стабильность оставляет «без сознания» до первого лечения.
   (void)state.DeathSave(2, 10);
   (void)state.DeathSave(2, 11);
   const std::optional<dnd::Token> stable = state.DeathSave(2, 12);
   Expect(stable.has_value() && stable->death_save_successes == 3,
          "three successes stabilize the character");
   if (stable.has_value()) {
-    Expect(std::ranges::none_of(stable->conditions,
-                                [](const dnd::Condition& condition) -> bool {
-                                  return condition.name == dnd::kUnconscious;
-                                }),
-           "a stable character is no longer unconscious");
+    Expect(HasCondition(*stable, dnd::kUnconscious),
+           "a stable character stays unconscious at zero hp");
   }
+  Expect(!state.DeathSave(2, 1).has_value(),
+         "a stable character makes no more death saves");
+  const std::optional<dnd::Token> healed = state.HealToken(2, 5);
+  Expect(healed.has_value() && healed->hp == 5 &&
+             !HasCondition(*healed, dnd::kUnconscious),
+         "healing wakes a stable character");
 
   const std::optional<dnd::Token> revived = state.DeathSave(3, 20);
-  Expect(revived.has_value() && revived->hp == 1,
+  Expect(revived.has_value() && revived->hp == 1 &&
+             !HasCondition(*revived, dnd::kUnconscious),
          "a natural twenty brings the character back with 1 HP");
 
-  const std::optional<dnd::Token> hit = state.DamageToken(2, 5);
+  // Удар по лежачему: один провал, критический — два.
+  const std::optional<dnd::Token> hit = state.DamageToken(4, 4);
   Expect(hit.has_value() && hit->death_save_failures == 1,
-         "damage at zero hp adds a death save failure");
+         "damage at zero hp adds one death save failure");
+  const std::optional<dnd::Token> critical = state.DamageToken(6, 4, true);
+  Expect(critical.has_value() && critical->death_save_failures == 2,
+         "a critical hit at zero hp adds two death save failures");
+
+  const std::optional<dnd::Token> smashed = state.DamageToken(5, 10);
+  Expect(smashed.has_value() && HasCondition(*smashed, dnd::kDead),
+         "damage equal to max hp kills a downed character outright");
+
+  const std::optional<dnd::Token> burst = state.DamageToken(7, 20);
+  Expect(burst.has_value() && HasCondition(*burst, dnd::kDead),
+         "massive damage kills even a standing character");
+  const std::optional<dnd::Token> survived = state.DamageToken(8, 20);
+  Expect(survived.has_value() && survived->hp == 0 &&
+             !HasCondition(*survived, dnd::kDead),
+         "damage below max hp only drops a standing character");
 }
 
 auto TestConditionDurationAndInitiative() -> void {
@@ -1884,8 +2028,8 @@ auto TestLevels() -> void {
   Expect(dnd::HitDiceAvailable(5, 2) == 3, "spent hit dice reduce the pool");
   Expect(dnd::HitDiceAvailable(5, 9) == 0 && dnd::HitDiceAvailable(5, -3) == 5,
          "the available pool never goes negative");
-  Expect(dnd::HitDieHeal(5, 3) == 8 && dnd::HitDieHeal(2, -5) == 0,
-         "a spent hit die heals its roll plus Constitution, at least zero");
+  Expect(dnd::HitDieHeal(5, 3) == 8 && dnd::HitDieHeal(2, -5) == 1,
+         "a spent hit die heals its roll plus Constitution, at least one");
   Expect(dnd::IsAbilityScoreLevel(4) && dnd::IsAbilityScoreLevel(8) &&
              dnd::IsAbilityScoreLevel(12) && dnd::IsAbilityScoreLevel(16),
          "ability score improvements come at levels 4, 8, 12 and 16");

@@ -35,7 +35,7 @@ inline constexpr int kMaxXp = 1000000;
 [[nodiscard]] auto HitDiceAvailable(int level, int spent) -> int;
 
 // Лечение за одну потраченную кость хитов (2024): бросок кости плюс
-// модификатор Телосложения, но не меньше нуля.
+// модификатор Телосложения, но не меньше единицы.
 [[nodiscard]] auto HitDieHeal(int roll, int con_modifier) -> int;
 
 // На этих уровнях персонаж получает повышение характеристик (2024).

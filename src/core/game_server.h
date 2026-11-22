@@ -109,8 +109,10 @@ class GameServer {
                                   const std::string& actor,
                                   bool can_control_all) -> CommandOutcome;
   // Наносит урон и добавляет события токена, лога и проверки концентрации.
-  auto DamageAndLog(TokenId id, int amount, const std::string& actor,
-                    std::vector<Event>& events) -> void;
+  // critical — критическое попадание (урон по лежачему даёт два провала).
+  auto DamageAndLog(TokenId id, int amount, bool critical,
+                    const std::string& actor, std::vector<Event>& events)
+      -> void;
   [[nodiscard]] auto HandleHeal(const HealToken& command,
                                 const std::string& actor, bool can_control_all)
       -> CommandOutcome;

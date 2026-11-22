@@ -5,6 +5,7 @@
 #include <iterator>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -62,6 +63,23 @@ auto JoinChanges(const std::vector<std::string>& parts) -> std::string {
 auto IsValidKind(TokenKind kind) -> bool {
   return kind == TokenKind::kPlayer || kind == TokenKind::kNpc ||
          kind == TokenKind::kMonster;
+}
+
+auto HasCondition(const Token& token, std::string_view name) -> bool {
+  return std::ranges::any_of(token.conditions,
+                             [name](const Condition& condition) -> bool {
+                               return condition.name == name;
+                             });
+}
+
+auto IsIncapacitated(const Token& token) -> bool {
+  if (token.hp == 0) {
+    return true;
+  }
+  return std::ranges::any_of(token.conditions,
+                             [](const Condition& condition) -> bool {
+                               return IsIncapacitatingCondition(condition.name);
+                             });
 }
 
 auto ControlRejectReason(const Token& token) -> const char* {
@@ -483,11 +501,12 @@ auto GameServer::HandleDamage(const DamageToken& command,
   }
   CommandOutcome outcome;
   outcome.accepted = true;
-  DamageAndLog(command.id, command.amount, actor, outcome.events);
+  DamageAndLog(command.id, command.amount, false, actor, outcome.events);
   return outcome;
 }
 
-auto GameServer::DamageAndLog(TokenId id, int amount, const std::string& actor,
+auto GameServer::DamageAndLog(TokenId id, int amount, bool critical,
+                              const std::string& actor,
                               std::vector<Event>& events) -> void {
   const Token* token = FindToken(id);
   if (token == nullptr) {
@@ -497,21 +516,31 @@ auto GameServer::DamageAndLog(TokenId id, int amount, const std::string& actor,
   const int temp_before = token->temp_hp;
   const int hp_before = token->hp;
   const int save_bonus = token->save_bonus;
-  const bool concentrating = std::ranges::any_of(
-      token->conditions, [](const Condition& condition) -> bool {
-        return condition.name == kConcentration;
-      });
-  const std::optional<Token> updated = state_.DamageToken(id, amount);
+  const bool was_dead = HasCondition(*token, kDead);
+  const bool concentrating = HasCondition(*token, kConcentration);
+  std::optional<Token> updated = state_.DamageToken(id, amount, critical);
   if (!updated.has_value()) {
     return;
   }
+  // Смерть, 0 HP и недееспособность рвут концентрацию без спасброска.
+  bool concentration_broken = false;
+  if (concentrating && IsIncapacitated(*updated)) {
+    if (std::optional<Token> without =
+            state_.RemoveTokenCondition(id, kConcentration)) {
+      updated = std::move(*without);
+      concentration_broken = true;
+    }
+  }
+  const bool died = !was_dead && HasCondition(*updated, kDead);
   const int absorbed = std::min(temp_before, amount);
   std::ostringstream text;
   text << name << " получил " << amount << " урона";
   if (absorbed > 0) {
     text << " (" << absorbed << " из временных HP)";
   }
-  if (hp_before > 0 && updated->hp == 0) {
+  if (died) {
+    text << "; " << name << " погиб";
+  } else if (hp_before > 0 && updated->hp == 0) {
     text << "; " << name << " без сознания";
   }
   events.emplace_back(TokenUpdated{.token = *updated});
@@ -523,9 +552,19 @@ auto GameServer::DamageAndLog(TokenId id, int amount, const std::string& actor,
   if (!concentrating) {
     return;
   }
+  if (concentration_broken) {
+    events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = AuthorName(actor),
+                        .text = name + ": концентрация сорвана",
+                        .timestamp = CurrentTimeSeconds()},
+    });
+    return;
+  }
   // Проверка концентрации: d20 + бонус спасброска против 10 или половины
-  // полученного урона. Провал снимает состояние «концентрация».
-  const int dc = std::max(10, amount / 2);
+  // полученного урона, но не выше 30. Провал снимает состояние
+  // «концентрация». Бонус спасброска в листе один на все спасброски —
+  // упрощение проекта (см. AGENTS.md).
+  const int dc = ConcentrationDc(amount);
   std::uniform_int_distribution<int> d20(1, 20);
   const int roll = d20(rng_) + save_bonus;
   std::ostringstream check;
@@ -630,7 +669,8 @@ auto GameServer::HandleAttack(const AttackToken& command,
                       .timestamp = CurrentTimeSeconds()},
   });
   if (applied_damage > 0) {
-    DamageAndLog(target_id, applied_damage, actor, outcome.events);
+    DamageAndLog(target_id, applied_damage, check.critical, actor,
+                 outcome.events);
   }
   return outcome;
 }
@@ -687,9 +727,21 @@ auto GameServer::HandleRest(const RestParty& command, bool can_control_all)
   }
   std::string text;
   if (command.long_rest) {
-    text =
-        "Длинный отдых (8 часов): HP, кости хитов и состояния "
-        "восстановлены";
+    int exhaustion_removed = 0;
+    for (const RestChange& change : changed) {
+      exhaustion_removed += change.exhaustion_removed;
+    }
+    text = "Длинный отдых (8 часов): HP и кости хитов восстановлены";
+    if (exhaustion_removed > 0) {
+      text += ", истощение -" + std::to_string(exhaustion_removed);
+    }
+    const bool downed =
+        std::ranges::any_of(state_.Tokens(), [](const Token& token) -> bool {
+          return token.kind == TokenKind::kPlayer && token.hp == 0;
+        });
+    if (downed) {
+      text += "; персонажи на 0 HP не встают";
+    }
   } else {
     std::vector<std::string> parts;
     for (const RestChange& change : changed) {
@@ -819,6 +871,10 @@ auto GameServer::HandleDeathSave(const DeathSave& command,
   if (dead) {
     return CommandOutcome{.reject_reason = "персонаж уже мёртв"};
   }
+  if (token->death_save_successes >= 3) {
+    return CommandOutcome{.reject_reason =
+                              "персонаж стабилен, спасброски не нужны"};
+  }
   const std::string name = token->name;
   std::uniform_int_distribution<int> d20(1, 20);
   const int roll = d20(rng_);
@@ -830,6 +886,12 @@ auto GameServer::HandleDeathSave(const DeathSave& command,
   text << name << ": спасбросок от смерти " << roll;
   if (roll == 20) {
     text << " — критический успех, 1 HP";
+  } else if (roll == 1) {
+    text << " — критический провал (два), " << updated->death_save_failures
+         << "/3";
+    if (updated->death_save_failures >= 3) {
+      text << ", персонаж погиб";
+    }
   } else if (roll >= 10) {
     text << " — успех (" << updated->death_save_successes << "/3)";
     if (updated->death_save_successes >= 3) {
@@ -1163,10 +1225,19 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
     }
   }
   const Token before = *token;
-  const std::optional<Token> updated =
+  std::optional<Token> updated =
       state_.UpdateTokenCombat(command.id, command.conditions);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить состояния"};
+  }
+  // Недееспособность и смерть рвут концентрацию без спасброска.
+  bool concentration_broken = false;
+  if (HasCondition(*updated, kConcentration) && IsIncapacitated(*updated)) {
+    if (const std::optional<Token> without =
+            state_.RemoveTokenCondition(command.id, kConcentration)) {
+      updated = *without;
+      concentration_broken = true;
+    }
   }
   CommandOutcome outcome;
   outcome.accepted = true;
@@ -1203,6 +1274,10 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
     if (!has_condition(command.conditions, condition.name)) {
       changes.emplace_back("−" + condition.name);
     }
+  }
+  if (concentration_broken) {
+    changes.emplace_back("−" + std::string(kConcentration) +
+                         " (недееспособен)");
   }
   if (!changes.empty()) {
     outcome.events.emplace_back(LogLineAdded{

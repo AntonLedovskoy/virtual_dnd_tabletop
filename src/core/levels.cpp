@@ -67,7 +67,7 @@ auto HitDiceAvailable(int level, int spent) -> int {
 }
 
 auto HitDieHeal(int roll, int con_modifier) -> int {
-  return std::max(0, roll + con_modifier);
+  return std::max(1, roll + con_modifier);
 }
 
 auto IsAbilityScoreLevel(int level) -> bool {

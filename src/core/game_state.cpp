@@ -66,6 +66,33 @@ auto RemoveCondition(Token& token, std::string_view name) -> bool {
                        }) > 0;
 }
 
+auto HasCondition(const Token& token, std::string_view name) -> bool {
+  return std::ranges::any_of(token.conditions,
+                             [name](const Condition& condition) -> bool {
+                               return condition.name == name;
+                             });
+}
+
+// Гибель: «без сознания» заменяется на «мёртв».
+auto KillToken(Token& token) -> void {
+  RemoveCondition(token, kUnconscious);
+  AddConditionIfMissing(token, Condition{std::string(kDead)});
+}
+
+// Длинный отдых снимает ровно один уровень истощения; уровни хранятся
+// отдельными записями состояния.
+auto RemoveExhaustionLevel(Token& token) -> bool {
+  const auto it = std::ranges::find_if(token.conditions,
+                                       [](const Condition& condition) -> bool {
+                                         return condition.name == kExhaustion;
+                                       });
+  if (it == token.conditions.end()) {
+    return false;
+  }
+  token.conditions.erase(it);
+  return true;
+}
+
 // Прокручивает игровое время для состояний одного токена: срочные
 // уменьшаются на seconds, нулевые держатся до ручного снятия. Возвращает
 // true, если набор состояний изменился.
@@ -225,28 +252,38 @@ auto GameState::SetTokenHp(TokenId id, int hp) -> std::optional<Token> {
   return *token;
 }
 
-auto GameState::DamageToken(TokenId id, int amount) -> std::optional<Token> {
+auto GameState::DamageToken(TokenId id, int amount, bool critical)
+    -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
   }
-  const bool was_down = token->hp == 0;
+  const bool dead = HasCondition(*token, kDead);
+  const bool was_down = token->hp == 0 && !dead;
   int remaining = std::max(0, amount);
   const int absorbed = std::min(token->temp_hp, remaining);
   token->temp_hp -= absorbed;
   remaining -= absorbed;
+  // Остаток урона, который уходит ниже нуля. Не меньше максимума HP —
+  // мгновенная смерть, даже если персонаж ещё стоял.
+  const int overflow = std::max(0, remaining - token->hp);
   token->hp = std::max(0, token->hp - remaining);
-  if (token->hp == 0 && !was_down) {
+  if (overflow >= token->max_hp) {
+    KillToken(*token);
+    return *token;
+  }
+  if (token->hp == 0 && !was_down && !dead) {
     token->death_save_successes = 0;
     token->death_save_failures = 0;
     AddConditionIfMissing(*token, Condition{std::string(kUnconscious)});
   }
   if (was_down && amount > 0) {
-    // Удар по лежачему — провал спасброска от смерти.
-    token->death_save_failures = std::min(3, token->death_save_failures + 1);
+    // Удар по лежачему — провал спасброска от смерти, критический — два.
+    const int failures = critical ? 2 : 1;
+    token->death_save_failures =
+        std::min(3, token->death_save_failures + failures);
     if (token->death_save_failures >= 3) {
-      RemoveCondition(*token, kUnconscious);
-      AddConditionIfMissing(*token, Condition{std::string(kDead)});
+      KillToken(*token);
     }
   }
   return *token;
@@ -271,6 +308,10 @@ auto GameState::DeathSave(TokenId id, int roll) -> std::optional<Token> {
   if (token == nullptr || token->hp > 0) {
     return std::nullopt;
   }
+  // Мёртвый и стабильный спасброски не бросают.
+  if (HasCondition(*token, kDead) || token->death_save_successes >= 3) {
+    return std::nullopt;
+  }
   if (roll == 20) {
     token->hp = 1;
     token->death_save_successes = 0;
@@ -280,16 +321,15 @@ auto GameState::DeathSave(TokenId id, int roll) -> std::optional<Token> {
   }
   if (roll >= 10) {
     token->death_save_successes = std::min(3, token->death_save_successes + 1);
-    if (token->death_save_successes >= 3) {
-      // Три успеха: персонаж стабилен, но всё ещё без сознания на нуле HP.
-      RemoveCondition(*token, kUnconscious);
-    }
-  } else {
-    token->death_save_failures = std::min(3, token->death_save_failures + 1);
-    if (token->death_save_failures >= 3) {
-      RemoveCondition(*token, kUnconscious);
-      AddConditionIfMissing(*token, Condition{std::string(kDead)});
-    }
+    // Три успеха: персонаж стабилен, но всё ещё без сознания на нуле HP.
+    // «Без сознания» снимает только лечение или возврат HP.
+    return *token;
+  }
+  // Натуральная 1 — два провала, остальные числа ниже 10 — один.
+  token->death_save_failures =
+      std::min(3, token->death_save_failures + (roll == 1 ? 2 : 1));
+  if (token->death_save_failures >= 3) {
+    KillToken(*token);
   }
   return *token;
 }
@@ -307,20 +347,19 @@ auto GameState::RestParty(bool long_rest, std::mt19937& rng)
     const std::size_t old_conditions = token.conditions.size();
     // Время отдыха идёт для всех: срочные состояния истекают и у монстров.
     TickConditions(token, rest_seconds);
-    if (token.kind != TokenKind::kPlayer) {
-      if (token.conditions.size() != old_conditions) {
-        changed.push_back(RestChange{.token = token});
-      }
-      continue;
-    }
+    // Отдых приносит пользу только персонажу хотя бы с 1 HP: мёртвый,
+    // стабильный на нуле и лежачий без сознания не встаёт.
+    const bool benefits = token.kind == TokenKind::kPlayer && token.hp > 0 &&
+                          !HasCondition(token, kDead);
+    int exhaustion_removed = 0;
     if (long_rest) {
-      token.hp = token.max_hp;
-      token.temp_hp = 0;
-      token.conditions.clear();
-      token.death_save_successes = 0;
-      token.death_save_failures = 0;
-      token.hit_dice_spent = 0;
-    } else {
+      if (benefits) {
+        token.hp = token.max_hp;
+        token.temp_hp = 0;
+        token.hit_dice_spent = 0;
+        exhaustion_removed = RemoveExhaustionLevel(token) ? 1 : 0;
+      }
+    } else if (benefits) {
       // Короткий отдых тратит кости хитов, пока не восстановлен максимум
       // HP или не кончился запас.
       const int level = LevelForXp(token.xp);
@@ -347,7 +386,8 @@ auto GameState::RestParty(bool long_rest, std::mt19937& rng)
       changed.push_back(
           RestChange{.token = token,
                      .dice_spent = token.hit_dice_spent - old_spent,
-                     .hp_restored = token.hp - old_hp});
+                     .hp_restored = token.hp - old_hp,
+                     .exhaustion_removed = exhaustion_removed});
     }
   }
   return changed;

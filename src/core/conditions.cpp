@@ -1,5 +1,7 @@
 #include "core/conditions.h"
 
+#include <algorithm>
+
 #include "core/token.h"
 
 namespace dnd {
@@ -43,6 +45,15 @@ auto FormatConditionDuration(int seconds) -> std::string {
     return FormatUnit(seconds / kSecondsPerRound, "ход", "хода", "ходов");
   }
   return FormatUnit(seconds, "секунда", "секунды", "секунд");
+}
+
+auto ConcentrationDc(int damage) -> int {
+  return std::min(30, std::max(10, damage / 2));
+}
+
+auto IsIncapacitatingCondition(std::string_view name) -> bool {
+  return name == kUnconscious || name == kIncapacitated || name == kDead ||
+         name == "парализован" || name == "оглушён" || name == "окаменел";
 }
 
 auto ConvertLegacyConditionRounds(std::vector<Condition>& conditions) -> void {
