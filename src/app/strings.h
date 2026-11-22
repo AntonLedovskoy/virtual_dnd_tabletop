@@ -159,6 +159,7 @@ inline constexpr std::array<std::string_view, 19> kHelpDm = {
     "/time 10 — прокрутить 10 минут вне боя (s/m/h)",
 };
 
+inline constexpr std::string_view kWindowTitle = "Виртуальный стол для D&D";
 inline constexpr std::string_view kMenuTitle = "DND";
 inline constexpr std::string_view kMenuSubtitle = "Виртуальный стол";
 inline constexpr std::string_view kHostTab = "Хост";

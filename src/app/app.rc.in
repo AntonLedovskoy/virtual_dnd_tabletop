@@ -1,0 +1,3 @@
+// Ресурсы exe: иконку показывают проводник, панель задач и заголовок окна.
+// Путь к .ico подставляет CMake (см. configure_file в CMakeLists.txt).
+IDI_APP_ICON ICON "@DND_ICON_PATH@"

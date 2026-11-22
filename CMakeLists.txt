@@ -193,9 +193,14 @@ add_executable(${PROJECT_NAME}
 )
 
 # GUI-сборка без окна консоли: диагностика идёт в virtual_dnd_tabletop.log
-# рядом с .exe.
+# рядом с .exe. Иконка exe (проводник, панель задач) — ресурс из
+# assets/icon.ico; окно ставит её же из встроенного PNG.
 if(WIN32)
   set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
+  enable_language(RC)
+  set(DND_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.ico")
+  configure_file(src/app/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
+  target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
 endif()
 
 # Версия из git describe: строка `DND_VERSION` уходит в `--version`, в

@@ -19,6 +19,7 @@
 #include <variant>
 #include <vector>
 
+#include "app/icon_png.h"
 #include "app/strings.h"
 #include "app/update_service.h"
 #include "core/bestiary.h"
@@ -292,6 +293,18 @@ auto VersionWithProtocol(const Version& version, std::uint32_t protocol)
          std::to_string(protocol) + ")";
 }
 
+// Иконка окна лежит в exe (src/app/icon_png.h): игра не ищет файл рядом с
+// собой, а окно и панель задач выглядят одинаково.
+auto LoadWindowIcon() -> SDL_Surface* {
+  SDL_IOStream* stream = SDL_IOFromConstMem(kIconPng.data(), kIconPng.size());
+  if (stream == nullptr) {
+    return nullptr;
+  }
+  SDL_Surface* surface = IMG_LoadPNG_IO(stream);
+  SDL_CloseIO(stream);
+  return surface;
+}
+
 }  // namespace
 
 App::App(AppOptions options)
@@ -325,11 +338,15 @@ auto App::Initialize() -> bool {
     SDL_Log("SDL_Init failed: %s", SDL_GetError());
     return false;
   }
-  window_ = SDL_CreateWindow("virtual_dnd_tabletop", kWindowWidth,
-                             kWindowHeight, SDL_WINDOW_RESIZABLE);
+  window_ = SDL_CreateWindow(std::string(strings::kWindowTitle).c_str(),
+                             kWindowWidth, kWindowHeight, SDL_WINDOW_RESIZABLE);
   if (window_ == nullptr) {
     SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
     return false;
+  }
+  if (SDL_Surface* icon = LoadWindowIcon(); icon != nullptr) {
+    SDL_SetWindowIcon(window_, icon);
+    SDL_DestroySurface(icon);
   }
   renderer_ = SDL_CreateRenderer(window_, nullptr);
   if (renderer_ == nullptr) {
