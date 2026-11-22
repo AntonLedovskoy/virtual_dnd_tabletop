@@ -48,6 +48,12 @@ auto AddScene(Overlay& overlay, SceneId id, std::string name,
 // Удаление: базовая сцена получает tombstone, сцена партии исчезает.
 auto RemoveScene(Overlay& overlay, SceneId id) -> bool;
 
+// Удаляет сцену index из объединённого списка партии: активной становится
+// соседняя, её id сразу пишется в оверлей, чтобы перезапуск её сохранил.
+// false — последнюю сцену удалить нельзя или запись оверлея не удалась.
+auto DeletePartyScene(Campaign& merged, Overlay& overlay, std::size_t index)
+    -> bool;
+
 // «Сбросить сцену к кампании»: запись партии стирается без tombstone, сцена
 // снова берётся из файла кампании. false — записи и так не было.
 auto ClearScene(Overlay& overlay, SceneId id) -> bool;

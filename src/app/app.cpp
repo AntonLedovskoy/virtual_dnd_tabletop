@@ -485,6 +485,11 @@ auto App::StartHost() -> bool {
     party_mismatch_ = false;
     RefreshCampaignLibrary();
   } else {
+    // Незаписанную партию не бросаем: старт хоста перечитывает диск, поэтому
+    // сначала доводим запись до конца.
+    if (overlay_write_failed_ && !SaveOverlay()) {
+      return false;
+    }
     const std::filesystem::path campaign_path =
         campaign_files_.empty() ? AssetPath("campaign.dndcamp")
                                 : AssetPath(campaign_files_[campaign_index_]);
@@ -621,6 +626,10 @@ auto App::StartClient() -> bool {
 }
 
 auto App::StartEditor() -> void {
+  // Недописанную партию не бросаем: вход в редактор перечитывает диск.
+  if (overlay_write_failed_ && !SaveOverlay()) {
+    return;
+  }
   in_editor_ = true;
   in_game_ = false;
   client_connecting_ = false;
@@ -680,6 +689,7 @@ auto App::SubmitMenu() -> void {
 auto App::ExitToMenu() -> void {
   exit_confirm_active_ = false;
   const bool was_host = options_.mode == AppMode::kHost;
+  bool party_saved = true;
   if (in_editor_) {
     campaign_saver_.Flush();
   }
@@ -687,7 +697,7 @@ auto App::ExitToMenu() -> void {
     if (in_game_) {
       // Партия — отдельный файл: кампания при выходе не меняется.
       StoreActiveScene();
-      SaveOverlay();
+      party_saved = SaveOverlay();
     }
     net_server_.Stop();
   } else {
@@ -704,6 +714,11 @@ auto App::ExitToMenu() -> void {
   menu_.active_field = MenuField::kNone;
   menu_.busy = false;
   menu_.status.clear();
+  if (!party_saved) {
+    // Ошибка записи партии не должна исчезнуть вместе со старым статусом:
+    // смена кампании и старт хоста ждут успешного повтора.
+    menu_.status = std::string(strings::kPartySaveFailed);
+  }
 
   chat_.Close();
   help_active_ = false;
@@ -728,8 +743,11 @@ auto App::ExitToMenu() -> void {
   player_owners_.clear();
   ClearUndo();
   RefreshCampaignLibrary();
-  if (!LoadSelectedCampaign(LoadMode::kGame) && campaign_.scenes.empty()) {
-    PrepareDefaultCampaign();
+  // Партия не записалась: в памяти её свежая копия, перечитывать диск нельзя.
+  if (party_saved) {
+    if (!LoadSelectedCampaign(LoadMode::kGame) && campaign_.scenes.empty()) {
+      PrepareDefaultCampaign();
+    }
   }
   SDL_Log("returned to menu");
 }
@@ -4479,6 +4497,7 @@ auto App::SaveOverlay() -> bool {
   }
   RequestOverlaySave();
   if (!overlay_saver_.Flush()) {
+    overlay_write_failed_ = true;
     SDL_Log("overlay save failed");
     if (in_game_) {
       view_.AddLocalLine(std::string(strings::kPartySaveFailed));
@@ -4487,6 +4506,7 @@ auto App::SaveOverlay() -> bool {
     }
     return false;
   }
+  overlay_write_failed_ = false;
   autosave_.Saved();
   party_exists_ = true;
   return true;
@@ -4541,6 +4561,7 @@ auto App::PrepareDefaultCampaign() -> void {
   party_exists_ = false;
   party_error_ = false;
   party_mismatch_ = false;
+  overlay_write_failed_ = false;
   scene_ = campaign_.scenes[campaign_.active].snapshot;
   scene_.encounter = Encounter{};
   server_.Reset(scene_);
@@ -4621,6 +4642,11 @@ auto App::LoadSelectedCampaign(LoadMode mode) -> bool {
   if (campaign_.scenes.empty()) {
     PrepareDefaultCampaign();
     return false;
+  }
+  // Оверлей теперь ровно тот, что на диске (или свежий): старую ошибку
+  // записи больше не держим. Редактор оверлей не перечитывает.
+  if (mode == LoadMode::kGame) {
+    overlay_write_failed_ = false;
   }
   scene_ = campaign_.scenes[campaign_.active].snapshot;
   scene_.encounter = Encounter{};
@@ -4742,6 +4768,19 @@ auto App::SelectCampaign(int delta) -> void {
   if (campaign_files_.empty() || delta == 0) {
     return;
   }
+  // Недописанную партию нельзя бросить при смене кампании: сначала доводим
+  // запись до диска. Ошибка остаётся в меню и блокирует переход.
+  const bool overlay_pending = overlay_saver_.Busy() || overlay_write_failed_;
+  if (campaign_file_loaded_ && overlay_pending) {
+    RequestOverlaySave();
+    if (!overlay_saver_.Flush()) {
+      overlay_write_failed_ = true;
+      menu_.status = std::string(strings::kPartySaveFailed);
+      SDL_Log("campaign switch blocked: overlay save failed");
+      return;
+    }
+    overlay_write_failed_ = false;
+  }
   campaign_index_ = WrapIndex(campaign_index_, delta, campaign_files_.size());
   new_party_confirm_.Clear();
   (void)LoadSelectedCampaign(LoadMode::kGame);
@@ -4756,6 +4795,7 @@ auto App::CheckAutosave() -> void {
   const auto now = std::chrono::steady_clock::now();
   if (const std::optional<bool> result = overlay_saver_.TakeResult()) {
     if (!*result) {
+      overlay_write_failed_ = true;
       SDL_Log("overlay save failed");
       // Запись не удалась: не долбим диск каждый кадр, повторим позже.
       autosave_.SaveFailed(now);
@@ -4763,6 +4803,7 @@ auto App::CheckAutosave() -> void {
       // Мир изменился, пока шла запись: нужен ещё один проход после паузы.
       autosave_.ChangedDuringSave(now);
     } else {
+      overlay_write_failed_ = false;
       autosave_.Saved();
       SDL_Log("party autosaved");
     }
@@ -4989,17 +5030,13 @@ auto App::DeleteActiveScene() -> void {
     return;
   }
   const std::size_t removed = campaign_.active;
-  const SceneId removed_id = campaign_.scenes[removed].id;
   const std::string name = campaign_.scenes[removed].name;
-  if (!RemoveScene(overlay_, removed_id)) {
+  // Соседняя сцена становится активной, её id сразу уходит в оверлей.
+  if (!DeletePartyScene(campaign_, overlay_, removed)) {
     view_.AddLocalLine("Не удалось удалить сцену");
     return;
   }
-  campaign_.scenes.erase(campaign_.scenes.begin() +
-                         static_cast<std::ptrdiff_t>(removed));
-  const std::size_t next = IndexAfterDelete(removed, campaign_.scenes.size());
-  campaign_.active = next;
-  SetActive(overlay_, campaign_.scenes[next].id);
+  const std::size_t next = campaign_.active;
   scenes_selected_ = next;
   ResetWorld(campaign_.scenes[next].snapshot);
   SDL_Log("scene '%s' deleted", name.c_str());

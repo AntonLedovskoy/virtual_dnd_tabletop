@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "core/navigation.h"
 #include "core/utf8.h"
 
 namespace dnd {
@@ -111,6 +112,23 @@ auto RemoveScene(Overlay& overlay, SceneId id) -> bool {
     return false;
   }
   overlay.scenes.push_back(OverlayScene{.id = id, .deleted = true});
+  return true;
+}
+
+auto DeletePartyScene(Campaign& merged, Overlay& overlay, std::size_t index)
+    -> bool {
+  if (index >= merged.scenes.size() || !CanDeleteScene(merged)) {
+    return false;
+  }
+  const SceneId id = merged.scenes[index].id;
+  if (!RemoveScene(overlay, id)) {
+    return false;
+  }
+  merged.scenes.erase(merged.scenes.begin() +
+                      static_cast<std::ptrdiff_t>(index));
+  const std::size_t next = IndexAfterDelete(index, merged.scenes.size());
+  merged.active = next;
+  SetActive(overlay, merged.scenes[next].id);
   return true;
 }
 

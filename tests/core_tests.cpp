@@ -4893,6 +4893,75 @@ auto TestOverlayMerge() -> void {
          "deleted party scene ids are not reused");
 }
 
+// Удаление активной сцены в партии: соседняя становится активной, её id
+// переживает перезапуск, а последнюю сцену объединённого списка не удалить.
+auto TestPartySceneDelete() -> void {
+  const dnd::GameSnapshot plain{.map = dnd::GridMap(4, 4), .next_token_id = 1};
+  dnd::Campaign base = dnd::MakeCampaign(plain, "Пролог");
+  base.scenes.push_back(dnd::Scene{
+      .id = dnd::NextSceneId(base), .name = "Пещера", .snapshot = plain});
+  base.scenes.push_back(dnd::Scene{
+      .id = dnd::NextSceneId(base), .name = "Финал", .snapshot = plain});
+  base.active = 1;
+  const dnd::SceneId cave = base.scenes[1].id;
+
+  dnd::Overlay overlay = dnd::FreshOverlay(base);
+  dnd::Campaign merged = dnd::ApplyOverlay(base, overlay).campaign;
+  Expect(merged.scenes.size() == 3 && merged.active == 1,
+         "the party starts on the campaign's active scene");
+  for (const dnd::Scene& scene : merged.scenes) {
+    Expect(dnd::SetSceneSnapshot(overlay, scene.id, scene.snapshot),
+           "a played scene is recorded");
+  }
+
+  Expect(dnd::DeletePartyScene(merged, overlay, merged.active),
+         "the active scene is deleted in the party");
+  const dnd::SceneId neighbour = merged.scenes[merged.active].id;
+  Expect(merged.scenes.size() == 2 && neighbour != cave &&
+             dnd::FindSceneIndex(merged, cave) == dnd::kNoScene,
+         "the deleted scene leaves the merged list");
+  Expect(overlay.active == neighbour,
+         "the neighbouring scene id is stored in the overlay");
+
+  // id активной сцены доезжает до файла партии и восстанавливает выбор.
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "dnd_core_tests_party_delete.dndoverlay";
+  Expect(dnd::WriteOverlay(overlay, path), "the party is written");
+  const std::optional<dnd::Overlay> loaded = dnd::ReadOverlay(path);
+  Expect(loaded.has_value() && loaded->active == neighbour,
+         "the neighbouring id survives the restart");
+  if (loaded.has_value()) {
+    const dnd::OverlayMerge reopened = dnd::ApplyOverlay(base, *loaded);
+    Expect(reopened.campaign.active ==
+               dnd::FindSceneIndex(reopened.campaign, neighbour),
+           "the reopened party stays on the neighbouring scene");
+  }
+  std::filesystem::remove(path);
+
+  // Сцена, созданная в партии, удаляется из записей оверлея.
+  const dnd::SceneId added = dnd::NextOverlaySceneId(overlay);
+  Expect(dnd::AddScene(overlay, added, "Новая", plain),
+         "a party scene is added");
+  merged.scenes.push_back(
+      dnd::Scene{.id = added, .name = "Новая", .snapshot = plain});
+  merged.active = merged.scenes.size() - 1;
+  Expect(dnd::DeletePartyScene(merged, overlay, merged.active) &&
+             dnd::FindOverlayScene(overlay, added) == nullptr,
+         "a party scene is deleted without a tombstone");
+  Expect(overlay.active == merged.scenes[merged.active].id,
+         "the party scene deletion stores the new active id");
+
+  // Последнюю сцену объединённого списка удалить нельзя.
+  while (merged.scenes.size() > 1) {
+    Expect(dnd::DeletePartyScene(merged, overlay, merged.active),
+           "scenes are deleted down to the last one");
+  }
+  Expect(merged.scenes.size() == 1 && !dnd::CanDeleteScene(merged) &&
+             !dnd::DeletePartyScene(merged, overlay, 0) &&
+             merged.scenes.size() == 1,
+         "the last scene of the merged list stays");
+}
+
 // Файл партии: DNDO, строгий декодер, атомарная запись.
 auto TestOverlayRoundtrip() -> void {
   const dnd::GameSnapshot plain{.map = dnd::GridMap(3, 3), .next_token_id = 1};
@@ -5103,6 +5172,12 @@ auto TestOverlaySaver() -> void {
                              "dnd_no_such_dir" / "party.dndoverlay");
   Expect(!saver.Flush(), "a failed party write is reported");
   Expect(!saver.TakeResult().has_value(), "Flush consumes the party result");
+
+  // Смена кампании после ошибки: повторная запись свежей партии доходит до
+  // диска, поэтому переход можно разрешать.
+  saver.Request(overlay, path);
+  Expect(saver.Flush() && dnd::ReadOverlay(path).has_value(),
+         "a retry after a failed party write reaches the disk");
 
   {
     dnd::OverlaySaver last;
@@ -7369,6 +7444,7 @@ auto main() -> int {
     TestCampaignSaver();
     TestSceneIds();
     TestOverlayMerge();
+    TestPartySceneDelete();
     TestOverlayRoundtrip();
     TestCampaignUntouched();
     TestOverlayDirty();

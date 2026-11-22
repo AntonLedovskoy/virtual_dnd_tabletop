@@ -498,6 +498,9 @@ class App {
   bool party_exists_ = false;
   bool party_error_ = false;
   bool party_mismatch_ = false;
+  // Последняя запись партии не дошла до диска: менять кампанию нельзя, пока
+  // повторная запись не удастся.
+  bool overlay_write_failed_ = false;
   // «Новая партия» требует повторного N.
   DeleteConfirm new_party_confirm_;
   // Правка мира: номер текущей версии и версии, ушедшей в последнюю запись.
