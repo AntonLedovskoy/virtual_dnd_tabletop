@@ -9,6 +9,7 @@
 
 #include "core/conditions.h"
 #include "core/levels.h"
+#include "core/player_name.h"
 #include "core/units.h"
 
 namespace dnd {
@@ -156,6 +157,13 @@ GameState::GameState(GameSnapshot snapshot)
   std::ranges::sort(revealed_, CellOrder);
   const auto duplicates = std::ranges::unique(revealed_);
   revealed_.erase(duplicates.begin(), duplicates.end());
+  // Монстры и NPC всегда принадлежат DM: старые файлы и отменённые действия
+  // могли оставить их без владельца, а свободных монстров за столом нет.
+  for (Token& token : tokens_) {
+    if (token.kind != TokenKind::kPlayer && token.owner.empty()) {
+      token.owner = std::string(kDmOwner);
+    }
+  }
 }
 
 auto GameState::Snapshot() const -> GameSnapshot {
@@ -432,6 +440,11 @@ auto GameState::SetTokenOwner(TokenId id, std::string owner)
     -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
+    return std::nullopt;
+  }
+  // Монстров и NPC нельзя ни освободить, ни передать игроку: пока в проекте
+  // нет союзных NPC под управлением игрока, их владелец всегда DM.
+  if (token->kind != TokenKind::kPlayer && !SamePlayerName(owner, kDmOwner)) {
     return std::nullopt;
   }
   token->owner = std::move(owner);

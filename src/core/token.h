@@ -39,8 +39,9 @@ struct Condition {
 struct Token {
   TokenId id = 0;
   std::string name;
-  // Пустой owner означает свободный/общий токен, который может двигать любой
-  // игрок; DM всегда может двигать любой токен.
+  // Пустой owner бывает только у ещё не занятого персонажа: такой токен
+  // никто из игроков не двигает, пока его не заберут. У монстров и NPC
+  // владелец всегда DM (core/player_name.h, kDmOwner).
   std::string owner;
   int hp = 10;
   int max_hp = 10;

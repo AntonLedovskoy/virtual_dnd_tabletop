@@ -274,8 +274,8 @@ auto GameServer::CanControl(const Token& token, const std::string& actor,
   if (can_control_all) {
     return true;
   }
-  // Персонажи заблокированы, пока их кто-нибудь не заберёт. Свободных NPC
-  // и общие токены по-прежнему может двигать любой игрок.
+  // Персонажи заблокированы, пока их кто-нибудь не заберёт. У монстров и NPC
+  // владелец всегда DM, поэтому свободными они не бывают.
   if (token.kind == TokenKind::kPlayer && token.owner.empty()) {
     return false;
   }
@@ -588,7 +588,7 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
     return CommandOutcome{.reject_reason = "имя владельца слишком длинное"};
   }
   if (owner.empty() && command.kind != TokenKind::kPlayer) {
-    owner = "dm";
+    owner = std::string(kDmOwner);
   }
 
   const bool encounter_active = state_.EncounterState().active;
@@ -1419,6 +1419,11 @@ auto GameServer::HandleReleaseToken(const ReleaseToken& command,
   if (token == nullptr) {
     return CommandOutcome{.reject_reason = "токен не найден"};
   }
+  // Монстры и NPC всегда принадлежат DM: снять владельца нельзя, иначе
+  // токен станет свободным и его начнут двигать игроки.
+  if (token->kind != TokenKind::kPlayer) {
+    return CommandOutcome{.reject_reason = "монстр всегда принадлежит DM"};
+  }
   const std::optional<Token> updated = state_.SetTokenOwner(command.id, "");
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось освободить персонажа"};
@@ -1437,6 +1442,15 @@ auto GameServer::HandleSetTokenOwner(const SetTokenOwner& command,
   }
   if (command.owner.size() > kMaxTokenName) {
     return CommandOutcome{.reject_reason = "имя владельца слишком длинное"};
+  }
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  // Монстра нельзя освободить или передать игроку: пока ими владеет только DM.
+  if (token->kind != TokenKind::kPlayer &&
+      !SamePlayerName(command.owner, kDmOwner)) {
+    return CommandOutcome{.reject_reason = "монстр всегда принадлежит DM"};
   }
   const std::optional<Token> updated =
       state_.SetTokenOwner(command.id, command.owner);

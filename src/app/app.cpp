@@ -109,7 +109,7 @@ auto BuildSnapshot() -> GameSnapshot {
             .cell = Cell{.x = 2, .y = 2}},
       Token{.id = kGoblinId,
             .name = "Гоблин",
-            .owner = "dm",
+            .owner = std::string(kDmOwner),
             .kind = TokenKind::kMonster,
             .cell = Cell{.x = 10, .y = 4}},
       Token{.id = kAllyId,
@@ -849,7 +849,7 @@ auto App::AddEditorToken(Cell cell, TokenKind kind) -> void {
   scene_.tokens.push_back(Token{
       .id = scene_.next_token_id++,
       .name = player ? "Персонаж" : "Монстр",
-      .owner = player ? "" : "dm",
+      .owner = player ? std::string() : std::string(kDmOwner),
       .hp = 10,
       .max_hp = 10,
       .kind = kind,
@@ -883,7 +883,7 @@ auto App::SpawnEditorBestiary(int index, bool group) -> void {
     if (numbered) {
       token.name += " " + std::to_string(i + 1);
     }
-    token.owner = "dm";
+    token.owner = std::string(kDmOwner);
     token.hp = monster.max_hp;
     token.max_hp = monster.max_hp;
     token.ac = monster.ac;
@@ -2591,7 +2591,7 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
     SendCommand(AddToken{
         .name = player ? "Персонаж" : "Монстр",
         .cell = target,
-        .owner = player ? "" : "dm",
+        .owner = player ? std::string() : std::string(kDmOwner),
         .kind = kind,
         .max_hp = 10,
     });
@@ -2931,6 +2931,11 @@ auto App::ReleaseSelectedToken() -> void {
   const Token* token = FindSelectedToken();
   if (token == nullptr) {
     view_.AddLocalLine(std::string(strings::kSelectToken));
+    return;
+  }
+  // Монстры и NPC всегда принадлежат DM: отвязать их от ведущего нельзя.
+  if (token->kind != TokenKind::kPlayer) {
+    view_.AddLocalLine(std::string(strings::kMonsterOwnerDm));
     return;
   }
   SendCommand(ReleaseToken{.id = token->id});
@@ -3403,7 +3408,7 @@ auto App::SpawnBestiary(int index, bool group) -> void {
     SendCommand(AddToken{
         .name = std::move(name),
         .cell = cells[i],
-        .owner = "dm",
+        .owner = std::string(kDmOwner),
         .kind = TokenKind::kMonster,
         .max_hp = monster.max_hp,
         .ac = monster.ac,
@@ -3986,6 +3991,12 @@ auto App::SubmitChat() -> void {
     case ChatCommandKind::kOwner:
       if (token == nullptr) {
         view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      // Монстра нельзя освободить или отдать игроку: владелец всегда DM.
+      if (token->kind != TokenKind::kPlayer &&
+          !SamePlayerName(command.text, kDmOwner)) {
+        view_.AddLocalLine(std::string(strings::kMonsterOwnerDm));
         return;
       }
       SendCommand(SetTokenOwner{.id = token->id, .owner = command.text});

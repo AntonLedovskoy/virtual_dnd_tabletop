@@ -116,7 +116,7 @@ virtual_dnd_tabletop [--menu] [--host] [--editor] [--port N]
 | `/claim`, `/ping` | все | забрать персонажа, метка «здесь» |
 | `/portrait FILE`, `/portrait off` | владелец или DM | портрет токена |
 | `/damage N [ТИП]`, `/heal N`, `/deathsave` | все | урон (например, `/damage 7 огонь`), лечение, спасброски от смерти |
-| `/owner NAME`, `/owner` | DM | назначить или снять владельца |
+| `/owner NAME`, `/owner` | DM | назначить или снять владельца персонажа (у монстров и NPC владелец всегда DM) |
 | `/rename NAME`, `/xp N [all]` | DM | имя токена, опыт |
 | `/rest [N]`, `/longrest`, `/time N[s\|m\|h]`, `/fall N` | DM | отдых (до N костей хитов), игровое время, падение с высоты |
 | `/reveal`, `/unreveal`, `/reveal off` | DM | открыть/закрыть область под курсором |

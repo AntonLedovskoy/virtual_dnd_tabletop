@@ -30,6 +30,8 @@ inline constexpr std::string_view kClaimOnce =
     "Персонажа выбирают один раз, дальше назначает DM";
 inline constexpr std::string_view kReleaseDmOnly =
     "Освободить персонажа может только DM";
+inline constexpr std::string_view kMonsterOwnerDm =
+    "Монстр всегда принадлежит DM";
 inline constexpr std::string_view kColorDmOnly = "Цвет токена меняет только DM";
 inline constexpr std::string_view kRenameDmOnly =
     "Переименовывает токен только DM";

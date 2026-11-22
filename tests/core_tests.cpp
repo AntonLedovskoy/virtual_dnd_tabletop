@@ -326,6 +326,9 @@ auto TestServerVisibility() -> void {
 
   dnd::GameServer server(snapshot, 10);
 
+  Expect(TokenOf(server.State(), 2).owner == "dm",
+         "an unowned monster is given to the DM on load");
+
   const dnd::GameSnapshot client = server.ClientSnapshot("alice");
   Expect(client.tokens.size() == 1, "hidden token is not in client snapshot");
   Expect(client.tokens.front().id == 1, "visible token is in client snapshot");
@@ -365,7 +368,7 @@ auto TestServerVisibility() -> void {
   // Токен, скрытый при входе клиента, должен появиться, когда он попадёт
   // в поле зрения игрока. После команды приложение присылает полный срез.
   const dnd::CommandOutcome reveal = server.HandleCommand(
-      dnd::MoveToken{.id = 2, .target = CellAt(4, 0)}, "alice", false);
+      dnd::MoveToken{.id = 2, .target = CellAt(4, 0)}, "", true);
   Expect(reveal.accepted, "goblin move into sight is accepted");
   for (const dnd::Event& event : reveal.events) {
     view.Apply(event);
@@ -416,6 +419,21 @@ auto TestOwnership() -> void {
   const dnd::CommandOutcome dm_move = server.HandleCommand(
       dnd::MoveToken{.id = 2, .target = CellAt(16, 0)}, "", true);
   Expect(dm_move.accepted, "DM may move any token");
+
+  // Монстр всегда принадлежит DM: освободить или передать его нельзя.
+  Expect(!server.HandleCommand(dnd::ReleaseToken{.id = 2}, "", true).accepted,
+         "the DM cannot release a monster");
+  Expect(
+      !server.HandleCommand(dnd::SetTokenOwner{.id = 2, .owner = ""}, "", true)
+           .accepted,
+      "a monster cannot lose its owner");
+  Expect(!server
+              .HandleCommand(dnd::SetTokenOwner{.id = 2, .owner = "alice"}, "",
+                             true)
+              .accepted,
+         "a monster cannot be handed to a player");
+  Expect(TokenOf(server.State(), 2).owner == "dm",
+         "the monster stays with the DM");
 
   const dnd::CommandOutcome locked_move = server.HandleCommand(
       dnd::MoveToken{.id = 3, .target = CellAt(5, 0)}, "bob", false);
