@@ -19,6 +19,7 @@ auto ClientView::Reset(GameSnapshot snapshot, const FogSnapshot& fog) -> void {
   fog_.Restore(fog);
   // Мир пересобран: старые метки указывали на прежнюю карту.
   pings_.clear();
+  pending_move_.reset();
 }
 
 auto ClientView::Apply(const Event& event) -> void {
@@ -28,6 +29,13 @@ auto ClientView::Apply(const Event& event) -> void {
         if constexpr (std::is_same_v<T, TokenMoved>) {
           if (Token* token = FindToken(ev.id)) {
             token->cell = ev.to;
+          }
+          // Сервер ответил на свой ход: предугадывание больше не нужно.
+          // Ход на другую клетку — это ответ на более раннюю команду, и
+          // прогноз последнего перетаскивания должен дождаться своего ответа.
+          if (pending_move_.has_value() && pending_move_->id == ev.id &&
+              pending_move_->cell == ev.to) {
+            pending_move_.reset();
           }
         } else if constexpr (std::is_same_v<T, ViewUpdated>) {
           Reset(ev.snapshot, ev.fog);
@@ -83,6 +91,26 @@ auto ClientView::AddLocalLine(std::string text) -> void {
   if (log_.size() > kMaxLogLines) {
     log_.erase(log_.begin());
   }
+}
+
+auto ClientView::PredictMove(TokenId id, Cell cell, std::uint32_t now) -> void {
+  pending_move_ = PendingMove{.id = id, .cell = cell, .started_at = now};
+}
+
+auto ClientView::ClearPendingMove() -> void { pending_move_.reset(); }
+
+auto ClientView::ExpirePendingMove(std::uint32_t now) -> void {
+  if (pending_move_.has_value() && now >= pending_move_->started_at &&
+      now - pending_move_->started_at >= kPendingMoveSeconds) {
+    pending_move_.reset();
+  }
+}
+
+auto ClientView::PendingMoveCell(TokenId id) const -> std::optional<Cell> {
+  if (!pending_move_.has_value() || pending_move_->id != id) {
+    return std::nullopt;
+  }
+  return pending_move_->cell;
 }
 
 auto ClientView::PrunePings(std::uint32_t now) -> void {

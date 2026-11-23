@@ -2804,6 +2804,11 @@ auto App::TokenAt(Cell cell) const -> TokenId {
 auto App::SubmitMove(Cell target, bool crawl, bool jump) -> void {
   SendCommand(MoveToken{
       .id = selected_id_, .target = target, .crawl = crawl, .jump = jump});
+  // Клиент рисует свой ход сразу: ответ сервера по интернету идёт заметное
+  // время, и без прогноза токен успевает отскочить на старую клетку.
+  if (options_.mode == AppMode::kClient) {
+    view_.PredictMove(selected_id_, target, CurrentTimeSeconds());
+  }
 }
 
 auto App::JumpSelectedToken() -> void {
@@ -4394,6 +4399,8 @@ auto App::PumpClient() -> void {
             latest.c_str());
   }
   if (update.reject.has_value()) {
+    // Отклонённая команда могла быть своим ходом: показываем серверную клетку.
+    view_.ClearPendingMove();
     if (in_game_ && net_client_.Welcomed()) {
       view_.AddLocalLine(std::string(strings::kRejected) + *update.reject);
     } else if (in_game_) {
@@ -4416,6 +4423,7 @@ auto App::PumpClient() -> void {
     SDL_Log("host rejected request: %s", update.reject->c_str());
   }
   if (update.disconnected) {
+    view_.ClearPendingMove();
     if (in_game_) {
       if (client_connected_) {
         SDL_Log("connection to host lost, reconnecting...");
@@ -5302,6 +5310,9 @@ auto App::Iterate() -> void {
   } else if (in_game_) {
     PumpHost();
   }
+  // Прогноз своего хода живёт, пока не придёт ответ; потерянный ответ не
+  // должен оставлять токен на чужой клетке навсегда.
+  view_.ExpirePendingMove(CurrentTimeSeconds());
   FollowActiveTurn();
   SyncLogScroll();
   FlushSessionLog();
@@ -5340,6 +5351,10 @@ auto App::Iterate() -> void {
     art.push_back(TokenArt{.portrait = PortraitTexture(token.portrait)});
     if (dragging_ && token.id == selected_id_ && drag_target_.has_value()) {
       shown.back().cell = *drag_target_;
+    } else if (const std::optional<Cell> pending =
+                   view_.PendingMoveCell(token.id)) {
+      // Свой ход уже отправлен, но ответ сервера ещё в пути.
+      shown.back().cell = *pending;
     }
   }
 

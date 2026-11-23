@@ -378,6 +378,60 @@ auto TestServerVisibility() -> void {
          "revealed token appears in the client view");
 }
 
+auto TestPendingMove() -> void {
+  const dnd::GridMap map(8, 1);
+  const auto snapshot = [&map](dnd::Cell cell) -> dnd::GameSnapshot {
+    return dnd::GameSnapshot{
+        .map = map,
+        .tokens = {dnd::Token{.id = 1,
+                              .name = "hero",
+                              .owner = "alice",
+                              .kind = dnd::TokenKind::kPlayer,
+                              .cell = cell}},
+        .next_token_id = 2,
+    };
+  };
+  const dnd::FogSnapshot fog{.width = 8,
+                             .height = 1,
+                             .visible = std::vector<std::uint8_t>(8, 1),
+                             .explored = std::vector<std::uint8_t>(8, 1)};
+  dnd::ClientView view;
+  view.Reset(snapshot(CellAt(0, 0)), fog);
+
+  view.PredictMove(1, CellAt(3, 0), 100);
+  Expect(view.PendingMoveCell(1) == CellAt(3, 0),
+         "a pending move draws the token on the target cell");
+  Expect(!view.PendingMoveCell(2).has_value(),
+         "a pending move belongs only to its token");
+  Expect(view.Tokens().front().cell == CellAt(0, 0),
+         "the predicted move does not change the server copy");
+
+  view.ExpirePendingMove(100 + dnd::kPendingMoveSeconds - 1);
+  Expect(view.PendingMoveCell(1).has_value(),
+         "the prediction survives until the timeout");
+  view.ExpirePendingMove(100 + dnd::kPendingMoveSeconds);
+  Expect(!view.PendingMoveCell(1).has_value(),
+         "a lost answer drops the prediction after the timeout");
+
+  view.PredictMove(1, CellAt(4, 0), 200);
+  view.Apply(
+      dnd::TokenMoved{.id = 1, .from = CellAt(0, 0), .to = CellAt(4, 0)});
+  Expect(!view.PendingMoveCell(1).has_value(),
+         "the server answer confirms and drops the prediction");
+  Expect(view.Tokens().front().cell == CellAt(4, 0),
+         "the confirmed move lands in the client view");
+
+  view.PredictMove(1, CellAt(5, 0), 300);
+  view.ClearPendingMove();
+  Expect(!view.PendingMoveCell(1).has_value(),
+         "a rejection clears the prediction");
+
+  view.PredictMove(1, CellAt(6, 0), 400);
+  view.Reset(snapshot(CellAt(6, 0)), fog);
+  Expect(!view.PendingMoveCell(1).has_value(),
+         "a full resync clears the prediction");
+}
+
 auto TestOwnership() -> void {
   const dnd::GridMap map(20, 1);
   const dnd::GameSnapshot snapshot{
@@ -7702,6 +7756,7 @@ auto main() -> int {
     TestFogDiagonalSeal();
     TestFogExploredMemory();
     TestServerVisibility();
+    TestPendingMove();
     TestOwnership();
     TestClaimAndTokenAdmin();
     TestDamageHealRest();

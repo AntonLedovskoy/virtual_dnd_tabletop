@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include "core/aoe.h"
@@ -24,6 +25,18 @@ struct MapPing {
   std::uint32_t created_at = 0;
 };
 
+// Сколько секунд клиент показывает свой ход, пока не пришёл ответ сервера.
+// Если ответ потерялся, токен возвращается на серверную клетку.
+inline constexpr std::uint32_t kPendingMoveSeconds = 3;
+
+// Предугаданный ход клиента: пока сервер не подтвердил команду, токен
+// рисуется на клетке-цели, а не отскакивает назад на время кругового пути.
+struct PendingMove {
+  TokenId id = 0;
+  Cell cell{};
+  std::uint32_t started_at = 0;
+};
+
 // Всё, что разрешено знать клиенту: собственная копия мира и срез
 // видимости, полученный от сервера. Рендеринг читает только отсюда.
 class ClientView {
@@ -39,6 +52,14 @@ class ClientView {
   auto ClearLog() -> void;
   // Локальная подсказка клиента, другим игрокам не отправляется.
   auto AddLocalLine(std::string text) -> void;
+  // Свой ход отправлен серверу: рисуем токен на клетке-цели, чтобы при
+  // сетевой задержке он не отскакивал назад. Прогноз не меняет копию мира.
+  auto PredictMove(TokenId id, Cell cell, std::uint32_t now) -> void;
+  // Отказ сервера или потеря связи: показать серверную клетку сразу.
+  auto ClearPendingMove() -> void;
+  // Ответ не пришёл за kPendingMoveSeconds — прогноз снимается сам.
+  auto ExpirePendingMove(std::uint32_t now) -> void;
+  [[nodiscard]] auto PendingMoveCell(TokenId id) const -> std::optional<Cell>;
 
   [[nodiscard]] auto Map() const -> const GridMap& { return map_; }
   [[nodiscard]] auto Tokens() const -> const std::vector<Token>& {
@@ -78,6 +99,7 @@ class ClientView {
   AoeTemplate aoe_;
   MapBackground background_;
   std::vector<MapPing> pings_;
+  std::optional<PendingMove> pending_move_;
 };
 
 }  // namespace dnd
