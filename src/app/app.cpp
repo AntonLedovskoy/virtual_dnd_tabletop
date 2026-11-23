@@ -854,6 +854,26 @@ auto App::CenterCamera() -> void {
                            map.Height(), camera_.cell_size);
 }
 
+auto App::CenterCameraOnFocus() -> void {
+  int window_width = 0;
+  int window_height = 0;
+  if (!RenderSize(renderer_, window_width, window_height)) {
+    return;
+  }
+  const GridMap& map = view_.Map();
+  const std::optional<Cell> focus =
+      InitialFocusCell(view_.Tokens(), view_.Fog(), options_.player_name);
+  if (!focus.has_value()) {
+    camera_ = CenteredCamera(static_cast<float>(window_width),
+                             static_cast<float>(window_height), map.Width(),
+                             map.Height(), camera_.cell_size);
+    return;
+  }
+  camera_ = CameraOnCell(static_cast<float>(window_width),
+                         static_cast<float>(window_height), map.Width(),
+                         map.Height(), *focus, camera_.cell_size);
+}
+
 auto App::AddEditorToken(Cell cell, TokenKind kind) -> void {
   if (!scene_.map.Contains(cell) || scene_.map.IsBlocked(cell)) {
     editor_status_.Set("Нельзя поставить токен в эту клетку");
@@ -2580,7 +2600,13 @@ auto App::HandleKeyDown(const SDL_KeyboardEvent& key) -> void {
       RollInitiative();
       break;
     case SDLK_HOME:
-      CenterCamera();
+      // Игроку Home возвращает к своему персонажу (или к свободному, если
+      // персонажа ещё нет); DM по-прежнему видит карту целиком.
+      if (options_.mode == AppMode::kClient) {
+        CenterCameraOnFocus();
+      } else {
+        CenterCamera();
+      }
       break;
     case SDLK_TAB:
       OpenScenes();
@@ -4318,7 +4344,11 @@ auto App::PumpClient() -> void {
     menu_.busy = false;
     menu_.status.clear();
     version_mismatch_.reset();
-    CenterCamera();
+    if (!reconnected) {
+      // Первый вход: сразу показываем свой персонаж или зону, где его можно
+      // забрать, а не середину большой карты.
+      CenterCameraOnFocus();
+    }
     if (reconnected) {
       view_.AddLocalLine(std::string(strings::kConnectionRestored));
     }

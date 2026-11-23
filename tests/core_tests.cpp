@@ -7104,6 +7104,62 @@ auto TestCamera() -> void {
   Expect(Near(clamped.cell_size, untouched.cell_size) &&
              Near(clamped.x, untouched.x) && Near(clamped.y, untouched.y),
          "zero wheel leaves the camera untouched");
+
+  const dnd::Camera on_cell =
+      dnd::CameraOnCell(1280.0F, 720.0F, 100, 100, CellAt(80, 90));
+  Expect(Near(on_cell.x, 640.0F - (80.5F * 48.0F)) &&
+             Near(on_cell.y, 360.0F - (90.5F * 48.0F)),
+         "camera centers the focus cell on a large map");
+  Expect(dnd::CameraCellAt(on_cell, 640.0F, 360.0F) == CellAt(80, 90),
+         "the focus cell is under the window center");
+  const dnd::Camera on_edge =
+      dnd::CameraOnCell(1280.0F, 720.0F, 100, 100, CellAt(0, 0));
+  Expect(Near(on_edge.x, 0.0F) && Near(on_edge.y, 0.0F),
+         "a focus cell at the map edge does not scroll the map away");
+  const dnd::Camera small_on_cell =
+      dnd::CameraOnCell(1280.0F, 720.0F, 10, 10, CellAt(1, 1));
+  Expect(Near(small_on_cell.x, 400.0F) && Near(small_on_cell.y, 120.0F),
+         "a small map stays centered whatever the focus cell");
+
+  const dnd::FogOfWar no_fog(4, 4);
+  const std::vector<dnd::Token> focus_tokens = {
+      dnd::Token{.id = 1,
+                 .owner = "Bob",
+                 .kind = dnd::TokenKind::kPlayer,
+                 .cell = CellAt(2, 2)},
+      dnd::Token{.id = 2,
+                 .owner = "",
+                 .kind = dnd::TokenKind::kPlayer,
+                 .cell = CellAt(7, 8)},
+      dnd::Token{.id = 3,
+                 .owner = "dm",
+                 .kind = dnd::TokenKind::kMonster,
+                 .cell = CellAt(9, 9)},
+  };
+  Expect(dnd::InitialFocusCell(focus_tokens, no_fog, "ann") == CellAt(7, 8),
+         "without a character the first claimable one is shown");
+  const std::vector<dnd::Token> own_tokens = {
+      focus_tokens[1],
+      dnd::Token{.id = 4,
+                 .owner = "Ann",
+                 .kind = dnd::TokenKind::kPlayer,
+                 .cell = CellAt(5, 6)},
+  };
+  Expect(dnd::InitialFocusCell(own_tokens, no_fog, "ann") == CellAt(5, 6),
+         "the player's own character wins over a claimable one");
+  Expect(
+      dnd::InitialFocusCell({focus_tokens[0]}, no_fog, "ann") == CellAt(2, 2),
+      "a party character is shown when nothing is claimable");
+  Expect(
+      dnd::InitialFocusCell({focus_tokens[2]}, no_fog, "ann") == CellAt(9, 9),
+      "a visible monster is better than an empty map");
+  Expect(!dnd::InitialFocusCell({}, no_fog, "ann").has_value(),
+         "no tokens and no explored cells leave the camera centered");
+  dnd::FogOfWar explored(4, 4);
+  explored.SetCell(CellAt(1, 1), true, true);
+  explored.SetCell(CellAt(2, 1), true, true);
+  Expect(dnd::InitialFocusCell({}, explored, "ann") == CellAt(2, 1),
+         "without tokens the explored area is shown");
 }
 
 auto TestAutosave() -> void {

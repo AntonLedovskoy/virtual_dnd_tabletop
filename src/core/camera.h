@@ -1,6 +1,12 @@
 #pragma once
 
+#include <optional>
+#include <string_view>
+#include <vector>
+
 #include "core/grid_map.h"
+#include "core/token.h"
+#include "core/visibility.h"
 
 namespace dnd {
 
@@ -23,6 +29,20 @@ struct Camera {
 [[nodiscard]] auto CenteredCamera(float view_width, float view_height,
                                   int map_width, int map_height,
                                   float cell_size = kDefaultCellSize) -> Camera;
+
+// Камера, в которой клетка стоит по центру окна. Карта не уезжает за край:
+// если она меньше окна, вид по-прежнему центрируется целиком.
+[[nodiscard]] auto CameraOnCell(float view_width, float view_height,
+                                int map_width, int map_height, Cell cell,
+                                float cell_size = kDefaultCellSize) -> Camera;
+
+// Куда навести камеру игроку сразу после входа: свой персонаж, иначе
+// свободный персонаж для выбора, иначе персонаж партии, иначе разведанная
+// зона карты. nullopt — показывать карту целиком.
+[[nodiscard]] auto InitialFocusCell(const std::vector<Token>& tokens,
+                                    const FogOfWar& fog,
+                                    std::string_view player_name)
+    -> std::optional<Cell>;
 
 // Клетка под точкой экрана; за краем карты координаты отрицательные или
 // больше размера.

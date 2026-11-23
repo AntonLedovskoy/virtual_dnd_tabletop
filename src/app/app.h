@@ -100,6 +100,9 @@ class App {
   auto LoadScene() -> void;
   auto ResizeScene(int width, int height) -> void;
   auto CenterCamera() -> void;
+  // Камера игрока при входе: свой персонаж, свободный персонаж или зона
+  // партии вместо середины большой карты.
+  auto CenterCameraOnFocus() -> void;
   auto ApplyEditorBrush(Cell cell) -> void;
   // Штрих кисти: клетки между последовательными положениями курсора.
   auto BeginEditorStroke(EditorPaintMode mode, Cell cell) -> void;
