@@ -10,7 +10,12 @@
 ## Требования
 
 - Windows, MSYS2 с окружением UCRT64 (`C:\msys64` или `MSYS2_ROOT`).
-- CMake 3.25+, git, компилятор UCRT64.
+  WinSock-зависимостей больше нет, поэтому Linux и macOS тоже поддерживаются
+  (автообновление пока только Windows/WinHTTP).
+- CMake 3.25+, git, компилятор C++20.
+- Boost 1.74+ системным пакетом: нужен только заголовочный Asio. MSYS2
+  `mingw-w64-ucrt-x86_64-boost`, Debian/Ubuntu `libboost-dev`, macOS
+  `brew install boost`.
 - Первая конфигурация скачивает SDL3, SDL3_ttf и SDL3_image через
   `FetchContent`: нужна сеть и несколько минут.
 
@@ -24,7 +29,17 @@
 ```
 
 Бинарник: `.build/<profile>/virtual_dnd_tabletop.exe`.
-`tools/build.sh` запускается только из MSYS2 UCRT64, `build.bat` делает это сам.
+Под Windows `tools/build.sh` запускается только из MSYS2 UCRT64, `build.bat`
+делает это сам.
+
+На Linux и macOS тот же скрипт запускается напрямую:
+
+```bash
+./tools/build.sh            # debug
+./tools/build.sh -p release
+./tools/build.sh -t         # clang-tidy
+.build/debug/virtual_dnd_tabletop
+```
 
 ## Тесты
 
@@ -199,8 +214,9 @@ Developer build (сборка не на чистом теге) обновлен�
 - `src/core` — правила и логика без SDL: `GameState`, `GameServer`,
   `ClientView`, камера, сцены, броски, бой, туман, логин и крипто
   (SHA-256/HMAC, X25519, ChaCha20).
-- `src/net` — TCP-кадры, сокеты, клиент и сервер (сервер не авторитетен,
-  `App` владеет `GameServer`).
+- `src/net` — TCP-кадры поверх Boost.Asio (только заголовки, без WinSock),
+  асинхронный клиент и сервер (сервер не авторитетен, `App` владеет
+  `GameServer`); собирается на Windows и Linux/macOS.
 - `src/app` — окно, ввод, меню Host/Join, цикл хоста и клиента.
 - `src/render` — только отрисовка SDL3, текст через `render/text_renderer`.
 - `tests/` — консольные `core_tests` и `net_tests`.

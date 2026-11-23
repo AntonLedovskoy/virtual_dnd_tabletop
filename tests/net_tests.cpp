@@ -152,6 +152,7 @@ auto TestTcpHandshakeAndEvents() -> void {
 
   const auto welcome_deadline = Now() + std::chrono::seconds(3);
   while (!update.welcome.has_value() && Now() < welcome_deadline) {
+    server.Poll(joined, commands, dropped);
     client.Poll(update);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -170,6 +171,7 @@ auto TestTcpHandshakeAndEvents() -> void {
   const auto command_deadline = Now() + std::chrono::seconds(3);
   while (commands.empty() && Now() < command_deadline) {
     server.Poll(joined, commands, dropped);
+    client.Poll(update);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   Expect(commands.size() == 1, "server receives the client command");
@@ -183,6 +185,7 @@ auto TestTcpHandshakeAndEvents() -> void {
   const auto say_deadline = Now() + std::chrono::seconds(3);
   while (commands.empty() && Now() < say_deadline) {
     server.Poll(joined, commands, dropped);
+    client.Poll(update);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   Expect(!commands.empty() &&
@@ -194,6 +197,7 @@ auto TestTcpHandshakeAndEvents() -> void {
   const auto ping_deadline = Now() + std::chrono::seconds(3);
   while (commands.empty() && Now() < ping_deadline) {
     server.Poll(joined, commands, dropped);
+    client.Poll(update);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   Expect(
@@ -206,6 +210,7 @@ auto TestTcpHandshakeAndEvents() -> void {
       dnd::TokenMoved{.id = 1, .from = CellAt(1, 1), .to = CellAt(2, 2)});
   const auto event_deadline = Now() + std::chrono::seconds(3);
   while (update.events.empty() && Now() < event_deadline) {
+    server.Poll(joined, commands, dropped);
     client.Poll(update);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -220,6 +225,7 @@ auto TestTcpHandshakeAndEvents() -> void {
       dnd::PingMarker{.cell = CellAt(3, 3), .author = "tester"});
   const auto marker_deadline = Now() + std::chrono::seconds(3);
   while (update.events.empty() && Now() < marker_deadline) {
+    server.Poll(joined, commands, dropped);
     client.Poll(update);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -325,6 +331,7 @@ auto TestPasswordAndRoster() -> void {
   std::vector<dnd::RosterEntry> roster;
   const auto welcome_deadline = Now() + std::chrono::seconds(3);
   while ((!saw_welcome || !saw_roster) && Now() < welcome_deadline) {
+    server.Poll(joined, commands, dropped);
     client.Poll(update);
     if (update.welcome.has_value()) {
       saw_welcome = true;
@@ -904,6 +911,7 @@ auto TestTwoClientsMoveTurns() -> void {
   while (
       (!alice_update.welcome.has_value() || !bob_update.welcome.has_value()) &&
       Now() < welcome_deadline) {
+    server.Poll(joined, incoming, dropped);
     alice.Poll(alice_update);
     bob.Poll(bob_update);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -926,6 +934,8 @@ auto TestTwoClientsMoveTurns() -> void {
     const auto command_deadline = Now() + std::chrono::seconds(3);
     while (received.empty() && Now() < command_deadline) {
       server.Poll(joined, received, dropped);
+      mover.Poll(mover_update);
+      watcher.Poll(watcher_update);
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (received.size() != 1) {
@@ -955,6 +965,7 @@ auto TestTwoClientsMoveTurns() -> void {
     while ((!SawMove(mover_update.events, id, from, to) ||
             !SawMove(watcher_update.events, id, from, to)) &&
            Now() < event_deadline) {
+      server.Poll(joined, received, dropped);
       mover.Poll(mover_update);
       watcher.Poll(watcher_update);
       std::this_thread::sleep_for(std::chrono::milliseconds(1));

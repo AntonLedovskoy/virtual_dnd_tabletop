@@ -177,9 +177,20 @@ add_library(dnd_net STATIC
   src/net/tcp_socket.cpp
 )
 target_link_libraries(dnd_net PUBLIC dnd_core)
+# Boost.Asio — header-only сетевая библиотека. В отличие от SDL, Boost ставится
+# системным пакетом: MSYS2 mingw-w64-ucrt-x86_64-boost, Debian/Ubuntu
+# libboost-dev, macOS `brew install boost`. Компилируемые части не нужны.
+find_package(Boost 1.74 REQUIRED CONFIG)
+# Asio только заголовочный, компилируемые части Boost не линкуются. SYSTEM:
+# заголовки Boost не должны попадать в clang-tidy нашего кода.
+get_target_property(DND_BOOST_INCLUDE_DIR Boost::headers
+  INTERFACE_INCLUDE_DIRECTORIES)
+target_include_directories(dnd_net SYSTEM PRIVATE ${DND_BOOST_INCLUDE_DIR})
 target_compile_options(dnd_net PRIVATE ${DND_WARNINGS})
 if(WIN32)
-  target_link_libraries(dnd_net PUBLIC ws2_32)
+  # Asio требует Windows 7 API и тянет winsock; AcceptEx живёт в mswsock.
+  target_compile_definitions(dnd_net PRIVATE _WIN32_WINNT=0x0601)
+  target_link_libraries(dnd_net PUBLIC ws2_32 mswsock)
 endif()
 
 add_executable(${PROJECT_NAME}

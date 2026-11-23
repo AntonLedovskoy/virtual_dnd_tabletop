@@ -9,6 +9,7 @@
 namespace dnd {
 
 class SessionCipher;
+struct TcpListenerImpl;
 
 // Принятый кадр: содержимое протокола и признак того, был он зашифрован.
 // Открытые кадры после рукопожатия недопустимы — так ловится попытка
@@ -17,10 +18,6 @@ struct ReceivedFrame {
   std::vector<std::uint8_t> payload;
   bool sealed = false;
 };
-
-// TCP-фрейминг с префиксом длины поверх Winsock. Каждый фрейм — одно
-// сообщение протокола; сокетный слой работает только с байтами.
-auto InitializeSockets() -> bool;
 
 // Предел очереди отправки. Если собеседник не читает данные и очередь
 // переполняется, соединение закрывается: хост не должен копить память
@@ -31,22 +28,28 @@ inline constexpr std::size_t kMaxOutgoingBytes =
 // Не-loopback IPv4-адреса машины — для показа адреса хоста в лобби.
 auto LocalIpv4Addresses() -> std::vector<std::string>;
 
+// TCP-фрейминг с префиксом длины поверх Boost.Asio. Каждый фрейм — одно
+// сообщение протокола; сокетный слой работает только с байтами.
+// Обмен полностью асинхронный: Poll() прокачивает внутренний io_context
+// и отдаёт готовые кадры, никогда не блокируя вызывающего.
 class TcpConnection {
  public:
   ~TcpConnection();
   TcpConnection(const TcpConnection&) = delete;
   auto operator=(const TcpConnection&) -> TcpConnection& = delete;
 
-  // Неблокирующее подключение: соединение может ещё устанавливаться;
-  // Poll() сообщает о прогрессе, никогда не блокируя вызывающего.
+  // Подключение только запускается: адрес разрешается и соединение
+  // устанавливается асинхронно, результат виден по Connected()/Poll().
   static auto Connect(const std::string& host, std::uint16_t port)
       -> std::unique_ptr<TcpConnection>;
 
   auto QueueFrame(const std::vector<std::uint8_t>& frame) -> void;
-  // Читает доступные данные и добавляет целые фреймы. Возвращает false
+  // Прокачивает сетевые события и добавляет целые кадры. Возвращает false
   // после отключения собеседника или ошибки ввода-вывода.
   auto Poll(std::vector<ReceivedFrame>& frames) -> bool;
-  [[nodiscard]] auto Connected() const -> bool { return connected_; }
+  // Подключение в процессе тоже считается живым: иначе клиент рвал бы
+  // недоподключённый сокет по таймеру переподключения.
+  [[nodiscard]] auto Connected() const -> bool;
 
   // С этого момента исходящие кадры шифруются, а открытые входящие
   // отвергаются: рукопожатие закончено.
@@ -55,24 +58,16 @@ class TcpConnection {
   auto Close() -> void;
 
  private:
-  friend class TcpListener;
-  explicit TcpConnection(std::uintptr_t handle, bool connecting = false);
+  friend struct TcpListenerImpl;
+  TcpConnection();
 
-  auto Flush() -> bool;
-  auto TryCompleteConnect() -> bool;
-  auto ParseFrames(std::vector<ReceivedFrame>& frames) -> void;
-
-  std::uintptr_t handle_;
-  bool connected_ = true;
-  bool connecting_ = false;
-  std::vector<std::uint8_t> incoming_;
-  std::vector<std::uint8_t> outgoing_;
-  std::unique_ptr<SessionCipher> cipher_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 class TcpListener {
  public:
-  TcpListener() = default;
+  TcpListener();
   ~TcpListener();
   TcpListener(const TcpListener&) = delete;
   auto operator=(const TcpListener&) -> TcpListener& = delete;
@@ -83,10 +78,12 @@ class TcpListener {
   auto Stop() -> void;
   [[nodiscard]] auto Listening() const -> bool;
   [[nodiscard]] auto Port() const -> std::uint16_t;
-  [[nodiscard]] auto Accept() const -> std::unique_ptr<TcpConnection>;
+  // Отдаёт соединение, принятое с момента прошлого вызова; приём идёт
+  // асинхронно, поэтому готовое соединение появляется через кадр-другой.
+  auto Accept() -> std::unique_ptr<TcpConnection>;
 
  private:
-  std::uintptr_t handle_ = static_cast<std::uintptr_t>(-1);
+  std::unique_ptr<TcpListenerImpl> impl_;
 };
 
 }  // namespace dnd

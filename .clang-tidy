@@ -7,7 +7,10 @@
 #   readability-function-cognitive-complexity — крупные функции-состояния
 #     (App::Iterate, HandleEvent) разбираются постепенно;
 #   modernize-use-designated-initializers — позиционная инициализация простых
-#     структур (SDL_FRect{x, y, w, h}) читается не хуже designated-списка.
+#     структур (SDL_FRect{x, y, w, h}) читается не хуже designated-списка;
+#   bugprone-unused-return-value — устаревшие перегрузки Asio с error_code
+#     возвращают его же; `(void)` перед вызовом — осознанный отказ от значения
+#     (AllowCastToVoid).
 Checks: >
   -*,
   bugprone-*,
@@ -32,6 +35,8 @@ HeaderFilterRegex: '.*'
 FormatStyle: file
 
 CheckOptions:
+  - key: bugprone-unused-return-value.AllowCastToVoid
+    value: 'true'
   - key: google-readability-braces-around-statements.ShortStatementLines
     value: '1'
   - key: google-readability-function-size.StatementThreshold
