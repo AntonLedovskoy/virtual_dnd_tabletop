@@ -2259,8 +2259,17 @@ auto GameServer::HandleAwardXp(const AwardXp& command, bool can_control_all)
 }
 
 auto GameServer::PlayerFog(std::string_view actor) const -> const FogOfWar* {
-  const auto it = fogs_.find(PlayerNameKey(actor));
-  return it == fogs_.end() ? nullptr : &it->second;
+  const std::string key = PlayerNameKey(actor);
+  const auto it = fogs_.find(key);
+  if (it == fogs_.end()) {
+    return nullptr;
+  }
+  // Туман прошлой партии не должен закрывать общий обзор: пока у игрока нет
+  // персонажа, он видит то же, что и вся партия.
+  if (!character_owners_.contains(key)) {
+    return nullptr;
+  }
+  return &it->second;
 }
 
 auto GameServer::IsVisibleTo(std::string_view actor, Cell cell) const -> bool {
@@ -2471,6 +2480,11 @@ auto GameServer::RecomputeFog() -> void {
     if (!token.owner.empty()) {
       observers[PlayerNameKey(token.owner)].push_back(token.cell);
     }
+  }
+
+  character_owners_.clear();
+  for (const auto& [owner, cells] : observers) {
+    character_owners_.insert(owner);
   }
 
   const std::vector<Cell>& revealed = state_.Revealed();

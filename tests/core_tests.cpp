@@ -2494,8 +2494,10 @@ auto TestSeparateVisibility() -> void {
          "the DM reassigns a character");
   Expect(server.IsVisibleTo("carol", CellAt(0, 0)),
          "the new owner gains vision from the character");
-  Expect(!server.IsVisibleTo("alice", CellAt(0, 0)),
-         "the old owner loses that vision");
+  // Без персонажа alice снова смотрит обзором партии: свой туман больше не
+  // закрывает чужие области.
+  Expect(FogVisibleAt(server.FogState("alice"), 10, 0),
+         "the old owner falls back to the party view");
 
   const dnd::CommandOutcome hidden = server.HandleCommand(
       dnd::HideArea{.cell = CellAt(18, 0), .radius = 1}, "", true);
@@ -2520,6 +2522,51 @@ auto TestSeparateVisibility() -> void {
   Expect(FogExploredAt(server.FogState("alice"), 15, 0),
          "cells seen through a reveal stay explored");
   Expect(!snapshot_has("alice", 3), "the goblin is hidden again");
+}
+
+auto TestStaleFogRecord() -> void {
+  const dnd::GridMap map(20, 1);
+  dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "scout",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(10, 0)},
+          },
+      .next_token_id = 3,
+  };
+  // След прошлой партии: у bob есть запись тумана, но персонажа нет.
+  snapshot.fog.push_back(dnd::FogRecord{
+      .owner = "bob",
+      .explored = std::vector<std::uint8_t>(20, 0),
+  });
+  dnd::GameServer server(snapshot, 3, 7);
+
+  Expect(FogVisibleAt(server.FogState("bob"), 0, 0),
+         "a stale fog record does not hide the party view");
+  Expect(FogVisibleAt(server.FogState("bob"), 10, 0),
+         "a characterless player sees every party character");
+  Expect(server.IsVisibleTo("bob", CellAt(10, 0)),
+         "the characterless player receives party tokens");
+
+  Expect(
+      server
+          .HandleCommand(dnd::SetTokenOwner{.id = 2, .owner = "bob"}, "", true)
+          .accepted,
+      "the DM assigns the character to bob");
+  Expect(FogVisibleAt(server.FogState("bob"), 10, 0),
+         "the assigned character gives bob his own vision");
+  Expect(!FogVisibleAt(server.FogState("bob"), 0, 0),
+         "bob no longer sees through alice's character");
+  Expect(!FogVisibleAt(server.FogState("alice"), 10, 0),
+         "alice keeps only her own vision");
 }
 
 auto TestIncrementalView() -> void {
@@ -7619,6 +7666,7 @@ auto main() -> int {
     TestDynamicFogObservers();
     TestFogSurvivesReset();
     TestSeparateVisibility();
+    TestStaleFogRecord();
     TestIncrementalView();
     TestRevealedAreas();
     TestFogMovement();

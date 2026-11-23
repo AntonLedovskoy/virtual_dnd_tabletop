@@ -429,8 +429,8 @@ auto App::Initialize() -> bool {
   } else if (options_.auto_start) {
     if (options_.mode == AppMode::kClient) {
       (void)StartClient();
-    } else {
-      (void)StartHost();
+    } else if (!StartHost()) {
+      SDL_Log("host start failed: %s", menu_.status.c_str());
     }
   }
   return true;
@@ -4253,10 +4253,20 @@ auto App::PumpHost() -> void {
   for (const PeerJoined& peer : joined) {
     SDL_Log("peer %u '%s' joined", static_cast<unsigned>(peer.peer),
             peer.name.c_str());
-    net_server_.SendWelcome(
-        peer.peer, Welcome{.snapshot = server_.ClientSnapshot(peer.name),
-                           .fog = server_.FogState(peer.name),
-                           .is_dm = false});
+    GameSnapshot client_snapshot = server_.ClientSnapshot(peer.name);
+    FogSnapshot client_fog = server_.FogState(peer.name);
+    int visible_cells = 0;
+    for (const std::uint8_t cell : client_fog.visible) {
+      visible_cells += cell != 0 ? 1 : 0;
+    }
+    SDL_Log("welcome to '%s': map %dx%d fog %dx%d visible %d tokens %d",
+            peer.name.c_str(), client_snapshot.map.Width(),
+            client_snapshot.map.Height(), client_fog.width, client_fog.height,
+            visible_cells, static_cast<int>(client_snapshot.tokens.size()));
+    net_server_.SendWelcome(peer.peer,
+                            Welcome{.snapshot = std::move(client_snapshot),
+                                    .fog = std::move(client_fog),
+                                    .is_dm = false});
     // Полный вид уже отправлен: дальше игрок получает только изменения.
     server_.MarkViewSent(peer.name);
   }
@@ -4312,7 +4322,21 @@ auto App::PumpClient() -> void {
     if (reconnected) {
       view_.AddLocalLine(std::string(strings::kConnectionRestored));
     }
-    SDL_Log("joined host, world snapshot received");
+    int visible_cells = 0;
+    int explored_cells = 0;
+    for (int y = 0; y < view_.Fog().Height(); ++y) {
+      for (int x = 0; x < view_.Fog().Width(); ++x) {
+        const Cell cell{.x = x, .y = y};
+        visible_cells += view_.Fog().IsVisible(cell) ? 1 : 0;
+        explored_cells += view_.Fog().IsExplored(cell) ? 1 : 0;
+      }
+    }
+    SDL_Log(
+        "joined host, world snapshot received: map %dx%d fog %dx%d "
+        "visible %d explored %d tokens %d",
+        view_.Map().Width(), view_.Map().Height(), view_.Fog().Width(),
+        view_.Fog().Height(), visible_cells, explored_cells,
+        static_cast<int>(view_.Tokens().size()));
   }
   for (const Event& event : update.events) {
     view_.Apply(event);
@@ -5328,6 +5352,28 @@ auto App::Iterate() -> void {
   }
   if (!client_is_dm_) {
     DrawFog(renderer_, view_.Fog(), camera_.cell_size, camera_.x, camera_.y);
+    // Чёрная карта без единой видимой клетки — это туман, а не потеря карты.
+    bool any_visible = false;
+    for (int y = 0; y < view_.Fog().Height() && !any_visible; ++y) {
+      for (int x = 0; x < view_.Fog().Width() && !any_visible; ++x) {
+        any_visible = view_.Fog().IsVisible(Cell{.x = x, .y = y});
+      }
+    }
+    if (!any_visible && text_ != nullptr) {
+      int width = 0;
+      int height = 0;
+      if (RenderSize(renderer_, width, height)) {
+        const SDL_FRect bounds{
+            .x = 0.0F,
+            .y = 0.0F,
+            .w = static_cast<float>(width),
+            .h = static_cast<float>(height) * 0.55F,
+        };
+        text_->DrawCentered(
+            std::string(strings::kNoVisionHint), bounds,
+            SDL_Color{.r = 0xd0, .g = 0xd0, .b = 0xd8, .a = 0xff});
+      }
+    }
   }
   // Шаблон области рисуем поверх тумана: он показывает заклинание, а не рельеф.
   if (view_.Aoe().shape != AoeShape::kNone) {

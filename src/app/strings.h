@@ -31,7 +31,7 @@ inline constexpr std::string_view kClaimOnce =
 inline constexpr std::string_view kReleaseDmOnly =
     "Освободить персонажа может только DM";
 inline constexpr std::string_view kMonsterOwnerDm =
-    "Монстр всегда принадлежит DM";
+    "Монстр всегда принадлежит DM; игроку нужен персонаж или /reveal";
 inline constexpr std::string_view kColorDmOnly = "Цвет токена меняет только DM";
 inline constexpr std::string_view kRenameDmOnly =
     "Переименовывает токен только DM";
@@ -90,6 +90,10 @@ inline constexpr std::string_view kConnectionLost =
     "Связь потеряна, переподключение...";
 inline constexpr std::string_view kConnectionRestored =
     "Связь с хостом восстановлена";
+// Клиент без персонажа и без обзора видит чёрную карту: подсказка объясняет,
+// что это не потеря связи, а туман войны.
+inline constexpr std::string_view kNoVisionHint =
+    "Нет обзора: попросите DM назначить персонажа или открыть карту";
 inline constexpr std::string_view kLogScrolledPrefix = "Прокручено вверх: ";
 inline constexpr std::string_view kLogScrolledSuffix = " стр. | End — к новым";
 
