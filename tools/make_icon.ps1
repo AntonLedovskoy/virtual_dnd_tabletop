@@ -1,4 +1,4 @@
-﻿# Иконка приложения: d20 на фоне доски (сетка) в палитре интерфейса.
+﻿# Иконка приложения: d20 на тёмной панели в палитре интерфейса.
 # Рисует assets/icon.png (256x256), assets/icon.ico (16..256) и встроенный
 # массив src/app/icon_png.h для SDL_SetWindowIcon.
 #
@@ -21,7 +21,6 @@ $HeaderPath = Join-Path $Root 'src/app/icon_png.h'
 $BackgroundTop = [System.Drawing.Color]::FromArgb(0x26, 0x26, 0x34)
 $BackgroundBottom = [System.Drawing.Color]::FromArgb(0x10, 0x10, 0x18)
 $BorderColor = [System.Drawing.Color]::FromArgb(0x3a, 0x3a, 0x48)
-$GridColor = [System.Drawing.Color]::FromArgb(0x30, 0xff, 0xff, 0xff)
 $EdgeColor = [System.Drawing.Color]::FromArgb(0xee, 0xf4, 0xff)
 $BaseRed = 0x6c
 $BaseGreen = 0xa8
@@ -83,23 +82,6 @@ function New-IconBitmap([int]$size) {
   $g.FillPath($background, $panel)
   $background.Dispose()
 
-  # Сетка доски — только там, где её видно: на маленьких размерах она
-  # превращается в грязь.
-  if ($size -ge 48) {
-    $state = $g.Save()
-    $g.SetClip($panel)
-    $step = [single]($size / 5.0)
-    $gridPen = [System.Drawing.Pen]::new($GridColor,
-      [single][math]::Max(1.0, $size * 0.006))
-    for ($i = 1; $i -lt 5; $i++) {
-      $line = [single]($inset + $step * $i)
-      $g.DrawLine($gridPen, $line, $inset, $line, $inset + $square)
-      $g.DrawLine($gridPen, $inset, $line, $inset + $square, $line)
-    }
-    $gridPen.Dispose()
-    $g.Restore($state)
-  }
-
   $cx = $size / 2.0
   $cy = $size / 2.0
   $radius = $size * 0.34
@@ -110,7 +92,7 @@ function New-IconBitmap([int]$size) {
   }
 
   # Мягкая тень: тот же силуэт чуть крупнее и ниже, чтобы д20 не сливался
-  # с сеткой.
+  # с фоном.
   if ($size -ge 32) {
     $shadow = @()
     foreach ($p in $Hexagon) {
@@ -194,6 +176,9 @@ function Get-PngBytes([System.Drawing.Bitmap]$bitmap) {
 }
 
 # DIB-запись ICO: BITMAPINFOHEADER, пиксели BGRA снизу вверх и пустая AND-маска.
+# Порядок каналов в DIB — BGRA, а LockBits отдаёт буфер ровно в нём, поэтому
+# строка копируется как есть: перестановка R и B превратила бы синий кубик в
+# оранжевый.
 function Get-DibBytes([System.Drawing.Bitmap]$bitmap) {
   $w = $bitmap.Width
   $h = $bitmap.Height
@@ -224,9 +209,9 @@ function Get-DibBytes([System.Drawing.Bitmap]$bitmap) {
     $row = $y * $stride
     for ($x = 0; $x -lt $w; $x++) {
       $i = $row + $x * 4
-      $writer.Write($raw[$i + 2])
-      $writer.Write($raw[$i + 1])
       $writer.Write($raw[$i])
+      $writer.Write($raw[$i + 1])
+      $writer.Write($raw[$i + 2])
       $writer.Write($raw[$i + 3])
     }
   }

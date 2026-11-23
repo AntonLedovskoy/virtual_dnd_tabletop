@@ -204,6 +204,10 @@ if(WIN32)
   set(DND_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.ico")
   configure_file(src/app/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
   target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
+  # .rc подключает .ico по абсолютному пути, и ninja его не видит: без этой
+  # зависимости перерисованная иконка не попадала бы в exe до переконфигурации.
+  set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/app.rc"
+    PROPERTIES OBJECT_DEPENDS "${DND_ICON_PATH}")
 endif()
 
 # Версия из git describe: строка `DND_VERSION` уходит в `--version`, в
