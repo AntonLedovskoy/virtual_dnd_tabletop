@@ -56,6 +56,10 @@ struct Token {
   int initiative = 0;
   int ac = 10;
   int speed = 9;
+  // Скорости плавания и лазания в клетках; 0 — их нет, и клетка всё равно
+  // проходима, но дороже (core/grid_map, MovementProfile).
+  int swim_speed = 0;
+  int climb_speed = 0;
   std::string notes;
   int attack_bonus = 0;
   int save_bonus = 0;
@@ -97,6 +101,9 @@ struct Token {
   int movement_bonus = 0;
   bool disengaged = false;
   bool dodging = false;
+  // Сработавшие за этот ход профили урона карты (индексы в палитре): вход в
+  // лаву не бьёт повторно. Очищается в начале хода токена и в конце боя.
+  std::vector<std::uint8_t> hazards_done;
 };
 
 }  // namespace dnd

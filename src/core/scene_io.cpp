@@ -14,10 +14,12 @@ namespace {
 constexpr std::uint32_t kMagic = 0x53444E44;  // "DNDS" в little-endian
 constexpr std::uint32_t kMaxPayload = 64U * 1024U * 1024U;
 // Что появилось когда: экономика хода — сохранение 28, защиты от урона и
-// дистанция атаки — 29, игровые часы и время длинного отдыха — 30.
+// дистанция атаки — 29, игровые часы и время длинного отдыха — 30,
+// свойства клеток и палитра урона — 31.
 constexpr std::uint32_t kTurnEconomySaveVersion = 28;
 constexpr std::uint32_t kDamageProfileSaveVersion = 29;
 constexpr std::uint32_t kGameClockSaveVersion = 30;
+constexpr std::uint32_t kCellPropsSaveVersion = 31;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -46,6 +48,7 @@ auto SaveSnapshotFormat(std::uint32_t save_version) -> SnapshotFormat {
       .has_turn_economy = save_version >= kTurnEconomySaveVersion,
       .has_damage_profile = save_version >= kDamageProfileSaveVersion,
       .has_game_clock = save_version >= kGameClockSaveVersion,
+      .has_cell_props = save_version >= kCellPropsSaveVersion,
   };
 }
 

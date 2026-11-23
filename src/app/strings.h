@@ -290,6 +290,27 @@ inline constexpr std::string_view kBrushTree = "дерево";
 inline constexpr std::string_view kBrushWater = "вода";
 inline constexpr std::string_view kBrushPit = "пропасть";
 inline constexpr std::string_view kBrushLava = "лава";
+inline constexpr std::string_view kBrushRoad = "дорога";
+inline constexpr std::string_view kBrushSwamp = "болото";
+inline constexpr std::string_view kBrushBrush = "заросли";
+inline constexpr std::string_view kBrushSnow = "снег";
+inline constexpr std::string_view kBrushMud = "грязь";
+inline constexpr std::string_view kInspectorTitle = "Клетка";
+inline constexpr std::string_view kInspectorHint =
+    "Tab / ↑ ↓ — поле | ← → — значение | Enter — применить | Esc — закрыть";
+inline constexpr std::string_view kInspectorApplied =
+    "Свойства клетки обновлены";
+inline constexpr std::string_view kInspectorWater = "Вода";
+inline constexpr std::string_view kInspectorCurrent = "Течение";
+inline constexpr std::string_view kInspectorCurrentStrength = "Сила течения";
+inline constexpr std::string_view kInspectorHazard = "Урон";
+inline constexpr std::string_view kInspectorRoad = "Дорога";
+inline constexpr std::string_view kInspectorClimb = "Лазание";
+inline constexpr std::string_view kInspectorSlippery = "Скользко (КС)";
+inline constexpr std::string_view kInspectorCoverSide = "Укрытие: сторона";
+inline constexpr std::string_view kInspectorCoverLevel = "Укрытие: уровень";
+inline constexpr std::string_view kInspectorNo = "нет";
+inline constexpr std::string_view kInspectorYes = "да";
 inline constexpr std::string_view kEditorSizeHint =
     "[ / ] — ширина карты, - / = — высота";
 inline constexpr std::string_view kEditorMouseHint =
@@ -297,7 +318,8 @@ inline constexpr std::string_view kEditorMouseHint =
     "кисть (не поверх токена) | ПКМ — стереть, по токену дважды — удалить | "
     "СКМ — панорама | колесо — зум";
 inline constexpr std::string_view kEditorKeyHint =
-    "1–6 — кисть | P — персонаж | B — бестиарий | V — цвет | L — лист | "
+    "1–6 — кисть | 7 — дорога | 8 — трудная местность | G — свойства "
+    "клетки | P — персонаж | B — бестиарий | V — цвет | L — лист | "
     "R — имя токена | M — подложка | Tab — карты | F2 — панель | "
     "F5 — сохранить | F9 — загрузить | Enter — играть | Esc — меню";
 inline constexpr std::string_view kEditorScenesHint =
@@ -335,6 +357,8 @@ inline constexpr std::string_view kEditorSceneMissing =
 inline constexpr std::string_view kSheetTitle = "Лист";
 inline constexpr std::string_view kSheetAc = "КД";
 inline constexpr std::string_view kSheetSpeed = "Скорость, м";
+inline constexpr std::string_view kSheetSwim = "Плавание, м";
+inline constexpr std::string_view kSheetClimb = "Лазание, м";
 inline constexpr std::string_view kSheetAttack = "Бонус атаки";
 inline constexpr std::string_view kSheetSave = "Спасбросок (все)";
 inline constexpr std::string_view kSheetInitiative = "Бонус инициативы";

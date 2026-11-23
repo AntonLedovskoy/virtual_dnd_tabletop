@@ -24,6 +24,9 @@ inline constexpr int kMaxFallFeet = 2000;
 
 [[nodiscard]] auto IsProne(const Token& token) -> bool;
 
+// Профиль прохождения клеток из листа: скорость, плавание и лазание.
+[[nodiscard]] auto MovementProfileFor(const Token& token) -> MovementProfile;
+
 // Сколько клеток движения стоит встать из «сбит с ног»: половина скорости,
 // но не меньше одной клетки. Вне боя вставание не тратит запас.
 [[nodiscard]] auto StandUpCostCells(const Token& token) -> int;

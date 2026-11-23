@@ -180,20 +180,26 @@ auto TestGridMap() -> void {
   Expect(!terrain_map.IsBlocked(CellAt(1, 0)) &&
              terrain_map.IsDifficultTerrain(CellAt(1, 0)),
          "a tree is passable difficult terrain");
-  for (const dnd::Cell cell : {CellAt(2, 0), CellAt(0, 2), CellAt(1, 2)}) {
-    Expect(terrain_map.IsBlocked(cell), "water, pits and lava block movement");
+  for (const dnd::Cell cell : {CellAt(2, 0), CellAt(1, 2)}) {
+    Expect(!terrain_map.IsBlocked(cell),
+           "water and lava are passable by the 2024 rules");
     Expect(!terrain_map.BlocksSight(cell),
            "water, pits and lava do not block sight");
   }
+  Expect(terrain_map.IsBlocked(CellAt(0, 2)), "a pit blocks movement");
   Expect(!terrain_map.BlocksSight(CellAt(1, 0)),
          "a tree does not block sight completely");
   const auto tree_path =
       dnd::PathCostCells(terrain_map, CellAt(0, 0), CellAt(1, 0));
   Expect(tree_path.has_value() && tree_path->cost == 2,
          "entering a tree costs double movement");
+  const auto water_path =
+      dnd::PathCostCells(terrain_map, CellAt(1, 0), CellAt(2, 0));
+  Expect(water_path.has_value() && water_path->cost == 2,
+         "deep water costs double movement");
   Expect(
-      !dnd::PathCostCells(terrain_map, CellAt(0, 0), CellAt(2, 0)).has_value(),
-      "the water cell itself is unreachable");
+      !dnd::PathCostCells(terrain_map, CellAt(0, 0), CellAt(0, 2)).has_value(),
+      "the pit cell itself is unreachable");
 
   dnd::GridMap pit_map(3, 1);
   pit_map.SetTerrain(CellAt(1, 0), dnd::Terrain::kPit);
@@ -201,6 +207,218 @@ auto TestGridMap() -> void {
   Expect(!HasCell(pit_reach, CellAt(1, 0)), "movement range excludes a pit");
   Expect(!HasCell(pit_reach, CellAt(2, 0)),
          "a pit cuts the map without a detour");
+}
+
+auto TestCellPropsMovement() -> void {
+  // Свойства клетки поверх рельефа: трудная местность не складывается,
+  // дорога её отменяет, вода и лазание стоят как в правилах 2024.
+  dnd::GridMap map(4, 1);
+  map.SetTerrain(CellAt(1, 0), dnd::Terrain::kSwamp);
+  Expect(map.MovementCost(CellAt(1, 0), dnd::MovementProfile{}) == 2,
+         "swamp is difficult terrain");
+  dnd::CellProps swamp = map.PropsAt(CellAt(1, 0));
+  swamp.water = dnd::WaterDepth::kShallow;
+  map.SetProps(CellAt(1, 0), swamp);
+  Expect(map.MovementCost(CellAt(1, 0), dnd::MovementProfile{}) == 2,
+         "difficult terrain does not stack with shallow water");
+  swamp.flags |= dnd::kCellRoad;
+  map.SetProps(CellAt(1, 0), swamp);
+  Expect(map.MovementCost(CellAt(1, 0), dnd::MovementProfile{}) == 1,
+         "a road cancels difficult terrain");
+
+  dnd::GridMap stairs(3, 3);
+  dnd::CellProps climb = stairs.PropsAt(CellAt(1, 0));
+  climb.flags |= dnd::kCellClimbable;
+  stairs.SetProps(CellAt(1, 0), climb);
+  Expect(stairs.MovementCost(CellAt(1, 0), dnd::MovementProfile{}) == 2,
+         "climbing without a climb speed costs double");
+  Expect(stairs.MovementCost(CellAt(1, 0),
+                             dnd::MovementProfile{.climb_speed = 4}) == 1,
+         "a climb speed makes the wall cost normal movement");
+
+  dnd::GridMap pool(3, 3);
+  pool.SetTerrain(CellAt(1, 1), dnd::Terrain::kWater);
+  Expect(pool.MovementCost(CellAt(1, 1), dnd::MovementProfile{}) == 2,
+         "deep water costs double without a swim speed");
+  Expect(pool.MovementCost(CellAt(1, 1),
+                           dnd::MovementProfile{.swim_speed = 4}) == 1,
+         "a swim speed makes deep water cost normal movement");
+  dnd::GridMap marsh(2, 2);
+  marsh.SetTerrain(CellAt(1, 1), dnd::Terrain::kSwamp);
+  const auto first_diagonal =
+      dnd::PathCostCells(marsh, CellAt(0, 0), CellAt(1, 1));
+  Expect(first_diagonal.has_value() && first_diagonal->cost == 2,
+         "difficult terrain doubles the first diagonal");
+}
+
+auto TestCover() -> void {
+  dnd::GridMap map(6, 1);
+  dnd::CellProps middle = map.PropsAt(CellAt(2, 0));
+  dnd::SetCoverOnSide(middle.cover_sides, 3, dnd::CoverLevel::kHalf);
+  map.SetProps(CellAt(2, 0), middle);
+  Expect(dnd::CoverOnSide(middle.cover_sides, 3) == dnd::CoverLevel::kHalf,
+         "cover is stored on the west side");
+  Expect(dnd::CoverBetween(map, CellAt(0, 0), CellAt(5, 0)) ==
+             dnd::CoverLevel::kHalf,
+         "half cover on the line of sight is found");
+  Expect(dnd::CoverBonus(dnd::CoverLevel::kHalf) == 2 &&
+             dnd::CoverBonus(dnd::CoverLevel::kThreeQuarters) == 5,
+         "half cover gives +2 and three quarters +5 to AC");
+  dnd::SetCoverOnSide(middle.cover_sides, 3, dnd::CoverLevel::kThreeQuarters);
+  map.SetProps(CellAt(2, 0), middle);
+  Expect(dnd::CoverBetween(map, CellAt(0, 0), CellAt(5, 0)) ==
+             dnd::CoverLevel::kThreeQuarters,
+         "three quarters cover upgrades the line of sight");
+  // Укрытие на стороне цели, обращённой к атакующему.
+  dnd::CellProps target = map.PropsAt(CellAt(5, 0));
+  dnd::SetCoverOnSide(target.cover_sides, 3, dnd::CoverLevel::kFull);
+  map.SetProps(CellAt(5, 0), target);
+  Expect(dnd::CoverBetween(map, CellAt(0, 0), CellAt(5, 0)) ==
+             dnd::CoverLevel::kFull,
+         "cover on the target's facing side counts");
+  map.SetBlocked(CellAt(3, 0), true);
+  Expect(dnd::CoverBetween(map, CellAt(0, 0), CellAt(5, 0)) ==
+             dnd::CoverLevel::kFull,
+         "a wall between attacker and target is full cover");
+}
+
+auto TestHazardsAndCurrent() -> void {
+  dnd::GridMap map(4, 1);
+  map.SetTerrain(CellAt(1, 0), dnd::Terrain::kLava);
+  std::vector<dnd::HazardProfile> hazards = dnd::DefaultHazards();
+  hazards.push_back(dnd::HazardProfile{
+      .damage = "1d6",
+      .type = dnd::DamageType::kSlashing,
+      .triggers = dnd::kHazardEnter,
+      .save_dc = 10,
+      .half_on_success = true,
+  });
+  map.SetHazards(std::move(hazards));
+  dnd::CellProps spiked = map.PropsAt(CellAt(2, 0));
+  spiked.hazard = 5;
+  map.SetProps(CellAt(2, 0), spiked);
+
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "dm",
+                         .hp = 1000,
+                         .max_hp = 1000,
+                         .save_bonus = 100,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+          },
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 6, 77);
+  Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the encounter starts");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 0)},
+                            "dm", true)
+             .accepted,
+         "the hero steps into lava");
+  Expect(TokenOf(server.State(), 1).hp < 1000,
+         "lava damages on the first entry");
+  const int after_lava = TokenOf(server.State(), 1).hp;
+  Expect(!TokenOf(server.State(), 1).hazards_done.empty(),
+         "the hazard stays marked for this turn");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(0, 0)},
+                            "dm", true)
+             .accepted,
+         "the hero leaves the lava");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 0)},
+                            "dm", true)
+             .accepted,
+         "the hero returns within the same turn");
+  Expect(TokenOf(server.State(), 1).hp == after_lava,
+         "re-entering the same hazard in one turn does not repeat damage");
+  // Спасбросок делит урон пополам: с бонусом 100 успех гарантирован.
+  const int before_spikes = TokenOf(server.State(), 1).hp;
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 0)},
+                            "dm", true)
+             .accepted,
+         "the hero steps on spikes");
+  const int spike_damage = before_spikes - TokenOf(server.State(), 1).hp;
+  Expect(spike_damage >= 0 && spike_damage <= 3,
+         "a successful save halves the hazard damage");
+  // Новый ход снова срабатывает лавой и снимает метки прошлого хода.
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 0)},
+                            "dm", true)
+             .accepted,
+         "the hero stands in the lava again");
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the next turn starts");
+  Expect(TokenOf(server.State(), 1).hp < after_lava,
+         "turn start repeats the hazard after its mark is cleared");
+}
+
+auto TestCurrentShift() -> void {
+  dnd::GridMap map(3, 1);
+  dnd::CellProps flow = map.PropsAt(CellAt(1, 0));
+  flow.current_dir = 1;  // восток
+  flow.current_strength = 1;
+  map.SetProps(CellAt(1, 0), flow);
+  map.SetBlocked(CellAt(2, 0), true);
+  Expect(dnd::CurrentShiftCells(1) == 1 && dnd::CurrentDc(1) == 15,
+         "current strength sets the shift and the DC");
+
+  dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "swimmer",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .save_bonus = -100,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+          },
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 5, 31);
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 0)},
+                            "dm", true)
+             .accepted,
+         "the swimmer enters the current");
+  Expect(TokenOf(server.State(), 1).cell == CellAt(1, 0),
+         "a blocked current presses the token against the obstacle");
+
+  dnd::GridMap open(3, 1);
+  open.SetProps(CellAt(1, 0), flow);
+  dnd::GameSnapshot pushed{
+      .map = open,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "swimmer",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .save_bonus = -100,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+          },
+      .next_token_id = 2,
+  };
+  dnd::GameServer pushed_server(pushed, 5, 31);
+  Expect(pushed_server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(1, 0)},
+                            "dm", true)
+             .accepted,
+         "the swimmer enters the open current");
+  Expect(TokenOf(pushed_server.State(), 1).cell == CellAt(2, 0),
+         "a failed check pushes the token along the current");
 }
 
 auto TestMoveRules() -> void {
@@ -4547,6 +4765,16 @@ auto TestSaveLoadRoundtrip() -> void {
   map.SetBlocked(CellAt(2, 1), true);
   map.SetTerrain(CellAt(4, 1), dnd::Terrain::kLava);
   map.SetTerrain(CellAt(5, 2), dnd::Terrain::kTree);
+  dnd::CellProps props = map.PropsAt(CellAt(0, 3));
+  props.flags = dnd::kCellRoad | dnd::kCellClimbable;
+  props.water = dnd::WaterDepth::kShallow;
+  props.current_dir = 2;
+  props.current_strength = 3;
+  props.slippery_dc = 15;
+  props.hazard = 2;
+  dnd::SetCoverOnSide(props.cover_sides, 1, dnd::CoverLevel::kHalf);
+  dnd::SetCoverOnSide(props.cover_sides, 2, dnd::CoverLevel::kThreeQuarters);
+  map.SetProps(CellAt(0, 3), props);
   const std::vector<std::uint8_t> party_fog(24, 0);
   std::vector<std::uint8_t> alice_fog(24, 0);
   alice_fog[13] = 1;
@@ -4567,6 +4795,8 @@ auto TestSaveLoadRoundtrip() -> void {
                   .initiative = 15,
                   .ac = 16,
                   .speed = 9,
+                  .swim_speed = 4,
+                  .climb_speed = 2,
                   .notes = "Атака: +5, 1d8+3",
                   .attack_bonus = 5,
                   .save_bonus = 2,
@@ -4583,7 +4813,8 @@ auto TestSaveLoadRoundtrip() -> void {
                   .kind = dnd::TokenKind::kPlayer,
                   .color = 0x507AC8U,
                   .portrait = "hero.png",
-                  .cell = CellAt(1, 1)},
+                  .cell = CellAt(1, 1),
+                  .hazards_done = {1, 5}},
               dnd::Token{.id = 6,
                          .name = "goblin",
                          .owner = "dm",
@@ -4629,11 +4860,24 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->map.Width() == 6 && loaded->map.Height() == 4,
            "dimensions survive the roundtrip");
     Expect(loaded->map.IsBlocked(CellAt(2, 1)), "walls survive the roundtrip");
-    Expect(loaded->map.IsBlocked(CellAt(4, 1)) &&
+    Expect(!loaded->map.IsBlocked(CellAt(4, 1)) &&
                loaded->map.TerrainAt(CellAt(4, 1)) == dnd::Terrain::kLava,
            "lava survives the roundtrip");
+    Expect(loaded->map.HazardAt(CellAt(4, 1)) != nullptr,
+           "lava keeps its default damage profile");
     Expect(loaded->map.IsDifficultTerrain(CellAt(5, 2)),
            "trees survive the roundtrip");
+    const dnd::CellProps& loaded_props = loaded->map.PropsAt(CellAt(0, 3));
+    Expect(loaded_props.flags == (dnd::kCellRoad | dnd::kCellClimbable) &&
+               loaded_props.water == dnd::WaterDepth::kShallow &&
+               loaded_props.current_dir == 2 &&
+               loaded_props.current_strength == 3 &&
+               loaded_props.slippery_dc == 15 && loaded_props.hazard == 2 &&
+               dnd::CoverOnSide(loaded_props.cover_sides, 1) ==
+                   dnd::CoverLevel::kHalf &&
+               dnd::CoverOnSide(loaded_props.cover_sides, 2) ==
+                   dnd::CoverLevel::kThreeQuarters,
+           "cell properties survive the roundtrip");
     Expect(loaded->tokens.size() == 2, "token count survives the roundtrip");
     Expect(loaded->tokens.front().name == "hero", "token name survives");
     Expect(loaded->revealed.size() == 2 &&
@@ -4683,6 +4927,12 @@ auto TestSaveLoadRoundtrip() -> void {
            "damage defences survive the roundtrip");
     Expect(loaded->tokens.front().attack_range == 3,
            "attack range survives the roundtrip");
+    Expect(loaded->tokens.front().swim_speed == 4 &&
+               loaded->tokens.front().climb_speed == 2,
+           "swim and climb speeds survive the roundtrip");
+    Expect(
+        loaded->tokens.front().hazards_done == std::vector<std::uint8_t>{1, 5},
+        "hazards fired this turn survive the roundtrip");
     Expect(loaded->tokens.front().conditions.size() == 2 &&
                loaded->tokens.front().conditions.back().seconds == 60 &&
                loaded->tokens.front().conditions.back().save_dc == 12,
@@ -7751,6 +8001,10 @@ auto TestChatInput() -> void {
 auto main() -> int {
   try {
     TestGridMap();
+    TestCellPropsMovement();
+    TestCover();
+    TestHazardsAndCurrent();
+    TestCurrentShift();
     TestMoveRules();
     TestFogLineOfSight();
     TestFogDiagonalSeal();

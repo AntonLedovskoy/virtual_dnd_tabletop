@@ -514,7 +514,8 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
                                  std::string damage, int temp_hp, int hit_die,
                                  int con_modifier, int attack_range,
                                  std::uint32_t resist, std::uint32_t vulnerable,
-                                 std::uint32_t immune) -> std::optional<Token> {
+                                 std::uint32_t immune, int swim_speed,
+                                 int climb_speed) -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -534,6 +535,8 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
   token->resist = resist & kAllDamageTypes;
   token->vulnerable = vulnerable & kAllDamageTypes;
   token->immune = immune & kAllDamageTypes;
+  token->swim_speed = swim_speed;
+  token->climb_speed = climb_speed;
   return *token;
 }
 
@@ -586,6 +589,19 @@ auto GameState::SpendMovement(TokenId id, int steps, int diagonal_parity)
   }
   token->movement_used += std::max(0, steps);
   token->diagonal_parity = diagonal_parity & 1;
+  return *token;
+}
+
+auto GameState::MarkHazardDone(TokenId id, std::uint8_t hazard)
+    -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  const auto it = std::ranges::lower_bound(token->hazards_done, hazard);
+  if (it == token->hazards_done.end() || *it != hazard) {
+    token->hazards_done.insert(it, hazard);
+  }
   return *token;
 }
 
@@ -650,6 +666,7 @@ auto GameState::ResetTurnEconomy(Token& token) -> void {
   token.movement_bonus = 0;
   token.disengaged = false;
   token.dodging = false;
+  token.hazards_done.clear();
 }
 
 auto GameState::ActiveTokenId() const -> TokenId {

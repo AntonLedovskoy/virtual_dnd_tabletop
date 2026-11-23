@@ -44,6 +44,16 @@ auto BrushLabel(EditorBrush brush) -> std::string_view {
       return strings::kBrushPit;
     case EditorBrush::kLava:
       return strings::kBrushLava;
+    case EditorBrush::kRoad:
+      return strings::kBrushRoad;
+    case EditorBrush::kSwamp:
+      return strings::kBrushSwamp;
+    case EditorBrush::kBrush:
+      return strings::kBrushBrush;
+    case EditorBrush::kSnow:
+      return strings::kBrushSnow;
+    case EditorBrush::kMud:
+      return strings::kBrushMud;
   }
   return strings::kBrushWall;
 }
@@ -137,6 +147,50 @@ auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
   } else if (!status.empty()) {
     text->DrawWrapped(status, text_x, y, kTitleText, max_text_width);
   }
+}
+
+auto DrawEditorInspector(SDL_Renderer* renderer, TextRenderer* text,
+                         const EditorInspectorView& view) -> void {
+  if (renderer == nullptr || text == nullptr) {
+    return;
+  }
+  constexpr int kInspectorX = 380;
+  constexpr int kInspectorY = 12;
+  constexpr int kInspectorWidth = 380;
+  constexpr int kInspectorPadding = 12;
+  const int line_height = static_cast<int>(text->LineHeight()) + 2;
+  const auto height = static_cast<float>(
+      (kInspectorPadding * 2) + (line_height * (view.fields.size() + 3)));
+  const SDL_FRect panel{
+      .x = static_cast<float>(kInspectorX),
+      .y = static_cast<float>(kInspectorY),
+      .w = static_cast<float>(kInspectorWidth),
+      .h = height,
+  };
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SetDrawColor(renderer, kPanelBackground);
+  SDL_RenderFillRect(renderer, &panel);
+  SetDrawColor(renderer, kPanelBorder);
+  SDL_RenderRect(renderer, &panel);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+  const auto text_x = static_cast<float>(kInspectorX + kInspectorPadding);
+  const auto max_text_width =
+      static_cast<float>(kInspectorWidth - (2 * kInspectorPadding));
+  auto y = static_cast<float>(kInspectorY + kInspectorPadding);
+  text->Draw(std::string(strings::kInspectorTitle) + " (" +
+                 std::to_string(view.cell.x) + ", " +
+                 std::to_string(view.cell.y) + ")",
+             text_x, y, kTitleText, max_text_width);
+  y += static_cast<float>(line_height);
+  for (std::size_t index = 0; index < view.fields.size(); ++index) {
+    const bool active = static_cast<int>(index) == view.active;
+    text->Draw(view.fields[index].first + ": " + view.fields[index].second,
+               text_x, y, active ? kTitleText : kText, max_text_width);
+    y += static_cast<float>(line_height);
+  }
+  text->DrawWrapped(std::string(strings::kInspectorHint), text_x, y, kHint,
+                    max_text_width);
 }
 
 }  // namespace dnd

@@ -27,6 +27,8 @@ constexpr std::uint32_t kMaxLogAuthor = 64;
 constexpr std::uint32_t kMaxNotes = 512;
 constexpr std::uint32_t kMaxConditions = 16;
 constexpr std::uint32_t kMaxConditionLength = 32;
+constexpr std::uint32_t kMaxHazards = 64;
+constexpr std::uint32_t kMaxDamageExpression = 64;
 
 constexpr std::uint8_t kCommandMoveToken = 1;
 constexpr std::uint8_t kCommandSay = 2;
@@ -129,6 +131,14 @@ auto WriteToken(ByteWriter& writer, const Token& token,
     writer.U32(token.immune);
     writer.I32(token.attack_range);
   }
+  if (format.has_cell_props) {
+    writer.I32(token.swim_speed);
+    writer.I32(token.climb_speed);
+    writer.U32(static_cast<std::uint32_t>(token.hazards_done.size()));
+    for (const std::uint8_t hazard : token.hazards_done) {
+      writer.U8(hazard);
+    }
+  }
 }
 
 auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
@@ -172,6 +182,10 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
   std::uint32_t vulnerable = 0;
   std::uint32_t immune = 0;
   std::int32_t attack_range = 0;
+  std::int32_t swim_speed = 0;
+  std::int32_t climb_speed = 0;
+  std::uint32_t hazards_done_count = 0;
+  std::vector<std::uint8_t> hazards_done;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -215,6 +229,20 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
        !reader.I32(attack_range))) {
     return false;
   }
+  if (format.has_cell_props) {
+    if (!reader.I32(swim_speed) || !reader.I32(climb_speed) ||
+        !reader.U32(hazards_done_count) || hazards_done_count > kMaxHazards) {
+      return false;
+    }
+    hazards_done.reserve(hazards_done_count);
+    for (std::uint32_t i = 0; i < hazards_done_count; ++i) {
+      std::uint8_t hazard = 0;
+      if (!reader.U8(hazard) || hazard >= kMaxHazards) {
+        return false;
+      }
+      hazards_done.push_back(hazard);
+    }
+  }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
       initiative < -1000000 || initiative > 1000000 || ac <= 0 || ac > 1000 ||
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
@@ -230,7 +258,13 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       (!portrait.empty() && !IsSafeImageName(portrait)) ||
       !IsValidDamageTypeBit(resist) || !IsValidDamageTypeBit(vulnerable) ||
       !IsValidDamageTypeBit(immune) || attack_range < 0 ||
-      attack_range > 1000) {
+      attack_range > 1000 || swim_speed < 0 || swim_speed > 1000 ||
+      climb_speed < 0 || climb_speed > 1000) {
+    return false;
+  }
+  if (!std::ranges::is_sorted(hazards_done) ||
+      std::adjacent_find(hazards_done.begin(), hazards_done.end()) !=
+          hazards_done.end()) {
     return false;
   }
   token = Token{
@@ -246,6 +280,8 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       .initiative = initiative,
       .ac = ac,
       .speed = speed,
+      .swim_speed = swim_speed,
+      .climb_speed = climb_speed,
       .notes = std::move(notes),
       .attack_bonus = attack_bonus,
       .save_bonus = save_bonus,
@@ -271,6 +307,7 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       .movement_bonus = movement_bonus,
       .disengaged = disengaged != 0,
       .dodging = dodging != 0,
+      .hazards_done = std::move(hazards_done),
   };
   return true;
 }
@@ -801,16 +838,20 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
   std::uint32_t resist = 0;
   std::uint32_t vulnerable = 0;
   std::uint32_t immune = 0;
+  std::int32_t swim_speed = 0;
+  std::int32_t climb_speed = 0;
   if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.I32(initiative_bonus) ||
       !reader.String(damage, kMaxNotes) || !reader.I32(temp_hp) ||
       !reader.I32(hit_die) || !reader.I32(con_modifier) ||
       !reader.I32(attack_range) || !reader.U32(resist) ||
-      !reader.U32(vulnerable) || !reader.U32(immune) || !reader.Done() ||
+      !reader.U32(vulnerable) || !reader.U32(immune) ||
+      !reader.I32(swim_speed) || !reader.I32(climb_speed) || !reader.Done() ||
       !IsValidHitDie(hit_die) || con_modifier < -kMaxConModifier ||
       con_modifier > kMaxConModifier || attack_range < 0 ||
-      attack_range > 1000 || !IsValidDamageTypeBit(resist) ||
+      attack_range > 1000 || swim_speed < 0 || swim_speed > 1000 ||
+      climb_speed < 0 || climb_speed > 1000 || !IsValidDamageTypeBit(resist) ||
       !IsValidDamageTypeBit(vulnerable) || !IsValidDamageTypeBit(immune)) {
     return std::nullopt;
   }
@@ -828,7 +869,9 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
                                   .attack_range = attack_range,
                                   .resist = resist,
                                   .vulnerable = vulnerable,
-                                  .immune = immune}};
+                                  .immune = immune,
+                                  .swim_speed = swim_speed,
+                                  .climb_speed = climb_speed}};
 }
 
 auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
@@ -1056,6 +1099,87 @@ auto ReadFogRecords(ByteReader& reader, std::uint32_t map_cells,
   return true;
 }
 
+// Палитра урона карты: индекс 0 — «нет урона», остальные ссылаются клетки.
+auto WriteHazards(ByteWriter& writer, const std::vector<HazardProfile>& hazards)
+    -> void {
+  writer.U32(static_cast<std::uint32_t>(hazards.size()));
+  for (const HazardProfile& hazard : hazards) {
+    writer.String(hazard.damage);
+    writer.U8(static_cast<std::uint8_t>(hazard.type));
+    writer.U8(hazard.triggers);
+    writer.I32(hazard.save_dc);
+    writer.U8(hazard.half_on_success ? 1 : 0);
+  }
+}
+
+auto ReadHazards(ByteReader& reader, std::vector<HazardProfile>& hazards)
+    -> bool {
+  std::uint32_t count = 0;
+  if (!reader.U32(count) || count == 0 || count > kMaxHazards) {
+    return false;
+  }
+  hazards.clear();
+  hazards.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    HazardProfile hazard;
+    std::uint8_t type = 0;
+    std::uint8_t triggers = 0;
+    std::uint8_t half = 0;
+    if (!reader.String(hazard.damage, kMaxDamageExpression) ||
+        !reader.U8(type) || !reader.U8(triggers) ||
+        !reader.I32(hazard.save_dc) || !reader.U8(half)) {
+      return false;
+    }
+    if (type > static_cast<std::uint8_t>(DamageType::kThunder) ||
+        !IsValidHazardTriggers(triggers) || hazard.save_dc < 0 ||
+        hazard.save_dc > 100 || half > 1 ||
+        (i == kNoHazard && !hazard.damage.empty())) {
+      return false;
+    }
+    DiceExpression expression;
+    if (!hazard.damage.empty() &&
+        !ParseDiceExpression(hazard.damage, expression)) {
+      return false;
+    }
+    hazard.type = static_cast<DamageType>(type);
+    hazard.triggers = triggers;
+    hazard.half_on_success = half != 0;
+    hazards.push_back(std::move(hazard));
+  }
+  return true;
+}
+
+auto WriteCellProps(ByteWriter& writer, const CellProps& props) -> void {
+  writer.U8(props.flags);
+  writer.U8(static_cast<std::uint8_t>(props.water));
+  writer.U8(props.current_dir);
+  writer.U8(props.current_strength);
+  writer.U8(props.hazard);
+  writer.I32(props.slippery_dc);
+  writer.U8(props.cover_sides);
+}
+
+auto ReadCellProps(ByteReader& reader, CellProps& props,
+                   const std::vector<HazardProfile>& hazards) -> bool {
+  std::uint8_t flags = 0;
+  std::uint8_t water = 0;
+  std::uint8_t hazard = 0;
+  if (!reader.U8(flags) || !reader.U8(water) || !reader.U8(props.current_dir) ||
+      !reader.U8(props.current_strength) || !reader.U8(hazard) ||
+      !reader.I32(props.slippery_dc) || !reader.U8(props.cover_sides)) {
+    return false;
+  }
+  if ((flags & ~kCellAllFlags) != 0 || water > 2 || props.current_dir > 8 ||
+      props.current_strength > 3 || hazard >= hazards.size() ||
+      props.slippery_dc < 0 || props.slippery_dc > 100) {
+    return false;
+  }
+  props.flags = flags;
+  props.water = static_cast<WaterDepth>(water);
+  props.hazard = hazard;
+  return true;
+}
+
 }  // namespace
 
 auto EncodeSnapshot(const GameSnapshot& snapshot) -> std::vector<std::uint8_t> {
@@ -1071,6 +1195,14 @@ auto EncodeSnapshot(const GameSnapshot& snapshot, const SnapshotFormat& format)
     for (int x = 0; x < snapshot.map.Width(); ++x) {
       writer.U8(static_cast<std::uint8_t>(
           snapshot.map.TerrainAt(Cell{.x = x, .y = y})));
+    }
+  }
+  if (format.has_cell_props) {
+    WriteHazards(writer, snapshot.map.Hazards());
+    for (int y = 0; y < snapshot.map.Height(); ++y) {
+      for (int x = 0; x < snapshot.map.Width(); ++x) {
+        WriteCellProps(writer, snapshot.map.PropsAt(Cell{.x = x, .y = y}));
+      }
     }
   }
   writer.U32(static_cast<std::uint32_t>(snapshot.tokens.size()));
@@ -1116,10 +1248,26 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
       if (!reader.U8(terrain)) {
         return std::nullopt;
       }
-      if (terrain > static_cast<std::uint8_t>(Terrain::kLava)) {
+      if (terrain >= kTerrainCount) {
         return std::nullopt;
       }
       map.SetTerrain(Cell{.x = x, .y = y}, static_cast<Terrain>(terrain));
+    }
+  }
+  if (format.has_cell_props) {
+    std::vector<HazardProfile> hazards;
+    if (!ReadHazards(reader, hazards)) {
+      return std::nullopt;
+    }
+    map.SetHazards(std::move(hazards));
+    for (int y = 0; y < map.Height(); ++y) {
+      for (int x = 0; x < map.Width(); ++x) {
+        CellProps props;
+        if (!ReadCellProps(reader, props, map.Hazards())) {
+          return std::nullopt;
+        }
+        map.SetProps(Cell{.x = x, .y = y}, props);
+      }
     }
   }
 
@@ -1334,6 +1482,8 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U32(cmd.resist);
           writer.U32(cmd.vulnerable);
           writer.U32(cmd.immune);
+          writer.I32(cmd.swim_speed);
+          writer.I32(cmd.climb_speed);
         } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
           writer.U8(kCommandUpdateTokenCombat);
           writer.U32(cmd.id);

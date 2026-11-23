@@ -14,7 +14,7 @@ namespace dnd {
 // Файл кампании — версионированный little-endian дамп всех сцен. Формат
 // сцены совпадает с отдельным файлом сохранения.
 // 17: у сцен появились стабильные id, у кампании — счётчик next_scene_id.
-inline constexpr auto kCampaignVersion = 17U;
+inline constexpr auto kCampaignVersion = 18U;
 // Самая старая читаемая версия — кампании v0.1.0 (13); их сцены хранят
 // снимки сохранения 26.
 inline constexpr auto kMinCampaignVersion = 13U;

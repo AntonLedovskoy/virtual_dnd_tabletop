@@ -9,6 +9,12 @@ namespace dnd {
 
 auto IsProne(const Token& token) -> bool { return HasCondition(token, kProne); }
 
+auto MovementProfileFor(const Token& token) -> MovementProfile {
+  return MovementProfile{.speed = token.speed,
+                         .swim_speed = token.swim_speed,
+                         .climb_speed = token.climb_speed};
+}
+
 auto StandUpCostCells(const Token& token) -> int {
   if (!IsProne(token)) {
     return 0;

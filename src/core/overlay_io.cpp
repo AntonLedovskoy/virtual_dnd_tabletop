@@ -9,6 +9,7 @@
 
 #include "core/byte_io.h"
 #include "core/campaign_io.h"
+#include "core/scene_io.h"
 #include "core/serialization.h"
 
 namespace dnd {
@@ -74,6 +75,11 @@ auto IsOverlayWritable(const Overlay& overlay) -> bool {
   return true;
 }
 
+// Снимки партии версии 1 писались форматом сохранения 30.
+auto OverlaySnapshotFormat(std::uint32_t overlay_version) -> SnapshotFormat {
+  return overlay_version >= 2 ? SnapshotFormat{} : SaveSnapshotFormat(30);
+}
+
 auto DecodeOverlay(const std::uint8_t* data, std::size_t size,
                    std::uint32_t overlay_version) -> std::optional<Overlay> {
   if (overlay_version < kMinOverlayVersion ||
@@ -127,8 +133,8 @@ auto DecodeOverlay(const std::uint8_t* data, std::size_t size,
           !reader.Bytes(blob_size, blob)) {
         return std::nullopt;
       }
-      const std::optional<GameSnapshot> snapshot =
-          DecodeSnapshot(blob.data(), blob.size());
+      const std::optional<GameSnapshot> snapshot = DecodeSnapshot(
+          blob.data(), blob.size(), OverlaySnapshotFormat(overlay_version));
       if (!snapshot.has_value()) {
         return std::nullopt;
       }
@@ -253,7 +259,8 @@ auto EncodeOverlayAs(const Overlay& overlay, std::uint32_t overlay_version)
       writer.String(*scene.note);
     }
     if (scene.snapshot.has_value()) {
-      const std::vector<std::uint8_t> blob = EncodeSnapshot(*scene.snapshot);
+      const std::vector<std::uint8_t> blob = EncodeSnapshot(
+          *scene.snapshot, OverlaySnapshotFormat(overlay_version));
       writer.U32(static_cast<std::uint32_t>(blob.size()));
       writer.Raw(blob);
     }

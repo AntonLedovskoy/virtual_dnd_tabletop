@@ -126,6 +126,15 @@ class GameServer {
   auto DamageAndLog(TokenId id, int amount, bool critical,
                     DamageType damage_type, const std::string& actor,
                     std::vector<Event>& events) -> void;
+  // Срабатывание профиля урона клетки (вход, начало/конец хода). Повторно в
+  // том же ходу профиль не бьёт; спасбросок с КС делит урон пополам.
+  auto TriggerHazards(TokenId id, std::uint8_t trigger,
+                      const std::string& actor, std::vector<Event>& events)
+      -> void;
+  // Течение в клетке токена: проверка Силы (Атлетика), при провале сдвиг по
+  // течению без траты движения. Столкновения и границы карты останавливают.
+  auto TryCurrent(TokenId id, const std::string& actor,
+                  std::vector<Event>& events) -> void;
   [[nodiscard]] auto HandleHeal(const HealToken& command,
                                 const std::string& actor, bool can_control_all)
       -> CommandOutcome;

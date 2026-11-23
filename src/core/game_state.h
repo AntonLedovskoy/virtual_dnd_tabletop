@@ -109,7 +109,8 @@ class GameState {
       int save_bonus, int initiative_bonus, std::string damage, int temp_hp,
       int hit_die, int con_modifier, int attack_range = 0,
       std::uint32_t resist = 0, std::uint32_t vulnerable = 0,
-      std::uint32_t immune = 0) -> std::optional<Token>;
+      std::uint32_t immune = 0, int swim_speed = 0, int climb_speed = 0)
+      -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenCombat(TokenId id,
                                        std::vector<Condition> conditions)
       -> std::optional<Token>;
@@ -123,6 +124,9 @@ class GameState {
   // Добавляет к израсходованному запасу движения токена steps клеток и
   // запоминает чётность диагоналей после хода.
   [[nodiscard]] auto SpendMovement(TokenId id, int steps, int diagonal_parity)
+      -> std::optional<Token>;
+  // Отмечает профиль урона клетки сработавшим в этом ходу токена.
+  [[nodiscard]] auto MarkHazardDone(TokenId id, std::uint8_t hazard)
       -> std::optional<Token>;
   // Тратит действие или реакцию токена; возвращает обновлённый токен.
   // Проверкой хода и недееспособности занимается сервер.

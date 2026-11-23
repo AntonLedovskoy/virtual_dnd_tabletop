@@ -27,6 +27,10 @@ auto DrawGrid(SDL_Renderer* renderer, const GridMap& map, float cell_size,
 // Стены, деревья, вода, пропасти и лава.
 auto DrawTerrain(SDL_Renderer* renderer, const GridMap& map, float cell_size,
                  float offset_x, float offset_y) -> void;
+// Свойства клеток поверх рельефа: дорога, глубина воды, течение, штриховка
+// трудной местности, метки укрытия на гранях и урон.
+auto DrawCellProps(SDL_Renderer* renderer, const GridMap& map, float cell_size,
+                   float offset_x, float offset_y) -> void;
 auto DrawCellHighlight(SDL_Renderer* renderer, Cell cell, float cell_size,
                        float offset_x, float offset_y) -> void;
 // Картинка токена, уже загруженная приложением; nullptr — цвет и имя.

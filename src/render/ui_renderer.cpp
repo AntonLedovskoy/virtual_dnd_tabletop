@@ -744,6 +744,7 @@ auto DrawModalField(SDL_Renderer* renderer, TextRenderer* text,
 auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const Token& token, SheetField active,
                     const std::string& ac, const std::string& speed,
+                    const std::string& swim, const std::string& climb,
                     const std::string& attack, const std::string& save,
                     const std::string& initiative, const std::string& temp_hp,
                     const std::string& hit_die, const std::string& con,
@@ -797,20 +798,22 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                left, cursor_y, kHintText, content_width);
   }
 
-  const SDL_FRect ac_field{left, y + 108.0F, 174.0F, 40.0F};
-  const SDL_FRect speed_field{left + 193.0F, y + 108.0F, 174.0F, 40.0F};
-  const SDL_FRect initiative_field{left + 386.0F, y + 108.0F, 174.0F, 40.0F};
-  const SDL_FRect attack_field{left, y + 168.0F, 174.0F, 40.0F};
-  const SDL_FRect save_field{left + 193.0F, y + 168.0F, 174.0F, 40.0F};
-  const SDL_FRect temp_hp_field{left + 386.0F, y + 168.0F, 174.0F, 40.0F};
-  const SDL_FRect hit_die_field{left, y + 228.0F, 174.0F, 40.0F};
-  const SDL_FRect con_field{left + 193.0F, y + 228.0F, 174.0F, 40.0F};
-  const SDL_FRect range_field{left + 386.0F, y + 228.0F, 174.0F, 40.0F};
-  const SDL_FRect damage_field{left, y + 292.0F, content_width, 40.0F};
-  const SDL_FRect resist_field{left, y + 352.0F, content_width, 40.0F};
-  const SDL_FRect vulnerable_field{left, y + 412.0F, content_width, 40.0F};
-  const SDL_FRect immune_field{left, y + 472.0F, content_width, 40.0F};
-  const SDL_FRect notes_field{left, y + 532.0F, content_width, 40.0F};
+  const SDL_FRect ac_field{left, y + 100.0F, 174.0F, 38.0F};
+  const SDL_FRect speed_field{left + 193.0F, y + 100.0F, 174.0F, 38.0F};
+  const SDL_FRect initiative_field{left + 386.0F, y + 100.0F, 174.0F, 38.0F};
+  const SDL_FRect swim_field{left, y + 148.0F, 174.0F, 38.0F};
+  const SDL_FRect climb_field{left + 193.0F, y + 148.0F, 174.0F, 38.0F};
+  const SDL_FRect attack_field{left + 386.0F, y + 148.0F, 174.0F, 38.0F};
+  const SDL_FRect save_field{left, y + 196.0F, 174.0F, 38.0F};
+  const SDL_FRect temp_hp_field{left + 193.0F, y + 196.0F, 174.0F, 38.0F};
+  const SDL_FRect hit_die_field{left + 386.0F, y + 196.0F, 174.0F, 38.0F};
+  const SDL_FRect con_field{left, y + 244.0F, 174.0F, 38.0F};
+  const SDL_FRect range_field{left + 193.0F, y + 244.0F, 348.0F, 38.0F};
+  const SDL_FRect damage_field{left, y + 296.0F, content_width, 38.0F};
+  const SDL_FRect resist_field{left, y + 344.0F, content_width, 38.0F};
+  const SDL_FRect vulnerable_field{left, y + 392.0F, content_width, 38.0F};
+  const SDL_FRect immune_field{left, y + 440.0F, content_width, 38.0F};
+  const SDL_FRect notes_field{left, y + 488.0F, content_width, 38.0F};
 
   const bool editing = !read_only;
   DrawModalField(renderer, text, ac_field, std::string(strings::kSheetAc), ac,
@@ -820,6 +823,10 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   DrawModalField(renderer, text, initiative_field,
                  std::string(strings::kSheetInitiative), initiative,
                  editing && active == SheetField::kInitiative);
+  DrawModalField(renderer, text, swim_field, std::string(strings::kSheetSwim),
+                 swim, editing && active == SheetField::kSwim);
+  DrawModalField(renderer, text, climb_field, std::string(strings::kSheetClimb),
+                 climb, editing && active == SheetField::kClimb);
   DrawModalField(renderer, text, attack_field,
                  std::string(strings::kSheetAttack), attack,
                  editing && active == SheetField::kAttack);

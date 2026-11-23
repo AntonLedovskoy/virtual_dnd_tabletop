@@ -18,6 +18,8 @@ struct SnapshotFormat {
   bool has_turn_economy = true;    // экономика хода (сохранение 28)
   bool has_damage_profile = true;  // защиты и дистанция атаки (сохранение 29)
   bool has_game_clock = true;  // игровые часы и длинный отдых (сохранение 30)
+  bool has_cell_props =
+      true;  // свойства клеток и палитра урона (сохранение 31)
 };
 
 // Формат передачи, общий для сохранений и TCP-сообщений. Декодеры строгие:

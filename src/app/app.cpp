@@ -968,6 +968,28 @@ auto App::ApplyEditorBrush(Cell cell) -> void {
     case EditorBrush::kLava:
       scene_.map.SetTerrain(cell, Terrain::kLava);
       break;
+    case EditorBrush::kRoad: {
+      if (scene_.map.TerrainAt(cell) == Terrain::kPit ||
+          scene_.map.TerrainAt(cell) == Terrain::kWall) {
+        scene_.map.SetTerrain(cell, Terrain::kFloor);
+      }
+      CellProps props = scene_.map.PropsAt(cell);
+      props.flags |= kCellRoad;
+      scene_.map.SetProps(cell, props);
+      break;
+    }
+    case EditorBrush::kSwamp:
+      scene_.map.SetTerrain(cell, Terrain::kSwamp);
+      break;
+    case EditorBrush::kBrush:
+      scene_.map.SetTerrain(cell, Terrain::kBrush);
+      break;
+    case EditorBrush::kSnow:
+      scene_.map.SetTerrain(cell, Terrain::kSnow);
+      break;
+    case EditorBrush::kMud:
+      scene_.map.SetTerrain(cell, Terrain::kMud);
+      break;
   }
   scene_.encounter = Encounter{};
 }
@@ -1012,7 +1034,17 @@ auto App::EraseEditorCell(Cell cell) -> void {
   if (EditorTokenAt(cell) != nullptr) {
     return;
   }
-  scene_.map.SetTerrain(cell, Terrain::kFloor);
+  if (editor_brush_ == EditorBrush::kRoad) {
+    // ПКМ со кистью дороги снимает только дорогу, рельеф остаётся.
+    CellProps props = scene_.map.PropsAt(cell);
+    props.flags &= static_cast<std::uint8_t>(~kCellRoad);
+    scene_.map.SetProps(cell, props);
+  } else {
+    scene_.map.SetTerrain(cell, Terrain::kFloor);
+    // Пол возвращает и свойства клетки: иначе после болота остались бы
+    // дорога, укрытие или урон.
+    scene_.map.SetProps(cell, CellProps{});
+  }
   scene_.encounter = Encounter{};
 }
 
@@ -1270,6 +1302,29 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SDLK_6:
       editor_brush_ = EditorBrush::kLava;
       return;
+    case SDLK_7:
+      editor_brush_ = EditorBrush::kRoad;
+      return;
+    case SDLK_8:
+      // Одна клавиша на трудную местность: болото → заросли → снег → грязь.
+      switch (editor_brush_) {
+        case EditorBrush::kSwamp:
+          editor_brush_ = EditorBrush::kBrush;
+          break;
+        case EditorBrush::kBrush:
+          editor_brush_ = EditorBrush::kSnow;
+          break;
+        case EditorBrush::kSnow:
+          editor_brush_ = EditorBrush::kMud;
+          break;
+        default:
+          editor_brush_ = EditorBrush::kSwamp;
+          break;
+      }
+      return;
+    case SDLK_G:
+      OpenEditorInspector();
+      return;
     case SDLK_P:
       AddEditorToken(CellFromPixel(mouse_x_, mouse_y_), TokenKind::kPlayer);
       return;
@@ -1294,6 +1349,187 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
     default:
       break;
   }
+}
+
+auto App::OpenEditorInspector() -> void {
+  if (!in_editor_) {
+    return;
+  }
+  const Cell cell = CellFromPixel(mouse_x_, mouse_y_);
+  if (!scene_.map.Contains(cell)) {
+    return;
+  }
+  EndEditorStroke();
+  editor_drag_token_ = 0;
+  editor_inspector_active_ = true;
+  editor_inspector_cell_ = cell;
+  editor_inspector_field_ = 0;
+  editor_inspector_props_ = scene_.map.PropsAt(cell);
+  editor_inspector_cover_side_ = 0;
+  editor_inspector_cover_level_ =
+      CoverOnSide(editor_inspector_props_.cover_sides, 0);
+}
+
+auto App::CloseEditorInspector() -> void { editor_inspector_active_ = false; }
+
+auto App::ApplyEditorInspector() -> void {
+  if (!editor_inspector_active_ ||
+      !scene_.map.Contains(editor_inspector_cell_)) {
+    return;
+  }
+  CellProps props = editor_inspector_props_;
+  SetCoverOnSide(props.cover_sides, editor_inspector_cover_side_,
+                 editor_inspector_cover_level_);
+  scene_.map.SetProps(editor_inspector_cell_, props);
+  scene_.encounter = Encounter{};
+  editor_status_.Set(std::string(strings::kInspectorApplied));
+}
+
+auto App::HandleEditorInspectorKeyDown(const SDL_KeyboardEvent& key) -> void {
+  if (!editor_inspector_active_) {
+    return;
+  }
+  switch (key.key) {
+    case SDLK_ESCAPE:
+      CloseEditorInspector();
+      editor_status_.Clear();
+      return;
+    case SDLK_TAB:
+    case SDLK_DOWN:
+      editor_inspector_field_ =
+          (editor_inspector_field_ + 1) % static_cast<int>(kInspectorFields);
+      return;
+    case SDLK_UP:
+      editor_inspector_field_ =
+          (editor_inspector_field_ + static_cast<int>(kInspectorFields) - 1) %
+          static_cast<int>(kInspectorFields);
+      return;
+    case SDLK_LEFT:
+    case SDLK_RIGHT: {
+      const int step = key.key == SDLK_RIGHT ? 1 : -1;
+      CellProps& props = editor_inspector_props_;
+      switch (static_cast<InspectorField>(editor_inspector_field_)) {
+        case InspectorField::kWater:
+          props.water = static_cast<WaterDepth>(
+              (static_cast<int>(props.water) + step + 3) % 3);
+          break;
+        case InspectorField::kCurrentDir:
+          props.current_dir = static_cast<std::uint8_t>(
+              (static_cast<int>(props.current_dir) + step + 9) % 9);
+          if (props.current_dir == 0) {
+            props.current_strength = 0;
+          } else if (props.current_strength == 0) {
+            props.current_strength = 1;
+          }
+          break;
+        case InspectorField::kCurrentStrength:
+          props.current_strength = static_cast<std::uint8_t>(
+              (static_cast<int>(props.current_strength) + step + 4) % 4);
+          break;
+        case InspectorField::kHazard: {
+          const int count =
+              std::max<int>(1, static_cast<int>(scene_.map.Hazards().size()));
+          props.hazard = static_cast<std::uint8_t>(
+              (static_cast<int>(props.hazard) + step + count) % count);
+          break;
+        }
+        case InspectorField::kRoad:
+          props.flags ^= kCellRoad;
+          break;
+        case InspectorField::kClimb:
+          props.flags ^= kCellClimbable;
+          break;
+        case InspectorField::kSlippery:
+          if (step > 0) {
+            props.slippery_dc = props.slippery_dc == 0   ? 10
+                                : props.slippery_dc < 20 ? props.slippery_dc + 5
+                                                         : 0;
+          } else {
+            props.slippery_dc = props.slippery_dc == 0 ? 20
+                                : props.slippery_dc > 10
+                                    ? props.slippery_dc - 5
+                                    : (props.slippery_dc == 10 ? 0 : 10);
+          }
+          break;
+        case InspectorField::kCoverSide:
+          editor_inspector_cover_side_ =
+              (editor_inspector_cover_side_ + step + kCoverSides) % kCoverSides;
+          editor_inspector_cover_level_ =
+              CoverOnSide(props.cover_sides, editor_inspector_cover_side_);
+          break;
+        case InspectorField::kCoverLevel: {
+          const int level =
+              (static_cast<int>(editor_inspector_cover_level_) + step + 4) % 4;
+          editor_inspector_cover_level_ = static_cast<CoverLevel>(level);
+          break;
+        }
+        case InspectorField::kCount:
+          break;
+      }
+      return;
+    }
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER:
+      ApplyEditorInspector();
+      return;
+    default:
+      return;
+  }
+}
+
+auto App::EditorInspectorFields() const
+    -> std::vector<std::pair<std::string, std::string>> {
+  const CellProps& props = editor_inspector_props_;
+  std::vector<std::pair<std::string, std::string>> fields;
+  const auto add = [&fields](std::string_view label, std::string value) {
+    fields.emplace_back(std::string(label), std::move(value));
+  };
+  switch (props.water) {
+    case WaterDepth::kDry:
+      add(strings::kInspectorWater, std::string(strings::kInspectorNo));
+      break;
+    case WaterDepth::kShallow:
+      add(strings::kInspectorWater, "мелко");
+      break;
+    case WaterDepth::kDeep:
+      add(strings::kInspectorWater, "глубоко");
+      break;
+  }
+  constexpr std::array<std::string_view, 9> kDirections{
+      "нет", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ", "С", "СВ"};
+  add(strings::kInspectorCurrent,
+      std::string(kDirections[props.current_dir % kDirections.size()]));
+  add(strings::kInspectorCurrentStrength,
+      std::to_string(props.current_strength));
+  const std::vector<HazardProfile>& hazards = scene_.map.Hazards();
+  std::string hazard = std::string(strings::kInspectorNo);
+  if (props.hazard != kNoHazard && props.hazard < hazards.size()) {
+    hazard = hazards[props.hazard].damage;
+    if (hazards[props.hazard].type != DamageType::kNone) {
+      hazard +=
+          " (" + std::string(DamageTypeName(hazards[props.hazard].type)) + ")";
+    }
+  }
+  add(strings::kInspectorHazard, std::move(hazard));
+  add(strings::kInspectorRoad, (props.flags & kCellRoad) != 0
+                                   ? std::string(strings::kInspectorYes)
+                                   : std::string(strings::kInspectorNo));
+  add(strings::kInspectorClimb, (props.flags & kCellClimbable) != 0
+                                    ? std::string(strings::kInspectorYes)
+                                    : std::string(strings::kInspectorNo));
+  add(strings::kInspectorSlippery, props.slippery_dc > 0
+                                       ? std::to_string(props.slippery_dc)
+                                       : std::string(strings::kInspectorNo));
+  constexpr std::array<std::string_view, kCoverSides> kSides{"север", "восток",
+                                                             "юг", "запад"};
+  add(strings::kInspectorCoverSide,
+      std::string(kSides[editor_inspector_cover_side_ % kCoverSides]));
+  constexpr std::array<std::string_view, 4> kLevels{"нет", "половина",
+                                                    "три четверти", "полное"};
+  add(strings::kInspectorCoverLevel,
+      std::string(
+          kLevels[static_cast<int>(editor_inspector_cover_level_) % 4]));
+  return fields;
 }
 
 auto App::OpenEditorScenes() -> void {
@@ -2355,6 +2591,12 @@ auto App::HandleEvent(SDL_Event event) -> void {
       }
       return;
     }
+    if (editor_inspector_active_) {
+      if (event.type == SDL_EVENT_KEY_DOWN) {
+        HandleEditorInspectorKeyDown(event.key);
+      }
+      return;
+    }
     if (editor_token_edit_) {
       switch (event.type) {
         case SDL_EVENT_TEXT_INPUT:
@@ -3055,6 +3297,8 @@ auto App::OpenSheet() -> void {
 auto App::LoadSheetFields(const Token& token) -> void {
   sheet_ac_ = std::to_string(token.ac);
   sheet_speed_ = std::to_string(token.speed);
+  sheet_swim_ = std::to_string(token.swim_speed);
+  sheet_climb_ = std::to_string(token.climb_speed);
   sheet_attack_ = std::to_string(token.attack_bonus);
   sheet_save_ = std::to_string(token.save_bonus);
   sheet_initiative_ = std::to_string(token.initiative_bonus);
@@ -3097,10 +3341,11 @@ auto App::DrawActiveSheet() -> void {
     return;
   }
   DrawSheetPanel(renderer_, text_.get(), *token, sheet_field_, sheet_ac_,
-                 sheet_speed_, sheet_attack_, sheet_save_, sheet_initiative_,
-                 sheet_temp_hp_, sheet_hit_die_, sheet_con_, sheet_range_,
-                 sheet_damage_, sheet_resist_, sheet_vulnerable_, sheet_immune_,
-                 sheet_notes_, sheet_read_only_);
+                 sheet_speed_, sheet_swim_, sheet_climb_, sheet_attack_,
+                 sheet_save_, sheet_initiative_, sheet_temp_hp_, sheet_hit_die_,
+                 sheet_con_, sheet_range_, sheet_damage_, sheet_resist_,
+                 sheet_vulnerable_, sheet_immune_, sheet_notes_,
+                 sheet_read_only_);
 }
 
 auto App::CloseSheet() -> void {
@@ -3126,6 +3371,8 @@ auto App::SaveSheet() -> void {
     }
     token->ac = values.ac;
     token->speed = values.speed;
+    token->swim_speed = values.swim;
+    token->climb_speed = values.climb;
     token->notes = std::move(values.notes);
     token->attack_bonus = values.attack;
     token->save_bonus = values.save;
@@ -3168,14 +3415,19 @@ auto App::SaveSheet() -> void {
                                .attack_range = values.attack_range,
                                .resist = values.resist,
                                .vulnerable = values.vulnerable,
-                               .immune = values.immune});
+                               .immune = values.immune,
+                               .swim_speed = values.swim,
+                               .climb_speed = values.climb});
   CloseSheet();
 }
 
 auto App::ReadSheetValues(SheetValues& values) -> bool {
   if (!ParseNumber(sheet_ac_, values.ac) || values.ac > 1000 ||
       !ParseSignedNumber(sheet_speed_, values.speed) || values.speed < 0 ||
-      values.speed > 1000 || !ParseSignedNumber(sheet_attack_, values.attack) ||
+      values.speed > 1000 || !ParseSignedNumber(sheet_swim_, values.swim) ||
+      values.swim < 0 || values.swim > 1000 ||
+      !ParseSignedNumber(sheet_climb_, values.climb) || values.climb < 0 ||
+      values.climb > 1000 || !ParseSignedNumber(sheet_attack_, values.attack) ||
       values.attack < -100 || values.attack > 100 ||
       !ParseSignedNumber(sheet_save_, values.save) || values.save < -100 ||
       values.save > 100 ||
@@ -3283,6 +3535,7 @@ auto App::HandleSheetTextInput(const char* text) -> void {
     return;
   }
   if (sheet_field_ == SheetField::kAc || sheet_field_ == SheetField::kSpeed ||
+      sheet_field_ == SheetField::kSwim || sheet_field_ == SheetField::kClimb ||
       sheet_field_ == SheetField::kAttack ||
       sheet_field_ == SheetField::kSave ||
       sheet_field_ == SheetField::kInitiative ||
@@ -3295,6 +3548,12 @@ auto App::HandleSheetTextInput(const char* text) -> void {
         break;
       case SheetField::kSpeed:
         AppendBoundedNumber(sheet_speed_, text, 0, 1000, false);
+        break;
+      case SheetField::kSwim:
+        AppendBoundedNumber(sheet_swim_, text, 0, 1000, false);
+        break;
+      case SheetField::kClimb:
+        AppendBoundedNumber(sheet_climb_, text, 0, 1000, false);
         break;
       case SheetField::kAttack:
         AppendBoundedNumber(sheet_attack_, text, -100, 100, true);
@@ -3373,6 +3632,12 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SheetField::kSpeed:
       buffer = &sheet_speed_;
+      break;
+    case SheetField::kSwim:
+      buffer = &sheet_swim_;
+      break;
+    case SheetField::kClimb:
+      buffer = &sheet_climb_;
       break;
     case SheetField::kAttack:
       buffer = &sheet_attack_;
@@ -5262,6 +5527,8 @@ auto App::Iterate() -> void {
     DrawBackground(scene_.map, scene_.background);
     DrawGrid(renderer_, scene_.map, camera_.cell_size, camera_.x, camera_.y);
     DrawTerrain(renderer_, scene_.map, camera_.cell_size, camera_.x, camera_.y);
+    DrawCellProps(renderer_, scene_.map, camera_.cell_size, camera_.x,
+                  camera_.y);
     std::vector<TokenArt> editor_art;
     editor_art.reserve(scene_.tokens.size());
     for (const Token& token : scene_.tokens) {
@@ -5296,6 +5563,13 @@ auto App::Iterate() -> void {
                       campaign_.active, editor_scenes_selected_, edit_label,
                       editor_scene_edit_buffer_, editor_scenes_status_.Text(),
                       strings::kEditorScenesHint);
+    }
+    if (editor_inspector_active_) {
+      DrawEditorInspector(
+          renderer_, text_.get(),
+          EditorInspectorView{.cell = editor_inspector_cell_,
+                              .fields = EditorInspectorFields(),
+                              .active = editor_inspector_field_});
     }
     if (bestiary_active_) {
       DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
@@ -5363,6 +5637,8 @@ auto App::Iterate() -> void {
   DrawBackground(view_.Map(), view_.Background());
   DrawGrid(renderer_, view_.Map(), camera_.cell_size, camera_.x, camera_.y);
   DrawTerrain(renderer_, view_.Map(), camera_.cell_size, camera_.x, camera_.y);
+  DrawCellProps(renderer_, view_.Map(), camera_.cell_size, camera_.x,
+                camera_.y);
   const Encounter& encounter = view_.EncounterState();
   if (show_movement_range_) {
     const Token* range_token = FindSelectedToken();
@@ -5385,9 +5661,9 @@ auto App::Iterate() -> void {
           blockers.push_back(token.cell);
         }
       }
-      std::vector<Cell> reachable =
-          ReachableCells(view_.Map(), range_token->cell, radius,
-                         range_token->diagonal_parity, blockers);
+      std::vector<Cell> reachable = ReachableCells(
+          view_.Map(), range_token->cell, radius, range_token->diagonal_parity,
+          blockers, MovementProfileFor(*range_token));
       std::erase_if(reachable, [&occupied](Cell cell) -> bool {
         return std::ranges::find(occupied, cell) != occupied.end();
       });

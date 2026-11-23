@@ -389,6 +389,8 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
                                 std::to_string(distance * 5) + " футов",
                         .timestamp = CurrentTimeSeconds()},
     });
+    TryCurrent(command.id, actor, jump_outcome.events);
+    TriggerHazards(command.id, kHazardEnter, actor, jump_outcome.events);
     if (token->kind != TokenKind::kPlayer && IsPartyVisible(token->cell)) {
       (void)JoinEncounterIfNeeded(command.id, jump_outcome.events);
     }
@@ -401,7 +403,8 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   std::optional<PathCost> path;
   if (!can_control_all) {
     path = PathCostCells(state_.Map(), token->cell, command.target,
-                         token->diagonal_parity, blockers);
+                         token->diagonal_parity, blockers,
+                         MovementProfileFor(*token));
     if (!path.has_value()) {
       return CommandOutcome{.reject_reason = "нет пути к клетке"};
     }
@@ -443,6 +446,36 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   }
   if (updated.has_value()) {
     outcome.events.emplace_back(TokenUpdated{.token = std::move(*updated)});
+  }
+  // Течение срабатывает при входе (и в начале хода — отдельным вызовом).
+  // После сдвига урон клетки берётся уже на новом месте.
+  TryCurrent(command.id, actor, outcome.events);
+  TriggerHazards(command.id, kHazardEnter, actor, outcome.events);
+  // Скользкая клетка: при ходе больше половины скорости — проверка Ловкости
+  // (Акробатика), провал сбивает с ног. Бонус спасброска — общий, как и в
+  // остальных проверках проекта.
+  const Token* landed = FindToken(command.id);
+  const CellProps& landing =
+      state_.Map().PropsAt(landed == nullptr ? command.target : landed->cell);
+  if ((landing.flags & kCellSlippery) != 0 && landing.slippery_dc > 0 &&
+      !prone && move_cost > std::max(1, EffectiveSpeedCells(*token) / 2)) {
+    std::uniform_int_distribution<int> d20(1, 20);
+    const int roll = d20(rng_) + token->save_bonus - ExhaustionPenalty(*token);
+    const bool success = roll >= landing.slippery_dc;
+    outcome.events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = AuthorName(actor),
+                        .text = token->name + ": проверка Ловкости " +
+                                std::to_string(roll) + " против " +
+                                std::to_string(landing.slippery_dc) +
+                                (success ? " — удержался" : " — сбит с ног"),
+                        .timestamp = CurrentTimeSeconds()},
+    });
+    if (!success) {
+      if (std::optional<Token> slipped = state_.AddTokenCondition(
+              command.id, Condition(std::string(kProne)))) {
+        outcome.events.emplace_back(TokenUpdated{.token = std::move(*slipped)});
+      }
+    }
   }
   // Подошедшего к столу монстра замечают: он вступает в идущий бой. Это
   // случай «приближение»; шум и решение DM идут через состав боя.
@@ -695,7 +728,18 @@ auto GameServer::DamageAndLog(TokenId id, int amount, bool critical,
   }
   const std::string name = token->name;
   // Сопротивление, уязвимость и иммунитет цели (SRD 5.2.1).
-  const DamageProfile profile = EffectiveDamageProfile(*token);
+  DamageProfile profile = EffectiveDamageProfile(*token);
+  // Полностью погружённый получает сопротивление огню (2024). Погружением
+  // считаем глубокую воду: слоя плавания над мелководьем нет.
+  bool submerged_fire = false;
+  if (damage_type == DamageType::kFire) {
+    const CellProps& target_props = state_.Map().PropsAt(token->cell);
+    if (target_props.water == WaterDepth::kDeep ||
+        state_.Map().TerrainAt(token->cell) == Terrain::kWater) {
+      profile.resist |= DamageTypeBit(DamageType::kFire);
+      submerged_fire = true;
+    }
+  }
   const int dealt = AdjustedDamage(amount, damage_type, profile);
   const std::uint32_t type_bit =
       damage_type == DamageType::kNone ? 0 : DamageTypeBit(damage_type);
@@ -710,6 +754,9 @@ auto GameServer::DamageAndLog(TokenId id, int amount, bool critical,
   }
   if (resisted && !immune) {
     text << "; сопротивление";
+    if (submerged_fire) {
+      text << " огню (под водой)";
+    }
   }
   if (vulnerable && !immune) {
     text << "; уязвимость";
@@ -795,6 +842,123 @@ auto GameServer::DamageAndLog(TokenId id, int amount, bool critical,
   });
 }
 
+auto GameServer::TriggerHazards(TokenId id, std::uint8_t trigger,
+                                const std::string& actor,
+                                std::vector<Event>& events) -> void {
+  const Token* token = FindToken(id);
+  if (token == nullptr) {
+    return;
+  }
+  const Cell cell = token->cell;
+  const HazardProfile* hazard = state_.Map().HazardAt(cell);
+  if (hazard == nullptr || hazard->damage.empty() ||
+      (hazard->triggers & trigger) == 0) {
+    return;
+  }
+  const std::uint8_t index = state_.Map().PropsAt(cell).hazard;
+  if (std::ranges::find(token->hazards_done, index) !=
+      token->hazards_done.end()) {
+    return;
+  }
+  DiceExpression expression;
+  if (!ParseDiceExpression(hazard->damage, expression)) {
+    return;
+  }
+  const DiceRollResult roll = RollDiceExpression(expression, rng_);
+  int damage = std::max(0, roll.total);
+  std::ostringstream text;
+  text << token->name << ": свойство клетки " << hazard->damage << " = "
+       << damage;
+  if (damage > 0 && hazard->save_dc > 0) {
+    std::uniform_int_distribution<int> d20(1, 20);
+    const int save_bonus = token->save_bonus - ExhaustionPenalty(*token);
+    const int save = d20(rng_) + save_bonus;
+    const bool success = save >= hazard->save_dc;
+    if (success && hazard->half_on_success) {
+      damage /= 2;
+    }
+    text << ", спасбросок " << save << " против " << hazard->save_dc
+         << (success ? " — успех" : " — провал") << ", " << damage << " урона";
+  }
+  if (std::optional<Token> marked = state_.MarkHazardDone(id, index)) {
+    events.emplace_back(TokenUpdated{.token = std::move(*marked)});
+  }
+  events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = AuthorName(actor),
+                      .text = text.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
+  if (damage > 0) {
+    DamageAndLog(id, damage, false, hazard->type, actor, events);
+  }
+}
+
+auto GameServer::TryCurrent(TokenId id, const std::string& actor,
+                            std::vector<Event>& events) -> void {
+  const Token* token = FindToken(id);
+  if (token == nullptr) {
+    return;
+  }
+  const CellProps& props = state_.Map().PropsAt(token->cell);
+  if (props.current_dir == 0 || props.current_strength == 0) {
+    return;
+  }
+  const std::string name = token->name;
+  const int dc = CurrentDc(props.current_strength);
+  std::uniform_int_distribution<int> d20(1, 20);
+  const int roll = d20(rng_) + token->save_bonus - ExhaustionPenalty(*token);
+  if (roll >= dc) {
+    return;
+  }
+  const Cell offset = CurrentDirectionOffset(props.current_dir);
+  int shifted = 0;
+  for (int step = 0; step < CurrentShiftCells(props.current_strength); ++step) {
+    const Token* moving = FindToken(id);
+    if (moving == nullptr) {
+      break;
+    }
+    const Cell next{.x = moving->cell.x + offset.x,
+                    .y = moving->cell.y + offset.y};
+    if (!state_.Map().Contains(next) || state_.Map().IsBlocked(next)) {
+      break;
+    }
+    bool occupied = false;
+    for (const Token& other : state_.Tokens()) {
+      if (other.id != id && other.cell == next) {
+        occupied = true;
+        break;
+      }
+    }
+    if (occupied) {
+      break;
+    }
+    const std::optional<Event> moved =
+        state_.ApplyCommand(MoveToken{.id = id, .target = next});
+    if (!moved.has_value()) {
+      break;
+    }
+    events.emplace_back(*moved);
+    ++shifted;
+  }
+  RecomputeFog();
+  std::ostringstream text;
+  text << name << ": проверка Силы против течения " << roll << " против " << dc
+       << " — течение";
+  if (shifted > 0) {
+    text << " сдвинуло на " << shifted << " кл.";
+  } else {
+    text << " прижало к препятствию";
+  }
+  events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = AuthorName(actor),
+                      .text = text.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
+  if (shifted > 0) {
+    TriggerHazards(id, kHazardEnter, actor, events);
+  }
+}
+
 auto GameServer::HandleAttack(const AttackToken& command,
                               const std::string& actor, bool can_control_all)
     -> CommandOutcome {
@@ -870,6 +1034,19 @@ auto GameServer::HandleAttack(const AttackToken& command,
       *attacker, *target, distance_cells, attack_range, threatened);
   bool advantage = command.advantage || modes.advantage;
   bool disadvantage = command.disadvantage || modes.disadvantage;
+  // Под водой дальнобойная атака идёт с помехой в обычной дистанции и
+  // автоматически промахивается за ней (SRD 5.2.1). Погружением считаем
+  // глубокую воду: слоя плавания над мелководьем нет.
+  const CellProps& attacker_props = state_.Map().PropsAt(attacker->cell);
+  const bool submerged =
+      attacker_props.water == WaterDepth::kDeep ||
+      state_.Map().TerrainAt(attacker->cell) == Terrain::kWater;
+  bool underwater_miss = false;
+  if (submerged && attack_range > 0 && distance_cells > attack_range) {
+    underwater_miss = true;
+  } else if (submerged && attack_range > 0) {
+    disadvantage = true;
+  }
   if (advantage && disadvantage) {
     advantage = false;
     disadvantage = false;
@@ -881,6 +1058,16 @@ auto GameServer::HandleAttack(const AttackToken& command,
        !ParseDamageProfile(attacker->damage, damage, damage_type))) {
     return CommandOutcome{.reject_reason = "некорректное выражение урона"};
   }
+  // Укрытие по стороне клетки: половина +2 к КД, три четверти +5, полное
+  // укрытие не даёт выбрать цель напрямую (область при этом действует).
+  const CoverLevel cover =
+      CoverBetween(state_.Map(), attacker->cell, target->cell);
+  if (cover == CoverLevel::kFull) {
+    return CommandOutcome{.reject_reason = "цель за полным укрытием"};
+  }
+  const int cover_bonus = CoverBonus(cover);
+  const int effective_ac = target->ac + cover_bonus;
+
   // Истощение: −2 ко всем d20 за уровень.
   const int exhaustion = ExhaustionPenalty(*attacker);
   const int effective_bonus = attacker->attack_bonus - exhaustion;
@@ -894,11 +1081,11 @@ auto GameServer::HandleAttack(const AttackToken& command,
   };
   const DiceRollResult roll = RollDiceExpression(attack, rng_);
   const AttackCheck check =
-      CheckAttack(roll.chosen, effective_bonus, target->ac);
+      CheckAttack(roll.chosen, effective_bonus, effective_ac);
   const bool critical =
-      check.critical ||
-      (check.hit && IsAutoCriticalOnHit(*target, distance_cells));
-
+      !underwater_miss &&
+      (check.critical ||
+       (check.hit && IsAutoCriticalOnHit(*target, distance_cells)));
   std::ostringstream text;
   text << "Атака" << (is_reaction ? " (реакция)" : "") << ": " << attacker->name
        << " по " << target->name;
@@ -915,7 +1102,10 @@ auto GameServer::HandleAttack(const AttackToken& command,
   if (roll.breakdown != std::to_string(roll.total)) {
     text << " = " << roll.total;
   }
-  text << " против КД " << target->ac;
+  text << " против КД " << effective_ac;
+  if (cover_bonus > 0) {
+    text << " (укрытие +" << cover_bonus << ")";
+  }
 
   CommandOutcome outcome;
   outcome.accepted = true;
@@ -923,7 +1113,9 @@ auto GameServer::HandleAttack(const AttackToken& command,
   (void)JoinEncounterIfNeeded(command.target, outcome.events);
   int applied_damage = 0;
   const TokenId target_id = target->id;
-  if (!check.hit) {
+  if (underwater_miss) {
+    text << " — промах (под водой за обычной дистанцией)";
+  } else if (!check.hit) {
     text << " — промах";
   } else if (attacker->damage.empty()) {
     text << " — попадание, урон не задан";
@@ -1237,7 +1429,10 @@ auto GameServer::HandleAoeDamage(const AoeDamage& command, bool can_control_all)
     // Область задевает и тех, кто ещё не в бою: шум втягивает их.
     (void)JoinEncounterIfNeeded(token.id, outcome.events);
     const std::string name = token.name;
-    const int save_bonus = token.save_bonus - ExhaustionPenalty(token);
+    const int cover_bonus =
+        CoverBonus(CoverBetween(state_.Map(), aoe.origin, token.cell));
+    const int save_bonus =
+        token.save_bonus - ExhaustionPenalty(token) + cover_bonus;
     const int roll = d20(rng_) + save_bonus;
     const bool success = roll >= command.save_dc;
     const DamageProfile profile = EffectiveDamageProfile(token);
@@ -1253,6 +1448,9 @@ auto GameServer::HandleAoeDamage(const AoeDamage& command, bool can_control_all)
     std::ostringstream line;
     line << name << ": спасбросок " << roll << " против " << command.save_dc
          << (success ? " — успех, " : " — провал, ") << damage << " урона";
+    if (cover_bonus > 0) {
+      line << " (укрытие +" << cover_bonus << ")";
+    }
     const std::uint32_t type_bit = command.damage_type == DamageType::kNone
                                        ? 0
                                        : DamageTypeBit(command.damage_type);
@@ -1613,12 +1811,18 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
     return CommandOutcome{.reject_reason =
                               "некорректный модификатор Телосложения"};
   }
+  if (command.swim_speed < 0 || command.swim_speed > kMaxSpeed ||
+      command.climb_speed < 0 || command.climb_speed > kMaxSpeed) {
+    return CommandOutcome{.reject_reason =
+                              "некорректная скорость плавания или лазания"};
+  }
   const Token before = *token;
   const std::optional<Token> updated = state_.UpdateTokenSheet(
       command.id, command.ac, command.speed, command.notes,
       command.attack_bonus, command.save_bonus, command.initiative_bonus,
       command.damage, command.temp_hp, command.hit_die, command.con_modifier,
-      command.attack_range, command.resist, command.vulnerable, command.immune);
+      command.attack_range, command.resist, command.vulnerable, command.immune,
+      command.swim_speed, command.climb_speed);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }
@@ -1628,6 +1832,10 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   std::vector<std::string> changes;
   AppendIntChange(changes, "КД", before.ac, command.ac);
   AppendIntChange(changes, "скорость", before.speed, command.speed);
+  AppendIntChange(changes, "скорость плавания", before.swim_speed,
+                  command.swim_speed);
+  AppendIntChange(changes, "скорость лазания", before.climb_speed,
+                  command.climb_speed);
   AppendIntChange(changes, "бонус атаки", before.attack_bonus,
                   command.attack_bonus);
   AppendIntChange(changes, "бонус спасброска", before.save_bonus,
@@ -1978,6 +2186,9 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
     }
   }
+  TryCurrent(state_.ActiveTokenId(), "DM", outcome.events);
+  TriggerHazards(state_.ActiveTokenId(), kHazardTurnStart, "DM",
+                 outcome.events);
   return outcome;
 }
 
@@ -2095,6 +2306,7 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
   }
 
   const std::vector<TokenId> spent = TokensWithTurnState(state_);
+  TriggerHazards(ending_id, kHazardTurnEnd, "DM", outcome.events);
   if (!state_.NextTurn()) {
     return CommandOutcome{.reject_reason = "нет активного боя"};
   }
@@ -2120,6 +2332,9 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
   }
   outcome.events.emplace_back(
       EncounterUpdated{.encounter = state_.EncounterState()});
+  TryCurrent(state_.ActiveTokenId(), "DM", outcome.events);
+  TriggerHazards(state_.ActiveTokenId(), kHazardTurnStart, "DM",
+                 outcome.events);
   return outcome;
 }
 

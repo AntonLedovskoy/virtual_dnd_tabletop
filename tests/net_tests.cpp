@@ -71,6 +71,14 @@ auto WaitFrame(dnd::NetServer& server, dnd::TcpConnection& connection,
 auto MakeSnapshot() -> dnd::GameSnapshot {
   dnd::GridMap map(6, 4);
   map.SetBlocked(CellAt(3, 1), true);
+  // Свойства клетки едут клиенту вместе с миром: дорога, мелкая вода и
+  // укрытие на грани, плюс профиль лавы в палитре карты.
+  map.SetTerrain(CellAt(4, 3), dnd::Terrain::kLava);
+  dnd::CellProps props = map.PropsAt(CellAt(2, 2));
+  props.flags |= dnd::kCellRoad;
+  props.water = dnd::WaterDepth::kShallow;
+  dnd::SetCoverOnSide(props.cover_sides, 1, dnd::CoverLevel::kHalf);
+  map.SetProps(CellAt(2, 2), props);
   dnd::GameState state(map);
   (void)state.AddToken("hero", CellAt(1, 1));
   return state.Snapshot();
@@ -165,6 +173,14 @@ auto TestTcpHandshakeAndEvents() -> void {
     Expect(update.welcome->fog.width == 6 && update.welcome->fog.height == 4,
            "welcome carries fog dimensions");
     Expect(update.welcome->is_dm, "welcome carries the role");
+    const dnd::CellProps& props =
+        update.welcome->snapshot.map.PropsAt(CellAt(2, 2));
+    Expect((props.flags & dnd::kCellRoad) != 0 &&
+               props.water == dnd::WaterDepth::kShallow &&
+               dnd::CoverOnSide(props.cover_sides, 1) == dnd::CoverLevel::kHalf,
+           "welcome carries cell properties");
+    Expect(update.welcome->snapshot.map.HazardAt(CellAt(4, 3)) != nullptr,
+           "welcome carries the hazard palette");
   }
 
   client.SendCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 2)});

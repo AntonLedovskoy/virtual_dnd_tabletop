@@ -143,6 +143,9 @@ struct UpdateTokenSheet {
   std::uint32_t resist = 0;
   std::uint32_t vulnerable = 0;
   std::uint32_t immune = 0;
+  // Скорости плавания и лазания в клетках; 0 — их нет.
+  int swim_speed = 0;
+  int climb_speed = 0;
 };
 
 // Атака одним токеном другого: сервер бросает d20 + бонус атаки против КД

@@ -12,6 +12,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "core/autosave.h"
@@ -69,6 +70,21 @@ enum class EditorPaintMode : std::uint8_t {
   kBrush = 1,
   kErase = 2,
 };
+
+// Поля инспектора клетки в редакторе: Tab/↑↓ выбирают, ←→ меняют.
+enum class InspectorField : std::uint8_t {
+  kWater = 0,
+  kCurrentDir = 1,
+  kCurrentStrength = 2,
+  kHazard = 3,
+  kRoad = 4,
+  kClimb = 5,
+  kSlippery = 6,
+  kCoverSide = 7,
+  kCoverLevel = 8,
+  kCount = 9,
+};
+inline constexpr InspectorField kInspectorFields = InspectorField::kCount;
 
 // Владеет окном/рендерером SDL и связывает ввод с командами, локальным
 // авторитетным GameServer и ClientView. Режим хоста обслуживает удалённых
@@ -131,6 +147,13 @@ class App {
   auto CommitEditorBackgroundEdit() -> void;
   auto HandleEditorBackgroundTextInput(const char* text) -> void;
   auto HandleEditorBackgroundKeyDown(const SDL_KeyboardEvent& key) -> void;
+  // Инспектор клетки в редакторе: G открывает свойства под курсором.
+  auto OpenEditorInspector() -> void;
+  auto CloseEditorInspector() -> void;
+  auto ApplyEditorInspector() -> void;
+  auto HandleEditorInspectorKeyDown(const SDL_KeyboardEvent& key) -> void;
+  [[nodiscard]] auto EditorInspectorFields() const
+      -> std::vector<std::pair<std::string, std::string>>;
   auto AddEditorToken(Cell cell, TokenKind kind) -> void;
   // Бестиарий в редакторе: шаблон копируется в токен прямо в сцене.
   auto SpawnEditorBestiary(int index, bool group) -> void;
@@ -213,6 +236,8 @@ class App {
   struct SheetValues {
     int ac = 0;
     int speed = 0;
+    int swim = 0;
+    int climb = 0;
     int attack = 0;
     int save = 0;
     int initiative = 0;
@@ -421,6 +446,13 @@ class App {
   bool editor_background_edit_ = false;
   std::string editor_background_buffer_;
   bool editor_background_ignore_text_ = false;
+  // Инспектор клетки: G открывает панель свойств под курсором.
+  bool editor_inspector_active_ = false;
+  Cell editor_inspector_cell_{};
+  int editor_inspector_field_ = 0;
+  CellProps editor_inspector_props_{};
+  int editor_inspector_cover_side_ = 0;
+  CoverLevel editor_inspector_cover_level_ = CoverLevel::kNone;
 
   bool sheet_active_ = false;
   bool sheet_read_only_ = false;
@@ -428,6 +460,8 @@ class App {
   SheetField sheet_field_ = SheetField::kAc;
   std::string sheet_ac_;
   std::string sheet_speed_;
+  std::string sheet_swim_;
+  std::string sheet_climb_;
   std::string sheet_attack_;
   std::string sheet_save_;
   std::string sheet_initiative_;

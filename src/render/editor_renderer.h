@@ -5,7 +5,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include "core/grid_map.h"
 #include "core/snapshot.h"
 
 namespace dnd {
@@ -19,6 +23,12 @@ enum class EditorBrush : std::uint8_t {
   kWater = 3,
   kPit = 4,
   kLava = 5,
+  kRoad = 6,
+  // Трудная местность: 8 циклически переключает эти кисти.
+  kSwamp = 7,
+  kBrush = 8,
+  kSnow = 9,
+  kMud = 10,
 };
 
 // Фиксированная панель слева сверху: имя открытой карты, «N из M» и кисти.
@@ -32,5 +42,16 @@ auto DrawEditorPanel(SDL_Renderer* renderer, TextRenderer* text,
                      const std::string& scene_name, const std::string& status,
                      std::uint32_t selected_id, const std::string& edit_label,
                      const std::string& edit_text) -> void;
+
+// Инспектор клетки под курсором: строки «поле: значение», активная строка
+// подсвечена. Выбор поля и правка значений — в App.
+struct EditorInspectorView {
+  Cell cell{};
+  std::vector<std::pair<std::string, std::string>> fields;
+  int active = 0;
+};
+
+auto DrawEditorInspector(SDL_Renderer* renderer, TextRenderer* text,
+                         const EditorInspectorView& view) -> void;
 
 }  // namespace dnd

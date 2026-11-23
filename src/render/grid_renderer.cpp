@@ -39,6 +39,30 @@ constexpr SDL_Color kLavaFill{
     .r = 0xb8, .g = 0x38, .b = 0x14, .a = SDL_ALPHA_OPAQUE};
 constexpr SDL_Color kLavaEdge{
     .r = 0xff, .g = 0x9a, .b = 0x3c, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kSwampFill{
+    .r = 0x2b, .g = 0x44, .b = 0x2e, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kSwampSpeck{
+    .r = 0x4a, .g = 0x6b, .b = 0x46, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kMudFill{
+    .r = 0x4a, .g = 0x3a, .b = 0x28, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kSnowFill{
+    .r = 0xc8, .g = 0xd4, .b = 0xdc, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kSnowShade{
+    .r = 0xa0, .g = 0xb0, .b = 0xbc, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kBrushFill{
+    .r = 0x24, .g = 0x52, .b = 0x2c, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kLadderRung{
+    .r = 0x9a, .g = 0x7a, .b = 0x50, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kRoadLine{.r = 0xd8, .g = 0xbc, .b = 0x7a, .a = 0xb0};
+constexpr SDL_Color kShallowWater{.r = 0x3a, .g = 0x74, .b = 0xa8, .a = 0x90};
+constexpr SDL_Color kDeepWaterOverlay{
+    .r = 0x1f, .g = 0x4f, .b = 0x7a, .a = 0xb0};
+constexpr SDL_Color kCurrentArrow{.r = 0x9a, .g = 0xd8, .b = 0xff, .a = 0xd0};
+constexpr SDL_Color kCoverMark{
+    .r = 0xd8, .g = 0xb0, .b = 0x50, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kHazardMark{
+    .r = 0xff, .g = 0x6a, .b = 0x3a, .a = SDL_ALPHA_OPAQUE};
+constexpr SDL_Color kDifficultHatch{.r = 0x78, .g = 0x66, .b = 0x44, .a = 0x70};
 constexpr SDL_Color kTurnOutline{
     .r = 0x6c, .g = 0xa8, .b = 0xff, .a = SDL_ALPHA_OPAQUE};
 constexpr SDL_Color kSelectedOutline{
@@ -341,9 +365,174 @@ auto DrawTerrain(SDL_Renderer* renderer, const GridMap& map, float cell_size,
           SDL_RenderFillRect(renderer, &crack2);
           break;
         }
+        case Terrain::kSwamp: {
+          SetDrawColor(renderer, kSwampFill);
+          SDL_RenderFillRect(renderer, &rect);
+          SetDrawColor(renderer, kSwampSpeck);
+          for (int spot = 0; spot < 3; ++spot) {
+            const float spot_x =
+                rect.x +
+                (rect.w * (0.25F + (0.22F * static_cast<float>(spot))));
+            const float spot_y =
+                rect.y + (rect.h * (spot % 2 == 0 ? 0.4F : 0.7F));
+            const SDL_FRect speck{
+                .x = spot_x, .y = spot_y, .w = 3.0F, .h = 3.0F};
+            SDL_RenderFillRect(renderer, &speck);
+          }
+          break;
+        }
+        case Terrain::kMud: {
+          SetDrawColor(renderer, kMudFill);
+          SDL_RenderFillRect(renderer, &rect);
+          break;
+        }
+        case Terrain::kSnow: {
+          SetDrawColor(renderer, kSnowFill);
+          SDL_RenderFillRect(renderer, &rect);
+          SetDrawColor(renderer, kSnowShade);
+          SDL_RenderLine(renderer, rect.x + (rect.w * 0.2F),
+                         rect.y + (rect.h * 0.7F), rect.x + (rect.w * 0.8F),
+                         rect.y + (rect.h * 0.7F));
+          break;
+        }
+        case Terrain::kBrush: {
+          SetDrawColor(renderer, kBrushFill);
+          SDL_RenderFillRect(renderer, &rect);
+          SetDrawColor(renderer, kTreeCanopy);
+          const SDL_FPoint center{
+              .x = rect.x + (rect.w * 0.5F),
+              .y = rect.y + (rect.h * 0.5F),
+          };
+          DrawCircle(renderer, center, rect.w * 0.28F, kTreeCanopy);
+          break;
+        }
+        case Terrain::kLadder: {
+          SetDrawColor(renderer, kLadderRung);
+          SDL_RenderLine(renderer, rect.x + (rect.w * 0.2F),
+                         rect.y + (rect.h * 0.2F), rect.x + (rect.w * 0.8F),
+                         rect.y + (rect.h * 0.2F));
+          SDL_RenderLine(renderer, rect.x + (rect.w * 0.2F),
+                         rect.y + (rect.h * 0.5F), rect.x + (rect.w * 0.8F),
+                         rect.y + (rect.h * 0.5F));
+          SDL_RenderLine(renderer, rect.x + (rect.w * 0.2F),
+                         rect.y + (rect.h * 0.8F), rect.x + (rect.w * 0.8F),
+                         rect.y + (rect.h * 0.8F));
+          break;
+        }
       }
     }
   }
+}
+
+auto DrawCellProps(SDL_Renderer* renderer, const GridMap& map, float cell_size,
+                   float offset_x, float offset_y) -> void {
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  for (int y = 0; y < map.Height(); ++y) {
+    for (int x = 0; x < map.Width(); ++x) {
+      const Cell cell{.x = x, .y = y};
+      const CellProps& props = map.PropsAt(cell);
+      const Terrain terrain = map.TerrainAt(cell);
+      if (terrain == Terrain::kWall) {
+        continue;
+      }
+      const SDL_FRect rect =
+          CellRect(cell, cell_size, offset_x, offset_y, 0.0F);
+      // Глубина воды: мелкая — светлая заливка, глубокая — тёмная поверх
+      // любого рельефа (старый kWater уже нарисован рельефом).
+      if (props.water == WaterDepth::kShallow && terrain != Terrain::kWater) {
+        SetDrawColor(renderer, kShallowWater);
+        SDL_RenderFillRect(renderer, &rect);
+      } else if (props.water == WaterDepth::kDeep &&
+                 terrain != Terrain::kWater) {
+        SetDrawColor(renderer, kDeepWaterOverlay);
+        SDL_RenderFillRect(renderer, &rect);
+      }
+      // Штриховка трудной местности поверх рельефа.
+      if (map.IsDifficultTerrain(cell)) {
+        SetDrawColor(renderer, kDifficultHatch);
+        for (int mark = 0; mark < 2; ++mark) {
+          const float at = 0.25F + (0.4F * static_cast<float>(mark));
+          SDL_RenderLine(
+              renderer, rect.x + (rect.w * at), rect.y + (rect.h * 0.12F),
+              rect.x + (rect.w * (at + 0.12F)), rect.y + (rect.h * 0.38F));
+        }
+      }
+      // Дорога: две светлые линии вдоль клетки.
+      if ((props.flags & kCellRoad) != 0) {
+        SetDrawColor(renderer, kRoadLine);
+        SDL_RenderLine(renderer, rect.x + (rect.w * 0.08F),
+                       rect.y + (rect.h * 0.38F), rect.x + (rect.w * 0.92F),
+                       rect.y + (rect.h * 0.38F));
+        SDL_RenderLine(renderer, rect.x + (rect.w * 0.08F),
+                       rect.y + (rect.h * 0.62F), rect.x + (rect.w * 0.92F),
+                       rect.y + (rect.h * 0.62F));
+      }
+      // Стрелка течения в сторону сдвига.
+      if (props.current_dir != 0 && props.current_strength > 0) {
+        const Cell offset = CurrentDirectionOffset(props.current_dir);
+        if (offset.x != 0 || offset.y != 0) {
+          const float center_x = rect.x + (rect.w * 0.5F);
+          const float center_y = rect.y + (rect.h * 0.5F);
+          const float reach = rect.w * 0.22F;
+          const float dx = static_cast<float>(offset.x) * reach;
+          const float dy = static_cast<float>(offset.y) * reach;
+          SetDrawColor(renderer, kCurrentArrow);
+          SDL_RenderLine(renderer, center_x - dx, center_y - dy, center_x + dx,
+                         center_y + dy);
+          SDL_RenderLine(renderer, center_x + dx, center_y + dy,
+                         center_x + (dx * 0.55F), center_y + dy);
+          SDL_RenderLine(renderer, center_x + dx, center_y + dy, center_x + dx,
+                         center_y + (dy * 0.55F));
+        }
+      }
+      // Укрытие на гранях: половина — короткий отрезок, три четверти —
+      // длинный, полное — вся грань.
+      const auto draw_cover = [&](int side, int level) -> void {
+        if (level <= 0) {
+          return;
+        }
+        const float length = level == 1 ? 0.4F : (level == 2 ? 0.7F : 0.96F);
+        const float from = (1.0F - length) * 0.5F;
+        const float to = from + length;
+        SetDrawColor(renderer, kCoverMark);
+        switch (side) {
+          case 0:
+            SDL_RenderLine(renderer, rect.x + (rect.w * from), rect.y,
+                           rect.x + (rect.w * to), rect.y);
+            break;
+          case 1:
+            SDL_RenderLine(renderer, rect.x + rect.w, rect.y + (rect.h * from),
+                           rect.x + rect.w, rect.y + (rect.h * to));
+            break;
+          case 2:
+            SDL_RenderLine(renderer, rect.x + (rect.w * from), rect.y + rect.h,
+                           rect.x + (rect.w * to), rect.y + rect.h);
+            break;
+          case 3:
+            SDL_RenderLine(renderer, rect.x, rect.y + (rect.h * from), rect.x,
+                           rect.y + (rect.h * to));
+            break;
+          default:
+            break;
+        }
+      };
+      for (int side = 0; side < kCoverSides; ++side) {
+        draw_cover(side,
+                   static_cast<int>(CoverOnSide(props.cover_sides, side)));
+      }
+      // Метка урона: маленький треугольник в правом верхнем углу.
+      if (props.hazard != kNoHazard) {
+        const float right = rect.x + (rect.w * 0.86F);
+        const float top = rect.y + (rect.h * 0.14F);
+        const float size = std::max(3.0F, rect.w * 0.14F);
+        SetDrawColor(renderer, kHazardMark);
+        SDL_RenderLine(renderer, right, top, right - size, top + (size * 1.2F));
+        SDL_RenderLine(renderer, right - size, top + (size * 1.2F), right, top);
+        SDL_RenderLine(renderer, right, top, right, top + (size * 0.7F));
+      }
+    }
+  }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
 auto DrawCellHighlight(SDL_Renderer* renderer, Cell cell, float cell_size,
