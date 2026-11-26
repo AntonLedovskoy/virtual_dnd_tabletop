@@ -222,11 +222,11 @@ auto CoverBetween(const GridMap& map, Cell attacker, Cell target)
   }
   // Сэмплируем луч с шагом в восьмую клетки: на дистанциях стола это дешевле
   // точного DDA, а грани клеток находятся точно.
-  constexpr int kSamplesPerCell = 8;
+  constexpr int samples_per_cell = 8;
   const int dx = target.x - attacker.x;
   const int dy = target.y - attacker.y;
   const int cells = std::max(std::abs(dx), std::abs(dy));
-  const int samples = cells * kSamplesPerCell;
+  const int samples = cells * samples_per_cell;
   const double start_x = static_cast<double>(attacker.x) + 0.5;
   const double start_y = static_cast<double>(attacker.y) + 0.5;
   auto best = CoverLevel::kNone;
@@ -321,9 +321,9 @@ auto GridMap::TerrainAt(Cell cell) const -> Terrain {
 }
 
 auto GridMap::PropsAt(Cell cell) const -> const CellProps& {
-  static const CellProps kEmpty;
+  static const CellProps empty_props;
   if (!Contains(cell)) {
-    return kEmpty;
+    return empty_props;
   }
   return props_[Index(cell)];
 }

@@ -1010,10 +1010,15 @@ auto App::ApplyEditorBrush(Cell cell) -> void {
       const auto bright = static_cast<std::uint8_t>(LightLevel::kBright);
       const auto dim = static_cast<std::uint8_t>(LightLevel::kDim);
       const auto dark = static_cast<std::uint8_t>(LightLevel::kDark);
-      props.light = props.light == kAmbientLight ? bright
-                    : props.light == bright      ? dim
-                    : props.light == dim         ? dark
-                                                 : kAmbientLight;
+      if (props.light == kAmbientLight) {
+        props.light = bright;
+      } else if (props.light == bright) {
+        props.light = dim;
+      } else if (props.light == dim) {
+        props.light = dark;
+      } else {
+        props.light = kAmbientLight;
+      }
       scene_.map.SetProps(cell, props);
       break;
     }
@@ -1315,10 +1320,13 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
       // Освещённость всей сцены: яркий → тёмный → тусклый.
       const int next = (static_cast<int>(scene_.map.AmbientLight()) + 1) % 3;
       scene_.map.SetAmbientLight(static_cast<LightLevel>(next));
-      editor_status_.Set(std::string(strings::kEditorAmbientLight) +
-                         std::string(next == 2   ? "яркий"
-                                     : next == 1 ? "тусклый"
-                                                 : "тёмный"));
+      const char* name = "тёмный";
+      if (next == 2) {
+        name = "яркий";
+      } else if (next == 1) {
+        name = "тусклый";
+      }
+      editor_status_.Set(std::string(strings::kEditorAmbientLight) + name);
       return;
     }
     case SDLK_F5:
@@ -1509,14 +1517,19 @@ auto App::HandleEditorInspectorKeyDown(const SDL_KeyboardEvent& key) -> void {
           break;
         case InspectorField::kSlippery:
           if (step > 0) {
-            props.slippery_dc = props.slippery_dc == 0   ? 10
-                                : props.slippery_dc < 20 ? props.slippery_dc + 5
-                                                         : 0;
+            if (props.slippery_dc == 0) {
+              props.slippery_dc = 10;
+            } else if (props.slippery_dc < 20) {
+              props.slippery_dc += 5;
+            } else {
+              props.slippery_dc = 0;
+            }
+          } else if (props.slippery_dc == 0) {
+            props.slippery_dc = 20;
+          } else if (props.slippery_dc > 10) {
+            props.slippery_dc -= 5;
           } else {
-            props.slippery_dc = props.slippery_dc == 0 ? 20
-                                : props.slippery_dc > 10
-                                    ? props.slippery_dc - 5
-                                    : (props.slippery_dc == 10 ? 0 : 10);
+            props.slippery_dc = props.slippery_dc == 10 ? 0 : 10;
           }
           break;
         case InspectorField::kCoverSide:
@@ -1533,17 +1546,16 @@ auto App::HandleEditorInspectorKeyDown(const SDL_KeyboardEvent& key) -> void {
         }
         case InspectorField::kLight: {
           // Сцена → яркий → тусклый → тёмный.
-          constexpr std::array<std::uint8_t, 4> kValues{
+          constexpr std::array<std::uint8_t, 4> values{
               kAmbientLight, static_cast<std::uint8_t>(LightLevel::kBright),
               static_cast<std::uint8_t>(LightLevel::kDim),
               static_cast<std::uint8_t>(LightLevel::kDark)};
-          const auto found =
-              std::find(kValues.begin(), kValues.end(), props.light);
-          const int index = found == kValues.end()
+          const auto* const found = std::ranges::find(values, props.light);
+          const int index = found == values.end()
                                 ? 0
-                                : static_cast<int>(found - kValues.begin());
+                                : static_cast<int>(found - values.begin());
           props.light =
-              kValues[static_cast<std::size_t>((index + step + 4) % 4)];
+              values[static_cast<std::size_t>((index + step + 4) % 4)];
           break;
         }
         case InspectorField::kObscurement:
@@ -1568,7 +1580,8 @@ auto App::EditorInspectorFields() const
     -> std::vector<std::pair<std::string, std::string>> {
   const CellProps& props = editor_inspector_props_;
   std::vector<std::pair<std::string, std::string>> fields;
-  const auto add = [&fields](std::string_view label, std::string value) {
+  const auto add = [&fields](std::string_view label,
+                             std::string value) -> void {
     fields.emplace_back(std::string(label), std::move(value));
   };
   switch (props.water) {
@@ -1582,10 +1595,10 @@ auto App::EditorInspectorFields() const
       add(strings::kInspectorWater, "глубоко");
       break;
   }
-  constexpr std::array<std::string_view, 9> kDirections{
+  constexpr std::array<std::string_view, 9> directions{
       "нет", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ", "С", "СВ"};
   add(strings::kInspectorCurrent,
-      std::string(kDirections[props.current_dir % kDirections.size()]));
+      std::string(directions[props.current_dir % directions.size()]));
   add(strings::kInspectorCurrentStrength,
       std::to_string(props.current_strength));
   const std::vector<HazardProfile>& hazards = scene_.map.Hazards();
@@ -1607,23 +1620,22 @@ auto App::EditorInspectorFields() const
   add(strings::kInspectorSlippery, props.slippery_dc > 0
                                        ? std::to_string(props.slippery_dc)
                                        : std::string(strings::kInspectorNo));
-  constexpr std::array<std::string_view, kCoverSides> kSides{"север", "восток",
-                                                             "юг", "запад"};
+  constexpr std::array<std::string_view, kCoverSides> sides{"север", "восток",
+                                                            "юг", "запад"};
   add(strings::kInspectorCoverSide,
-      std::string(kSides[editor_inspector_cover_side_ % kCoverSides]));
-  constexpr std::array<std::string_view, 4> kLevels{"нет", "половина",
-                                                    "три четверти", "полное"};
+      std::string(sides[editor_inspector_cover_side_ % kCoverSides]));
+  constexpr std::array<std::string_view, 4> levels{"нет", "половина",
+                                                   "три четверти", "полное"};
   add(strings::kInspectorCoverLevel,
-      std::string(
-          kLevels[static_cast<int>(editor_inspector_cover_level_) % 4]));
-  constexpr std::array<std::string_view, 4> kLightNames{"тёмный", "тусклый",
+      std::string(levels[static_cast<int>(editor_inspector_cover_level_) % 4]));
+  constexpr std::array<std::string_view, 4> light_names{"тёмный", "тусклый",
                                                         "яркий", "как сцена"};
   add(strings::kInspectorLight,
-      std::string(kLightNames[props.light % kLightNames.size()]));
-  constexpr std::array<std::string_view, 3> kObscurementNames{"нет", "слабое",
+      std::string(light_names[props.light % light_names.size()]));
+  constexpr std::array<std::string_view, 3> obscurement_names{"нет", "слабое",
                                                               "сильное"};
   add(strings::kInspectorObscurement,
-      std::string(kObscurementNames[static_cast<int>(props.obscurement) % 3]));
+      std::string(obscurement_names[static_cast<int>(props.obscurement) % 3]));
   return fields;
 }
 

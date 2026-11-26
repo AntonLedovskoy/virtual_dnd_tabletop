@@ -160,17 +160,18 @@ auto DrawEditorInspector(SDL_Renderer* renderer, TextRenderer* text,
   if (renderer == nullptr || text == nullptr) {
     return;
   }
-  constexpr int kInspectorX = 380;
-  constexpr int kInspectorY = 12;
-  constexpr int kInspectorWidth = 380;
-  constexpr int kInspectorPadding = 12;
+  constexpr int inspector_x = 380;
+  constexpr int inspector_y = 12;
+  constexpr int inspector_width = 380;
+  constexpr int inspector_padding = 12;
   const int line_height = static_cast<int>(text->LineHeight()) + 2;
   const auto height = static_cast<float>(
-      (kInspectorPadding * 2) + (line_height * (view.fields.size() + 3)));
+      (inspector_padding * 2) +
+      (line_height * static_cast<int>(view.fields.size() + 3)));
   const SDL_FRect panel{
-      .x = static_cast<float>(kInspectorX),
-      .y = static_cast<float>(kInspectorY),
-      .w = static_cast<float>(kInspectorWidth),
+      .x = static_cast<float>(inspector_x),
+      .y = static_cast<float>(inspector_y),
+      .w = static_cast<float>(inspector_width),
       .h = height,
   };
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -180,17 +181,17 @@ auto DrawEditorInspector(SDL_Renderer* renderer, TextRenderer* text,
   SDL_RenderRect(renderer, &panel);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-  const auto text_x = static_cast<float>(kInspectorX + kInspectorPadding);
+  const auto text_x = static_cast<float>(inspector_x + inspector_padding);
   const auto max_text_width =
-      static_cast<float>(kInspectorWidth - (2 * kInspectorPadding));
-  auto y = static_cast<float>(kInspectorY + kInspectorPadding);
+      static_cast<float>(inspector_width - (2 * inspector_padding));
+  auto y = static_cast<float>(inspector_y + inspector_padding);
   text->Draw(std::string(strings::kInspectorTitle) + " (" +
                  std::to_string(view.cell.x) + ", " +
                  std::to_string(view.cell.y) + ")",
              text_x, y, kTitleText, max_text_width);
   y += static_cast<float>(line_height);
   for (std::size_t index = 0; index < view.fields.size(); ++index) {
-    const bool active = static_cast<int>(index) == view.active;
+    const bool active = std::cmp_equal(index, view.active);
     text->Draw(view.fields[index].first + ": " + view.fields[index].second,
                text_x, y, active ? kTitleText : kText, max_text_width);
     y += static_cast<float>(line_height);

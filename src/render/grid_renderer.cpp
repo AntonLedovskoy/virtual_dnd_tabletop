@@ -498,7 +498,12 @@ auto DrawCellProps(SDL_Renderer* renderer, const GridMap& map, float cell_size,
         if (level <= 0) {
           return;
         }
-        const float length = level == 1 ? 0.4F : (level == 2 ? 0.7F : 0.96F);
+        float length = 0.96F;
+        if (level == 1) {
+          length = 0.4F;
+        } else if (level == 2) {
+          length = 0.7F;
+        }
         const float from = (1.0F - length) * 0.5F;
         const float to = from + length;
         SetDrawColor(renderer, kCoverMark);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -111,7 +112,7 @@ inline constexpr std::uint8_t kLavaHazard = 1;
 
 // Течение: сила 1–3 задаёт сдвиг в клетках и КС проверки Силы (Атлетика).
 [[nodiscard]] constexpr auto CurrentShiftCells(int strength) -> int {
-  return strength < 0 ? 0 : (strength > 3 ? 3 : strength);
+  return std::clamp(strength, 0, 3);
 }
 [[nodiscard]] constexpr auto CurrentDc(int strength) -> int {
   return 10 + (5 * CurrentShiftCells(strength));

@@ -99,9 +99,7 @@ auto ComputeLightField(const GridMap& map,
   }
   const auto raise = [&field, &index](Cell cell, LightLevel level) -> void {
     const auto value = static_cast<std::uint8_t>(level);
-    if (field.levels[index(cell)] < value) {
-      field.levels[index(cell)] = value;
-    }
+    field.levels[index(cell)] = std::max(field.levels[index(cell)], value);
   };
   for (const LightSource& source : sources) {
     if (!map.Contains(source.cell)) {

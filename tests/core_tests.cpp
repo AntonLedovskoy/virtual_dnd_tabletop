@@ -372,7 +372,7 @@ auto TestCurrentShift() -> void {
   Expect(dnd::CurrentShiftCells(1) == 1 && dnd::CurrentDc(1) == 15,
          "current strength sets the shift and the DC");
 
-  dnd::GameSnapshot snapshot{
+  const dnd::GameSnapshot snapshot{
       .map = map,
       .tokens =
           {
@@ -398,7 +398,7 @@ auto TestCurrentShift() -> void {
 
   dnd::GridMap open(3, 1);
   open.SetProps(CellAt(1, 0), flow);
-  dnd::GameSnapshot pushed{
+  const dnd::GameSnapshot pushed{
       .map = open,
       .tokens =
           {
@@ -691,7 +691,7 @@ auto TestTokenLight() -> void {
   smoky.SetProps(CellAt(6, 0), smoke);
   dnd::GameSnapshot smoky_snapshot = snapshot;
   smoky_snapshot.map = smoky;
-  dnd::GameServer smoke_server(smoky_snapshot, 0);
+  const dnd::GameServer smoke_server(smoky_snapshot, 0);
   Expect(FogVisibleAt(smoke_server.FogState("alice"), 6, 0),
          "the smoke cloud is visible to the party");
   Expect(smoke_server.ClientSnapshot("alice").tokens.size() == 1,
@@ -739,7 +739,7 @@ auto TestBlindedCharacterKeepsOwnFog() -> void {
          "an unowned player still shares the party view");
 
   snapshot.tokens.front().conditions.emplace_back(std::string(dnd::kBlinded));
-  dnd::GameServer blinded(snapshot, 0);
+  const dnd::GameServer blinded(snapshot, 0);
   Expect(!FogVisibleAt(blinded.FogState("alice"), 0, 0),
          "a blinded character sees nothing, not even its own cell");
   Expect(!FogVisibleAt(blinded.FogState("alice"), 9, 0),

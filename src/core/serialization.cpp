@@ -292,8 +292,7 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
     return false;
   }
   if (!std::ranges::is_sorted(hazards_done) ||
-      std::adjacent_find(hazards_done.begin(), hazards_done.end()) !=
-          hazards_done.end()) {
+      std::ranges::adjacent_find(hazards_done) != hazards_done.end()) {
     return false;
   }
   token = Token{
