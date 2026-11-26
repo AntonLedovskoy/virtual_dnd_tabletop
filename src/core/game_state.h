@@ -45,7 +45,9 @@ class GameState {
       std::uint32_t color = 0, int ac = 10, int speed = 9,
       std::string notes = {}, int attack_bonus = 0, int save_bonus = 0,
       std::string damage = {}, int attack_range = 0, std::uint32_t resist = 0,
-      std::uint32_t vulnerable = 0, std::uint32_t immune = 0) -> TokenId;
+      std::uint32_t vulnerable = 0, std::uint32_t immune = 0, int hit_die = 8,
+      int con_modifier = 0, int hit_dice_count = 0, bool auto_hp = false)
+      -> TokenId;
 
   // Применяет команду клиента; возвращает событие для рассылки, если команда
   // изменила мир.
@@ -95,9 +97,10 @@ class GameState {
       -> std::optional<Token>;
   [[nodiscard]] auto SetTokenMaxHp(TokenId id, int max_hp)
       -> std::optional<Token>;
-  // Начисляет опыт, не выше kMaxXp; уровень вычисляется по опыту. При
-  // повышении уровня персонаж получает HP по кости хитов и модификатору
-  // Телосложения, а на смене рубежа растут бонусы атаки и спасброска.
+  // Начисляет опыт, не выше kMaxXp; уровень вычисляется по опыту. В
+  // авто-режиме максимум HP пересчитывается по костям, в ручном растёт по
+  // кости хитов и Телосложению; на смене рубежа растут бонусы атаки и
+  // спасброска.
   [[nodiscard]] auto AddXp(TokenId id, int amount) -> std::optional<Token>;
   [[nodiscard]] auto SetTokenColor(TokenId id, std::uint32_t color)
       -> std::optional<Token>;
@@ -110,7 +113,8 @@ class GameState {
       int hit_die, int con_modifier, int attack_range = 0,
       std::uint32_t resist = 0, std::uint32_t vulnerable = 0,
       std::uint32_t immune = 0, int swim_speed = 0, int climb_speed = 0,
-      int darkvision_cells = 0) -> std::optional<Token>;
+      int darkvision_cells = 0, int max_hp = 10, bool auto_hp = false,
+      int hit_dice_count = 0) -> std::optional<Token>;
   // Свет, который носит токен: радиусы в клетках, 0 — выключить.
   [[nodiscard]] auto SetTokenLight(TokenId id, int bright_cells, int dim_cells)
       -> std::optional<Token>;

@@ -28,6 +28,7 @@
 #include "core/damage.h"
 #include "core/dice.h"
 #include "core/editor_token.h"
+#include "core/hit_points.h"
 #include "core/levels.h"
 #include "core/light.h"
 #include "core/movement.h"
@@ -891,15 +892,19 @@ auto App::AddEditorToken(Cell cell, TokenKind kind) -> void {
     }
   }
   const bool player = kind == TokenKind::kPlayer;
-  scene_.tokens.push_back(Token{
+  Token token{
       .id = scene_.next_token_id++,
       .name = player ? "Персонаж" : "Монстр",
       .owner = player ? std::string() : std::string(kDmOwner),
       .hp = 10,
       .max_hp = 10,
+      .auto_hp = true,
+      .hit_dice_count = player ? 0 : 2,
       .kind = kind,
       .cell = cell,
-  });
+  };
+  RecomputeAutoHp(token);
+  scene_.tokens.push_back(std::move(token));
 }
 
 auto App::SpawnEditorBestiary(int index, bool group) -> void {
@@ -929,15 +934,18 @@ auto App::SpawnEditorBestiary(int index, bool group) -> void {
       token.name += " " + std::to_string(i + 1);
     }
     token.owner = std::string(kDmOwner);
-    token.hp = monster.max_hp;
-    token.max_hp = monster.max_hp;
+    token.kind = TokenKind::kMonster;
+    token.hit_die = monster.hit_die;
+    token.con_modifier = monster.con_modifier;
+    token.hit_dice_count = monster.hit_dice_count;
+    token.auto_hp = true;
+    RecomputeAutoHp(token);
     token.ac = monster.ac;
     token.speed = monster.speed;
     token.notes = monster.notes;
     token.attack_bonus = monster.attack_bonus;
     token.save_bonus = monster.save_bonus;
     token.damage = monster.damage;
-    token.kind = TokenKind::kMonster;
     token.cell = cells[i];
     scene_.tokens.push_back(std::move(token));
   }
@@ -2980,7 +2988,8 @@ auto App::HandleDmHotkey(SDL_Keycode key) -> void {
         .cell = target,
         .owner = player ? std::string() : std::string(kDmOwner),
         .kind = kind,
-        .max_hp = 10,
+        .hit_dice_count = player ? 0 : 2,
+        .auto_hp = true,
     });
   };
 
@@ -3395,6 +3404,9 @@ auto App::LoadSheetFields(const Token& token) -> void {
   sheet_range_ = std::to_string(token.attack_range);
   sheet_darkvision_ =
       std::to_string(LightMetersFromCells(token.darkvision_cells));
+  sheet_max_hp_ = std::to_string(token.max_hp);
+  sheet_auto_hp_ = token.auto_hp ? "да" : "нет";
+  sheet_hit_dice_ = std::to_string(token.hit_dice_count);
   sheet_damage_ = token.damage;
   sheet_resist_ = FormatDamageTypeList(token.resist);
   sheet_vulnerable_ = FormatDamageTypeList(token.vulnerable);
@@ -3434,7 +3446,8 @@ auto App::DrawActiveSheet() -> void {
                  sheet_save_, sheet_initiative_, sheet_temp_hp_, sheet_hit_die_,
                  sheet_con_, sheet_range_, sheet_damage_, sheet_resist_,
                  sheet_vulnerable_, sheet_immune_, sheet_notes_,
-                 sheet_darkvision_, sheet_read_only_);
+                 sheet_darkvision_, sheet_max_hp_, sheet_auto_hp_,
+                 sheet_hit_dice_, sheet_read_only_);
 }
 
 auto App::CloseSheet() -> void {
@@ -3471,6 +3484,14 @@ auto App::SaveSheet() -> void {
     token->temp_hp = std::max(token->temp_hp, values.temp_hp);
     token->hit_die = values.hit_die;
     token->con_modifier = values.con;
+    token->auto_hp = values.auto_hp;
+    token->hit_dice_count = values.hit_dice_count;
+    if (values.auto_hp) {
+      RecomputeAutoHp(*token);
+    } else {
+      token->max_hp = std::max(1, values.max_hp);
+      token->hp = std::clamp(token->hp, 0, token->max_hp);
+    }
     token->attack_range = values.attack_range;
     token->darkvision_cells = LightCellsFromMeters(values.darkvision);
     token->resist = values.resist & kAllDamageTypes;
@@ -3503,6 +3524,9 @@ auto App::SaveSheet() -> void {
       .temp_hp = values.temp_hp,
       .hit_die = values.hit_die,
       .con_modifier = values.con,
+      .max_hp = values.max_hp,
+      .auto_hp = values.auto_hp,
+      .hit_dice_count = values.hit_dice_count,
       .attack_range = values.attack_range,
       .resist = values.resist,
       .vulnerable = values.vulnerable,
@@ -3544,6 +3568,23 @@ auto App::ReadSheetValues(SheetValues& values) -> bool {
   if (!ParseSignedNumber(sheet_range_, values.attack_range) ||
       values.attack_range < 0 || values.attack_range > 1000) {
     ShowStatus(std::string(strings::kSheetBadRange));
+    return false;
+  }
+  if (!ParseNumber(sheet_max_hp_, values.max_hp) || values.max_hp > 1000000) {
+    ShowStatus(std::string(strings::kSheetBadMaxHp));
+    return false;
+  }
+  if (sheet_auto_hp_ == "да" || sheet_auto_hp_ == "1") {
+    values.auto_hp = true;
+  } else if (sheet_auto_hp_ == "нет" || sheet_auto_hp_ == "0") {
+    values.auto_hp = false;
+  } else {
+    ShowStatus(std::string(strings::kSheetBadAutoHp));
+    return false;
+  }
+  if (!ParseSignedNumber(sheet_hit_dice_, values.hit_dice_count) ||
+      values.hit_dice_count < 0 || values.hit_dice_count > 1000) {
+    ShowStatus(std::string(strings::kSheetBadHitDiceCount));
     return false;
   }
   if (!ParseSignedNumber(sheet_darkvision_, values.darkvision) ||
@@ -3639,7 +3680,9 @@ auto App::HandleSheetTextInput(const char* text) -> void {
       sheet_field_ == SheetField::kTempHp ||
       sheet_field_ == SheetField::kHitDie || sheet_field_ == SheetField::kCon ||
       sheet_field_ == SheetField::kRange ||
-      sheet_field_ == SheetField::kDarkvision) {
+      sheet_field_ == SheetField::kDarkvision ||
+      sheet_field_ == SheetField::kMaxHp ||
+      sheet_field_ == SheetField::kHitDiceCount) {
     switch (sheet_field_) {
       case SheetField::kAc:
         AppendBoundedNumber(sheet_ac_, text, 1, 1000, false);
@@ -3678,9 +3721,22 @@ auto App::HandleSheetTextInput(const char* text) -> void {
       case SheetField::kDarkvision:
         AppendBoundedNumber(sheet_darkvision_, text, 0, 1000, false);
         break;
+      case SheetField::kMaxHp:
+        // В авто-режиме максимум HP выводится из костей и не правится вручную.
+        if (sheet_auto_hp_ != "да") {
+          AppendBoundedNumber(sheet_max_hp_, text, 1, 1000000, false);
+        }
+        break;
+      case SheetField::kHitDiceCount:
+        AppendBoundedNumber(sheet_hit_dice_, text, 0, 1000, false);
+        break;
       default:
         break;
     }
+    return;
+  }
+  if (sheet_field_ == SheetField::kAutoHp) {
+    // Переключается пробелом или стрелками, текст здесь не набирается.
     return;
   }
   if (sheet_field_ == SheetField::kDamage) {
@@ -3723,6 +3779,12 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
     sheet_field_ = static_cast<SheetField>(next);
     return;
   }
+  if (sheet_field_ == SheetField::kAutoHp &&
+      (key.key == SDLK_SPACE || key.key == SDLK_LEFT ||
+       key.key == SDLK_RIGHT)) {
+    sheet_auto_hp_ = sheet_auto_hp_ == "да" ? "нет" : "да";
+    return;
+  }
   if (key.key != SDLK_BACKSPACE) {
     return;
   }
@@ -3763,6 +3825,14 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SheetField::kDarkvision:
       buffer = &sheet_darkvision_;
+      break;
+    case SheetField::kMaxHp:
+      buffer = &sheet_max_hp_;
+      break;
+    case SheetField::kHitDiceCount:
+      buffer = &sheet_hit_dice_;
+      break;
+    case SheetField::kAutoHp:
       break;
     case SheetField::kDamage:
       buffer = &sheet_damage_;
@@ -3843,7 +3913,12 @@ auto App::SpawnBestiary(int index, bool group) -> void {
         .cell = cells[i],
         .owner = std::string(kDmOwner),
         .kind = TokenKind::kMonster,
-        .max_hp = monster.max_hp,
+        .max_hp = MonsterMaxHp(monster.hit_dice_count, monster.hit_die,
+                               monster.con_modifier),
+        .hit_die = monster.hit_die,
+        .con_modifier = monster.con_modifier,
+        .hit_dice_count = monster.hit_dice_count,
+        .auto_hp = true,
         .ac = monster.ac,
         .speed = monster.speed,
         .notes = monster.notes,

@@ -19,7 +19,10 @@ inline constexpr int kMaxMonsterGroup = 5;
 struct MonsterTemplate {
   std::string name;
   int ac = 10;
-  int max_hp = 10;
+  // HP выводятся из костей, как в блоке статов SRD (core/hit_points).
+  int hit_die = 8;
+  int con_modifier = 0;
+  int hit_dice_count = 1;
   int speed = 9;
   int attack_bonus = 0;
   int save_bonus = 0;

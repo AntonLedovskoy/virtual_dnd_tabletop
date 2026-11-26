@@ -247,6 +247,10 @@ class App {
     int hit_die = 0;
     int con = 0;
     int attack_range = 0;
+    // Максимум HP, режим «по костям» и число костей монстра.
+    int max_hp = 0;
+    bool auto_hp = false;
+    int hit_dice_count = 0;
     // Тёмное зрение в метрах: в токене оно хранится в клетках.
     int darkvision = 0;
     std::string damage;
@@ -474,6 +478,9 @@ class App {
   std::string sheet_con_;
   std::string sheet_range_;
   std::string sheet_darkvision_;
+  std::string sheet_max_hp_;
+  std::string sheet_auto_hp_;
+  std::string sheet_hit_dice_;
   std::string sheet_damage_;
   std::string sheet_resist_;
   std::string sheet_vulnerable_;

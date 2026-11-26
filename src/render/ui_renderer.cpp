@@ -14,6 +14,7 @@
 
 #include "app/strings.h"
 #include "core/conditions.h"
+#include "core/hit_points.h"
 #include "core/levels.h"
 #include "core/player_name.h"
 #include "core/units.h"
@@ -729,7 +730,7 @@ auto DrawModalField(SDL_Renderer* renderer, TextRenderer* text,
   const SDL_Color border =
       active ? SDL_Color{.r = 0x6c, .g = 0xa8, .b = 0xff, .a = SDL_ALPHA_OPAQUE}
              : kPanelBorder;
-  text->Draw(label, rect.x, rect.y - 24.0F, active ? border : kHintText,
+  text->Draw(label, rect.x, rect.y - 20.0F, active ? border : kHintText,
              rect.w);
   SetDrawColor(renderer, kModalBackground);
   SDL_RenderFillRect(renderer, &rect);
@@ -751,7 +752,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& range, const std::string& damage,
                     const std::string& resist, const std::string& vulnerable,
                     const std::string& immune, const std::string& notes,
-                    const std::string& darkvision, bool read_only) -> void {
+                    const std::string& darkvision, const std::string& max_hp,
+                    const std::string& auto_hp,
+                    const std::string& hit_dice_count, bool read_only) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -761,7 +764,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
     return;
   }
   constexpr float width = 640.0F;
-  constexpr float height = 600.0F;
+  constexpr float height = 640.0F;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -798,23 +801,27 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                left, cursor_y, kHintText, content_width);
   }
 
-  const SDL_FRect ac_field{left, y + 100.0F, 174.0F, 38.0F};
-  const SDL_FRect speed_field{left + 193.0F, y + 100.0F, 174.0F, 38.0F};
-  const SDL_FRect initiative_field{left + 386.0F, y + 100.0F, 174.0F, 38.0F};
-  const SDL_FRect swim_field{left, y + 148.0F, 174.0F, 38.0F};
-  const SDL_FRect climb_field{left + 193.0F, y + 148.0F, 174.0F, 38.0F};
-  const SDL_FRect attack_field{left + 386.0F, y + 148.0F, 174.0F, 38.0F};
-  const SDL_FRect save_field{left, y + 196.0F, 174.0F, 38.0F};
-  const SDL_FRect temp_hp_field{left + 193.0F, y + 196.0F, 174.0F, 38.0F};
-  const SDL_FRect hit_die_field{left + 386.0F, y + 196.0F, 174.0F, 38.0F};
-  const SDL_FRect con_field{left, y + 244.0F, 174.0F, 38.0F};
-  const SDL_FRect range_field{left + 193.0F, y + 244.0F, 174.0F, 38.0F};
-  const SDL_FRect darkvision_field{left + 386.0F, y + 244.0F, 174.0F, 38.0F};
-  const SDL_FRect damage_field{left, y + 296.0F, content_width, 38.0F};
-  const SDL_FRect resist_field{left, y + 344.0F, content_width, 38.0F};
-  const SDL_FRect vulnerable_field{left, y + 392.0F, content_width, 38.0F};
-  const SDL_FRect immune_field{left, y + 440.0F, content_width, 38.0F};
-  const SDL_FRect notes_field{left, y + 488.0F, content_width, 38.0F};
+  const SDL_FRect ac_field{left, y + 100.0F, 174.0F, 36.0F};
+  const SDL_FRect speed_field{left + 193.0F, y + 100.0F, 174.0F, 36.0F};
+  const SDL_FRect initiative_field{left + 386.0F, y + 100.0F, 174.0F, 36.0F};
+  const SDL_FRect swim_field{left, y + 152.0F, 174.0F, 36.0F};
+  const SDL_FRect climb_field{left + 193.0F, y + 152.0F, 174.0F, 36.0F};
+  const SDL_FRect attack_field{left + 386.0F, y + 152.0F, 174.0F, 36.0F};
+  const SDL_FRect save_field{left, y + 204.0F, 174.0F, 36.0F};
+  const SDL_FRect temp_hp_field{left + 193.0F, y + 204.0F, 174.0F, 36.0F};
+  const SDL_FRect hit_die_field{left + 386.0F, y + 204.0F, 174.0F, 36.0F};
+  const SDL_FRect con_field{left, y + 256.0F, 174.0F, 36.0F};
+  const SDL_FRect range_field{left + 193.0F, y + 256.0F, 174.0F, 36.0F};
+  const SDL_FRect darkvision_field{left + 386.0F, y + 256.0F, 174.0F, 36.0F};
+  const SDL_FRect max_hp_field{left, y + 308.0F, 174.0F, 36.0F};
+  const SDL_FRect auto_hp_field{left + 193.0F, y + 308.0F, 174.0F, 36.0F};
+  const SDL_FRect hit_dice_count_field{left + 386.0F, y + 308.0F, 174.0F,
+                                       36.0F};
+  const SDL_FRect damage_field{left, y + 360.0F, content_width, 36.0F};
+  const SDL_FRect resist_field{left, y + 408.0F, content_width, 36.0F};
+  const SDL_FRect vulnerable_field{left, y + 456.0F, content_width, 36.0F};
+  const SDL_FRect immune_field{left, y + 504.0F, content_width, 36.0F};
+  const SDL_FRect notes_field{left, y + 552.0F, content_width, 36.0F};
 
   const bool editing = !read_only;
   DrawModalField(renderer, text, ac_field, std::string(strings::kSheetAc), ac,
@@ -846,6 +853,15 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   DrawModalField(renderer, text, darkvision_field,
                  std::string(strings::kSheetDarkvision), darkvision,
                  editing && active == SheetField::kDarkvision);
+  DrawModalField(renderer, text, max_hp_field,
+                 std::string(strings::kSheetMaxHp), max_hp,
+                 editing && active == SheetField::kMaxHp);
+  DrawModalField(renderer, text, auto_hp_field,
+                 std::string(strings::kSheetAutoHp), auto_hp,
+                 editing && active == SheetField::kAutoHp);
+  DrawModalField(renderer, text, hit_dice_count_field,
+                 std::string(strings::kSheetHitDiceCount), hit_dice_count,
+                 editing && active == SheetField::kHitDiceCount);
   DrawModalField(renderer, text, damage_field,
                  std::string(strings::kSheetDamage), damage,
                  editing && active == SheetField::kDamage);
@@ -897,9 +913,11 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
   const int rows = std::min<int>(9, static_cast<int>(bestiary.size()));
   for (int i = 0; i < rows; ++i) {
     const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(i)];
-    const std::string line = std::to_string(i + 1) + ". " + monster.name +
-                             "   КД " + std::to_string(monster.ac) + "   HP " +
-                             std::to_string(monster.max_hp);
+    const std::string line =
+        std::to_string(i + 1) + ". " + monster.name + "   КД " +
+        std::to_string(monster.ac) + "   HP " +
+        std::to_string(MonsterMaxHp(monster.hit_dice_count, monster.hit_die,
+                                    monster.con_modifier));
     text->Draw(line, left, cursor_y, kLogText, content_width);
     cursor_y += text->LineHeight() + 2.0F;
   }

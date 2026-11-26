@@ -590,6 +590,17 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
   if (command.max_hp <= 0 || command.max_hp > kMaxHp) {
     return CommandOutcome{.reject_reason = "некорректный максимум HP"};
   }
+  if (!IsValidHitDie(command.hit_die)) {
+    return CommandOutcome{.reject_reason = "некорректная кость хитов"};
+  }
+  if (command.con_modifier < -kMaxConModifier ||
+      command.con_modifier > kMaxConModifier) {
+    return CommandOutcome{.reject_reason =
+                              "некорректный модификатор Телосложения"};
+  }
+  if (command.hit_dice_count < 0 || command.hit_dice_count > 1000) {
+    return CommandOutcome{.reject_reason = "некорректное число костей хитов"};
+  }
   if (command.ac <= 0 || command.ac > kMaxAc || command.speed < 0 ||
       command.speed > kMaxSpeed) {
     return CommandOutcome{.reject_reason = "некорректные КД или скорость"};
@@ -632,7 +643,8 @@ auto GameServer::HandleAddToken(const AddToken& command, bool can_control_all)
       name, command.cell, std::move(owner), command.kind, command.max_hp, 0,
       command.ac, command.speed, command.notes, command.attack_bonus,
       command.save_bonus, command.damage, command.attack_range, command.resist,
-      command.vulnerable, command.immune);
+      command.vulnerable, command.immune, command.hit_die, command.con_modifier,
+      command.hit_dice_count, command.auto_hp);
   const std::optional<Token> token = state_.TokenCopy(id);
   if (!token.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось создать токен"};
@@ -1708,6 +1720,10 @@ auto GameServer::HandleSetTokenMaxHp(const SetTokenMaxHp& command,
   if (!CanControl(*token, actor, can_control_all)) {
     return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
   }
+  if (token->auto_hp) {
+    return CommandOutcome{.reject_reason =
+                              "максимум HP считается по костям (лист L)"};
+  }
   if (command.max_hp <= 0 || command.max_hp > kMaxHp) {
     return CommandOutcome{.reject_reason = "некорректный максимум HP"};
   }
@@ -1847,6 +1863,12 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   if (command.temp_hp < 0 || command.temp_hp > kMaxTempHp) {
     return CommandOutcome{.reject_reason = "некорректные временные HP"};
   }
+  if (command.max_hp <= 0 || command.max_hp > kMaxHp) {
+    return CommandOutcome{.reject_reason = "некорректный максимум HP"};
+  }
+  if (command.hit_dice_count < 0 || command.hit_dice_count > 1000) {
+    return CommandOutcome{.reject_reason = "некорректное число костей хитов"};
+  }
   if (!IsValidHitDie(command.hit_die)) {
     return CommandOutcome{.reject_reason = "некорректная кость хитов"};
   }
@@ -1870,7 +1892,8 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
       command.attack_bonus, command.save_bonus, command.initiative_bonus,
       command.damage, command.temp_hp, command.hit_die, command.con_modifier,
       command.attack_range, command.resist, command.vulnerable, command.immune,
-      command.swim_speed, command.climb_speed, command.darkvision_cells);
+      command.swim_speed, command.climb_speed, command.darkvision_cells,
+      command.max_hp, command.auto_hp, command.hit_dice_count);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }
@@ -1898,6 +1921,13 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   AppendIntChange(changes, "бонус инициативы", before.initiative_bonus,
                   command.initiative_bonus);
   AppendIntChange(changes, "временные HP", before.temp_hp, updated->temp_hp);
+  AppendIntChange(changes, "макс. HP", before.max_hp, updated->max_hp);
+  AppendIntChange(changes, "костей хитов", before.hit_dice_count,
+                  command.hit_dice_count);
+  if (before.auto_hp != command.auto_hp) {
+    changes.emplace_back(command.auto_hp ? "авто HP включено"
+                                         : "авто HP выключено");
+  }
   AppendIntChange(changes, "мод. Телосложения", before.con_modifier,
                   command.con_modifier);
   AppendIntChange(changes, "дистанция атаки", before.attack_range,

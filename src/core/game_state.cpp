@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "core/conditions.h"
+#include "core/hit_points.h"
 #include "core/levels.h"
 #include "core/player_name.h"
 #include "core/units.h"
@@ -116,14 +117,17 @@ constexpr int kLongRestSeconds = 8 * kSecondsPerHour;
 // текущие HP — на столько же, если персонаж не лежит без сознания. На
 // рубежах 5/9/13/17 растёт бонус мастерства: он уже включён в итоговые
 // бонусы атаки и спасброска листа, поэтому их значение поднимается на 1.
-auto ApplyLevelGains(Token& token, int from_level, int to_level) -> void {
+auto ApplyLevelGains(Token& token, int from_level, int to_level, bool gain_hp)
+    -> void {
   if (token.kind != TokenKind::kPlayer || to_level <= from_level) {
     return;
   }
   const int hp_gain = HitPointsPerLevel(token.hit_die, token.con_modifier) *
                       (to_level - from_level);
-  token.max_hp += hp_gain;
-  if (token.hp > 0) {
+  if (gain_hp) {
+    token.max_hp += hp_gain;
+  }
+  if (gain_hp && token.hp > 0) {
     token.hp += hp_gain;
   }
   const int bonus_gain =
@@ -163,6 +167,9 @@ GameState::GameState(GameSnapshot snapshot)
     if (token.kind != TokenKind::kPlayer && token.owner.empty()) {
       token.owner = std::string(kDmOwner);
     }
+    // Инвариант авто-режима: после загрузки, отмены и смены сцены максимум
+    // HP совпадает с костями.
+    RecomputeAutoHp(token);
   }
 }
 
@@ -193,27 +200,39 @@ auto GameState::AddToken(std::string name, Cell cell, std::string owner,
                          int ac, int speed, std::string notes, int attack_bonus,
                          int save_bonus, std::string damage, int attack_range,
                          std::uint32_t resist, std::uint32_t vulnerable,
-                         std::uint32_t immune) -> TokenId {
+                         std::uint32_t immune, int hit_die, int con_modifier,
+                         int hit_dice_count, bool auto_hp) -> TokenId {
   const TokenId id = next_token_id_++;
   const int resolved_max_hp = std::max(1, max_hp);
-  tokens_.push_back(Token{.id = id,
-                          .name = std::move(name),
-                          .owner = std::move(owner),
-                          .hp = resolved_max_hp,
-                          .max_hp = resolved_max_hp,
-                          .ac = ac,
-                          .speed = speed,
-                          .notes = std::move(notes),
-                          .attack_bonus = attack_bonus,
-                          .save_bonus = save_bonus,
-                          .damage = std::move(damage),
-                          .resist = resist,
-                          .vulnerable = vulnerable,
-                          .immune = immune,
-                          .attack_range = attack_range,
-                          .kind = kind,
-                          .color = color,
-                          .cell = cell});
+  Token token{.id = id,
+              .name = std::move(name),
+              .owner = std::move(owner),
+              .hp = resolved_max_hp,
+              .max_hp = resolved_max_hp,
+              .hit_die = hit_die,
+              .con_modifier = con_modifier,
+              .auto_hp = auto_hp,
+              .hit_dice_count = hit_dice_count,
+              .ac = ac,
+              .speed = speed,
+              .notes = std::move(notes),
+              .attack_bonus = attack_bonus,
+              .save_bonus = save_bonus,
+              .damage = std::move(damage),
+              .resist = resist,
+              .vulnerable = vulnerable,
+              .immune = immune,
+              .attack_range = attack_range,
+              .kind = kind,
+              .color = color,
+              .cell = cell};
+  // Новый токен только что создан, поэтому сдвиг текущих HP не нужен: в
+  // авто-режиме сразу берём максимум из костей.
+  if (auto_hp) {
+    token.max_hp = AutoMaxHp(token);
+    token.hp = token.max_hp;
+  }
+  tokens_.push_back(std::move(token));
   // В бой новый токен добавляет сервер: он бросает инициативу и ставит
   // участника в конец раунда.
   return id;
@@ -463,7 +482,7 @@ auto GameState::RenameToken(TokenId id, std::string name)
 
 auto GameState::SetTokenMaxHp(TokenId id, int max_hp) -> std::optional<Token> {
   Token* token = FindToken(id);
-  if (token == nullptr) {
+  if (token == nullptr || token->auto_hp) {
     return std::nullopt;
   }
   token->max_hp = std::max(1, max_hp);
@@ -481,7 +500,11 @@ auto GameState::AddXp(TokenId id, int amount) -> std::optional<Token> {
   }
   const int before = LevelForXp(token->xp);
   token->xp = std::min(kMaxXp, token->xp + amount);
-  ApplyLevelGains(*token, before, LevelForXp(token->xp));
+  const int after = LevelForXp(token->xp);
+  // В авто-режиме максимум HP выводится из уровня, поэтому его пересчитываем;
+  // ручной режим получает прирост за каждый новый уровень.
+  ApplyLevelGains(*token, before, after, !token->auto_hp);
+  RecomputeAutoHp(*token);
   return *token;
 }
 
@@ -513,7 +536,8 @@ auto GameState::UpdateTokenSheet(
     int save_bonus, int initiative_bonus, std::string damage, int temp_hp,
     int hit_die, int con_modifier, int attack_range, std::uint32_t resist,
     std::uint32_t vulnerable, std::uint32_t immune, int swim_speed,
-    int climb_speed, int darkvision_cells) -> std::optional<Token> {
+    int climb_speed, int darkvision_cells, int max_hp, bool auto_hp,
+    int hit_dice_count) -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -529,6 +553,15 @@ auto GameState::UpdateTokenSheet(
   token->temp_hp = std::max(token->temp_hp, temp_hp);
   token->hit_die = hit_die;
   token->con_modifier = con_modifier;
+  token->auto_hp = auto_hp;
+  token->hit_dice_count = hit_dice_count;
+  if (auto_hp) {
+    // Правка кости, Телосложения или числа костей сразу меняет максимум.
+    RecomputeAutoHp(*token);
+  } else {
+    token->max_hp = std::max(1, max_hp);
+    token->hp = std::clamp(token->hp, 0, token->max_hp);
+  }
   token->attack_range = attack_range;
   token->resist = resist & kAllDamageTypes;
   token->vulnerable = vulnerable & kAllDamageTypes;

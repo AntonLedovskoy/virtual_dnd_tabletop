@@ -37,6 +37,7 @@
 #include "core/game_server.h"
 #include "core/game_state.h"
 #include "core/grid_map.h"
+#include "core/hit_points.h"
 #include "core/levels.h"
 #include "core/light.h"
 #include "core/local_transport.h"
@@ -2757,14 +2758,27 @@ auto TestBestiary() -> void {
   if (!bestiary.empty()) {
     Expect(!bestiary.front().name.empty(), "bestiary entries have names");
     Expect(bestiary.front().ac > 0, "у записей бестиария есть КД");
-    Expect(bestiary.front().max_hp > 0, "bestiary entries have HP");
+    Expect(dnd::MonsterMaxHp(bestiary.front().hit_dice_count,
+                             bestiary.front().hit_die,
+                             bestiary.front().con_modifier) > 0,
+           "bestiary entries have HP");
     Expect(!bestiary.front().damage.empty(),
            "bestiary entries have damage expressions");
   }
   for (const dnd::MonsterTemplate& monster : bestiary) {
-    Expect(!monster.name.empty() && monster.ac > 0 && monster.max_hp > 0 &&
+    Expect(!monster.name.empty() && monster.ac > 0 &&
+               dnd::MonsterMaxHp(monster.hit_dice_count, monster.hit_die,
+                                 monster.con_modifier) > 0 &&
                !monster.damage.empty() && !monster.notes.empty(),
            "every bestiary template is complete");
+  }
+  // Кости шаблонов дают те же HP, что раньше стояли в блоках статов.
+  constexpr std::array<int, 9> expected_hp{7, 11, 11, 13, 59, 22, 15, 5, 26};
+  for (std::size_t i = 0; i < bestiary.size() && i < expected_hp.size(); ++i) {
+    const dnd::MonsterTemplate& monster = bestiary[i];
+    Expect(dnd::MonsterMaxHp(monster.hit_dice_count, monster.hit_die,
+                             monster.con_modifier) == expected_hp[i],
+           "the template's hit dice reproduce its stat block HP");
   }
   Expect(dnd::DefaultConditions().size() >= 8,
          "default conditions are available");
@@ -3464,6 +3478,159 @@ auto TestExperience() -> void {
   Expect(TokenOf(gaining_server.State(), 2).max_hp == 15 &&
              TokenOf(gaining_server.State(), 2).hp == 0,
          "a downed character keeps zero current hit points");
+}
+
+auto TestAutoHitPoints() -> void {
+  // Формулы: персонаж на первом уровне берёт максимум кости, дальше —
+  // среднее с округлением вверх; монстр — среднее вниз, как в SRD.
+  Expect(dnd::CharacterMaxHp(1, 8, 0) == 8,
+         "a level 1 d8 character has 8 hit points");
+  Expect(dnd::CharacterMaxHp(1, 12, 2) == 14,
+         "the first level takes the whole hit die plus Constitution");
+  Expect(dnd::CharacterMaxHp(5, 12, 2) == 14 + (4 * 9),
+         "later levels add the average hit die plus Constitution");
+  Expect(dnd::CharacterMaxHp(1, 6, -10) == 1,
+         "the maximum never drops below one hit point");
+  Expect(dnd::MonsterMaxHp(2, 6, 0) == 7 && dnd::MonsterMaxHp(7, 10, 3) == 59,
+         "monster hit points average the dice downwards");
+  Expect(dnd::MonsterMaxHp(2, 6, -1) == 5 && dnd::MonsterMaxHp(0, 8, 0) >= 1,
+         "Constitution applies per die and at least one die is used");
+
+  // Новый персонаж создаётся в авто-режиме: d8 без Телосложения — 8 HP.
+  const dnd::GridMap map(8, 1);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .next_token_id = 1,
+  };
+  dnd::GameServer server(snapshot, 8, 2);
+  const dnd::CommandOutcome added =
+      server.HandleCommand(dnd::AddToken{.name = "hero",
+                                         .cell = CellAt(0, 0),
+                                         .owner = "alice",
+                                         .kind = dnd::TokenKind::kPlayer,
+                                         .max_hp = 10,
+                                         .hit_die = 8,
+                                         .con_modifier = 0,
+                                         .auto_hp = true},
+                           "", true);
+  Expect(added.accepted, "the DM spawns an auto-hit-point character");
+  const dnd::TokenId hero = 1;
+  Expect(TokenOf(server.State(), hero).auto_hp &&
+             TokenOf(server.State(), hero).max_hp == 8 &&
+             TokenOf(server.State(), hero).hp == 8,
+         "a new d8 character starts with 8 hit points");
+  Expect(!server
+              .HandleCommand(dnd::SetTokenMaxHp{.id = hero, .max_hp = 20},
+                             "alice", false)
+              .accepted,
+         "/maxhp is refused while the maximum comes from the dice");
+
+  // Опыт до 2 уровня: максимум и текущие HP растут на прирост уровня.
+  Expect(server.HandleCommand(dnd::AwardXp{.id = hero, .amount = 300}, "", true)
+             .accepted,
+         "experience reaches level 2");
+  Expect(TokenOf(server.State(), hero).max_hp == 13 &&
+             TokenOf(server.State(), hero).hp == 13,
+         "level 2 raises the auto maximum and current hit points");
+
+  Expect(
+      server.HandleCommand(dnd::DamageToken{.id = hero, .amount = 3}, "", true)
+          .accepted,
+      "the character takes damage");
+  Expect(TokenOf(server.State(), hero).hp == 10, "damage is applied");
+  Expect(server.HandleCommand(dnd::AwardXp{.id = hero, .amount = 600}, "", true)
+             .accepted,
+         "experience reaches level 3");
+  Expect(TokenOf(server.State(), hero).max_hp == 18 &&
+             TokenOf(server.State(), hero).hp == 15,
+         "a level-up shifts current HP by the same delta");
+
+  // Лежачий на нуле не поднимается сам: он получает новый максимум, но
+  // остаётся на нуле.
+  Expect(server.HandleCommand(dnd::SetTokenHp{.id = hero, .hp = 0}, "", true)
+             .accepted,
+         "the DM can drop the character to zero");
+  Expect(
+      server.HandleCommand(dnd::AwardXp{.id = hero, .amount = 1800}, "", true)
+          .accepted,
+      "a downed character still gains experience");
+  Expect(TokenOf(server.State(), hero).max_hp == 23 &&
+             TokenOf(server.State(), hero).hp == 0,
+         "a downed character stays at zero hit points");
+
+  // Лист пересчитывает максимум при правке кости или числа костей.
+  Expect(server
+             .HandleCommand(dnd::AddToken{.name = "troll",
+                                          .cell = CellAt(1, 0),
+                                          .kind = dnd::TokenKind::kMonster,
+                                          .hit_die = 8,
+                                          .hit_dice_count = 2,
+                                          .auto_hp = true},
+                            "", true)
+             .accepted,
+         "the DM spawns an auto-hit-point monster");
+  const dnd::TokenId troll = 2;
+  Expect(TokenOf(server.State(), troll).max_hp == 9 &&
+             TokenOf(server.State(), troll).hp == 9,
+         "two d8 hit dice give the monster 9 hit points");
+  Expect(server
+             .HandleCommand(dnd::UpdateTokenSheet{.id = troll,
+                                                  .ac = 10,
+                                                  .speed = 9,
+                                                  .hit_die = 8,
+                                                  .con_modifier = 0,
+                                                  .max_hp = 9,
+                                                  .auto_hp = true,
+                                                  .hit_dice_count = 4},
+                            "", true)
+             .accepted,
+         "the sheet edits the number of monster hit dice");
+  Expect(TokenOf(server.State(), troll).max_hp == 18 &&
+             TokenOf(server.State(), troll).hp == 18,
+         "more hit dice raise the auto maximum");
+
+  // Выключение авто переводит лист в ручной максимум, и /maxhp снова работает.
+  Expect(server
+             .HandleCommand(dnd::UpdateTokenSheet{.id = troll,
+                                                  .ac = 10,
+                                                  .speed = 9,
+                                                  .hit_die = 8,
+                                                  .con_modifier = 0,
+                                                  .max_hp = 30,
+                                                  .auto_hp = false,
+                                                  .hit_dice_count = 4},
+                            "", true)
+             .accepted,
+         "the sheet switches the token to a manual maximum");
+  Expect(!TokenOf(server.State(), troll).auto_hp &&
+             TokenOf(server.State(), troll).max_hp == 30,
+         "the manual maximum is taken from the sheet");
+  Expect(server
+             .HandleCommand(dnd::SetTokenMaxHp{.id = troll, .max_hp = 35}, "",
+                            true)
+             .accepted,
+         "/maxhp works again in manual mode");
+  Expect(TokenOf(server.State(), troll).max_hp == 35,
+         "the manual maximum follows /maxhp");
+
+  // Загрузка сцены восстанавливает инвариант «авто = по кости».
+  dnd::GameSnapshot loaded;
+  loaded.map = map;
+  loaded.tokens.push_back(dnd::Token{.id = 1,
+                                     .name = "saved",
+                                     .owner = "alice",
+                                     .hp = 7,
+                                     .max_hp = 99,
+                                     .hit_die = 8,
+                                     .con_modifier = 0,
+                                     .auto_hp = true,
+                                     .kind = dnd::TokenKind::kPlayer,
+                                     .cell = CellAt(2, 0)});
+  loaded.next_token_id = 2;
+  const dnd::GameState reopened(std::move(loaded));
+  Expect(TokenOf(reopened, 1).max_hp == 8 && TokenOf(reopened, 1).hp == 1,
+         "loading a scene recomputes the auto maximum and keeps a wounded "
+         "character conscious");
 }
 
 auto TestFogMovement() -> void {
@@ -5019,6 +5186,8 @@ auto TestSaveLoadRoundtrip() -> void {
                   .temp_hp = 3,
                   .hit_die = 10,
                   .con_modifier = 2,
+                  .auto_hp = true,
+                  .hit_dice_count = 1,
                   .hit_dice_spent = 2,
                   .initiative = 15,
                   .ac = 16,
@@ -5185,6 +5354,9 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().kind == dnd::TokenKind::kPlayer,
            "token kind survives");
     Expect(loaded->tokens.front().color == 0x507AC8U, "token colour survives");
+    Expect(loaded->tokens.front().auto_hp &&
+               loaded->tokens.front().hit_dice_count == 1,
+           "auto hit points and the monster hit dice count survive");
     Expect(loaded->tokens.front().portrait == "hero.png",
            "token portrait survives");
     Expect(loaded->tokens.front().cell == CellAt(1, 1), "token cell survives");
@@ -5250,6 +5422,8 @@ auto TestReadsPreviousVersions() -> void {
                   .name = "hero",
                   .hp = 5,
                   .max_hp = 10,
+                  .auto_hp = true,
+                  .hit_dice_count = 3,
                   .hit_dice_spent = 1,
                   .darkvision_cells = 4,
                   .light_bright_cells = 2,
@@ -5289,6 +5463,9 @@ auto TestReadsPreviousVersions() -> void {
            "condition duration and КС survive previous versions");
     Expect(token.hit_dice_spent == 1,
            "spent hit dice survive previous versions");
+    Expect(token.auto_hp == (version >= 33) &&
+               token.hit_dice_count == (version >= 33 ? 3 : 0),
+           "the auto hit point fields appear with their version");
     Expect(token.action_used == (version >= 28) &&
                token.dodging == (version >= 28),
            "turn economy fields appear with their version");
@@ -5359,6 +5536,9 @@ auto TestReadsPreviousVersions() -> void {
            "the campaign game clock appears with its version");
     Expect(token.darkvision_cells == (version >= 19 ? 4 : 0),
            "campaign darkvision appears with its version");
+    Expect(token.auto_hp == (version >= 20) &&
+               token.hit_dice_count == (version >= 20 ? 3 : 0),
+           "campaign auto hit points appear with their version");
   }
 
   WriteVersionedFile(campaign_path, campaign_magic,
@@ -6960,6 +7140,10 @@ auto TestCommandEventSerialization() -> void {
       .owner = "dm",
       .kind = dnd::TokenKind::kMonster,
       .max_hp = 13,
+      .hit_die = 10,
+      .con_modifier = 1,
+      .hit_dice_count = 3,
+      .auto_hp = true,
       .ac = 14,
       .speed = 12,
       .notes = "Дубина: +4, 1d8+2",
@@ -6995,7 +7179,11 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::AddToken>(*add_decoded).vulnerable ==
               dnd::DamageTypeBit(dnd::DamageType::kFire) &&
           std::get<dnd::AddToken>(*add_decoded).immune ==
-              dnd::DamageTypeBit(dnd::DamageType::kPoison),
+              dnd::DamageTypeBit(dnd::DamageType::kPoison) &&
+          std::get<dnd::AddToken>(*add_decoded).hit_die == 10 &&
+          std::get<dnd::AddToken>(*add_decoded).con_modifier == 1 &&
+          std::get<dnd::AddToken>(*add_decoded).hit_dice_count == 3 &&
+          std::get<dnd::AddToken>(*add_decoded).auto_hp,
       "spawn command survives serialization");
 
   const dnd::Command claim{dnd::ClaimToken{.id = 4}};
@@ -7064,6 +7252,9 @@ auto TestCommandEventSerialization() -> void {
       .temp_hp = 5,
       .hit_die = 10,
       .con_modifier = 2,
+      .max_hp = 23,
+      .auto_hp = true,
+      .hit_dice_count = 3,
       .attack_range = 6,
       .resist = dnd::DamageTypeBit(dnd::DamageType::kFire),
       .vulnerable = dnd::DamageTypeBit(dnd::DamageType::kCold),
@@ -7094,7 +7285,10 @@ auto TestCommandEventSerialization() -> void {
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).vulnerable ==
               dnd::DamageTypeBit(dnd::DamageType::kCold) &&
           std::get<dnd::UpdateTokenSheet>(*sheet_decoded).immune ==
-              dnd::DamageTypeBit(dnd::DamageType::kPoison),
+              dnd::DamageTypeBit(dnd::DamageType::kPoison) &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).max_hp == 23 &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).auto_hp &&
+          std::get<dnd::UpdateTokenSheet>(*sheet_decoded).hit_dice_count == 3,
       "sheet command survives serialization");
 
   const dnd::Command combat_command{dnd::UpdateTokenCombat{
@@ -8357,6 +8551,7 @@ auto main() -> int {
     TestFogMovement();
     TestLevels();
     TestExperience();
+    TestAutoHitPoints();
     TestUtf8();
     TestPlayerNames();
     TestVersion();

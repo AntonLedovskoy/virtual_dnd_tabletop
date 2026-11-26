@@ -374,6 +374,9 @@ inline constexpr std::string_view kSheetHitDie = "Кость хитов (d6–d1
 inline constexpr std::string_view kSheetCon = "Мод. Телосложения";
 inline constexpr std::string_view kSheetRange = "Дальность атаки";
 inline constexpr std::string_view kSheetDarkvision = "Тёмное зрение, м";
+inline constexpr std::string_view kSheetMaxHp = "Макс. HP";
+inline constexpr std::string_view kSheetAutoHp = "Авто HP (да/нет)";
+inline constexpr std::string_view kSheetHitDiceCount = "Костей (0 — ур.)";
 inline constexpr std::string_view kSheetResist =
     "Сопротивления (через запятую)";
 inline constexpr std::string_view kSheetVulnerable = "Уязвимости";
@@ -446,6 +449,12 @@ inline constexpr std::string_view kSheetBadRange =
     "Дистанция атаки — целое число клеток";
 inline constexpr std::string_view kSheetBadDarkvision =
     "Тёмное зрение — целое число метров (0 — нет)";
+inline constexpr std::string_view kSheetBadMaxHp =
+    "Максимум HP — целое число от 1";
+inline constexpr std::string_view kSheetBadAutoHp =
+    "Авто HP: впишите да или нет";
+inline constexpr std::string_view kSheetBadHitDiceCount =
+    "Число костей хитов: целое от 0 (0 — по уровню)";
 inline constexpr std::string_view kSheetBadDamage =
     "Некорректное выражение урона";
 inline constexpr std::string_view kSheetBadDamageType =

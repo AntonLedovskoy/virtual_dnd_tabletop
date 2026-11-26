@@ -145,6 +145,10 @@ auto WriteToken(ByteWriter& writer, const Token& token,
     writer.I32(token.light_bright_cells);
     writer.I32(token.light_dim_cells);
   }
+  if (format.has_auto_hp) {
+    writer.U8(token.auto_hp ? 1 : 0);
+    writer.I32(token.hit_dice_count);
+  }
 }
 
 auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
@@ -195,6 +199,8 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
   std::int32_t darkvision_cells = 0;
   std::int32_t light_bright_cells = 0;
   std::int32_t light_dim_cells = 0;
+  std::uint8_t auto_hp = 0;
+  std::int32_t hit_dice_count = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -257,6 +263,10 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
        !reader.I32(light_dim_cells))) {
     return false;
   }
+  if (format.has_auto_hp &&
+      (!reader.U8(auto_hp) || !reader.I32(hit_dice_count))) {
+    return false;
+  }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
       initiative < -1000000 || initiative > 1000000 || ac <= 0 || ac > 1000 ||
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
@@ -277,7 +287,8 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       darkvision_cells > kMaxLightCells || light_bright_cells < 0 ||
       light_bright_cells > kMaxLightCells || light_dim_cells < 0 ||
       light_dim_cells > kMaxLightCells ||
-      light_dim_cells < light_bright_cells) {
+      light_dim_cells < light_bright_cells || auto_hp > 1 ||
+      hit_dice_count < 0 || hit_dice_count > 1000) {
     return false;
   }
   if (!std::ranges::is_sorted(hazards_done) ||
@@ -294,6 +305,8 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       .temp_hp = temp_hp,
       .hit_die = hit_die,
       .con_modifier = con_modifier,
+      .auto_hp = auto_hp != 0,
+      .hit_dice_count = hit_dice_count,
       .hit_dice_spent = hit_dice_spent,
       .initiative = initiative,
       .ac = ac,
@@ -677,13 +690,19 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
   std::uint32_t resist = 0;
   std::uint32_t vulnerable = 0;
   std::uint32_t immune = 0;
+  std::int32_t hit_die = 8;
+  std::int32_t con_modifier = 0;
+  std::int32_t hit_dice_count = 0;
+  std::uint8_t auto_hp = 0;
   if (!reader.String(name, kMaxNameLength) || !ReadPosition(reader, cell) ||
       !reader.String(owner, kMaxNameLength) || !reader.U8(kind) ||
       !reader.I32(max_hp) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.String(damage, kMaxNotes) ||
       !reader.I32(attack_range) || !reader.U32(resist) ||
-      !reader.U32(vulnerable) || !reader.U32(immune) || !reader.Done()) {
+      !reader.U32(vulnerable) || !reader.U32(immune) || !reader.I32(hit_die) ||
+      !reader.I32(con_modifier) || !reader.I32(hit_dice_count) ||
+      !reader.U8(auto_hp) || !reader.Done()) {
     return std::nullopt;
   }
   if (kind > static_cast<std::uint8_t>(TokenKind::kMonster) || max_hp <= 0 ||
@@ -691,7 +710,9 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
       attack_bonus < -100 || attack_bonus > 100 || save_bonus < -100 ||
       save_bonus > 100 || attack_range < 0 || attack_range > 1000 ||
       !IsValidDamageTypeBit(resist) || !IsValidDamageTypeBit(vulnerable) ||
-      !IsValidDamageTypeBit(immune)) {
+      !IsValidDamageTypeBit(immune) || !IsValidHitDie(hit_die) ||
+      con_modifier < -kMaxConModifier || con_modifier > kMaxConModifier ||
+      hit_dice_count < 0 || hit_dice_count > 1000 || auto_hp > 1) {
     return std::nullopt;
   }
   return Command{AddToken{
@@ -700,6 +721,10 @@ auto DecodeAddCommand(ByteReader& reader) -> std::optional<Command> {
       .owner = std::move(owner),
       .kind = static_cast<TokenKind>(kind),
       .max_hp = max_hp,
+      .hit_die = hit_die,
+      .con_modifier = con_modifier,
+      .hit_dice_count = hit_dice_count,
+      .auto_hp = auto_hp != 0,
       .ac = ac,
       .speed = speed,
       .notes = std::move(notes),
@@ -862,6 +887,9 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
   std::int32_t swim_speed = 0;
   std::int32_t climb_speed = 0;
   std::int32_t darkvision_cells = 0;
+  std::int32_t max_hp = 10;
+  std::uint8_t auto_hp = 0;
+  std::int32_t hit_dice_count = 0;
   if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.I32(initiative_bonus) ||
@@ -870,13 +898,16 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
       !reader.I32(attack_range) || !reader.U32(resist) ||
       !reader.U32(vulnerable) || !reader.U32(immune) ||
       !reader.I32(swim_speed) || !reader.I32(climb_speed) ||
-      !reader.I32(darkvision_cells) || !reader.Done() ||
+      !reader.I32(darkvision_cells) || !reader.I32(max_hp) ||
+      !reader.U8(auto_hp) || !reader.I32(hit_dice_count) || !reader.Done() ||
       !IsValidHitDie(hit_die) || con_modifier < -kMaxConModifier ||
       con_modifier > kMaxConModifier || attack_range < 0 ||
       attack_range > 1000 || swim_speed < 0 || swim_speed > 1000 ||
       climb_speed < 0 || climb_speed > 1000 || darkvision_cells < 0 ||
-      darkvision_cells > kMaxLightCells || !IsValidDamageTypeBit(resist) ||
-      !IsValidDamageTypeBit(vulnerable) || !IsValidDamageTypeBit(immune)) {
+      darkvision_cells > kMaxLightCells || max_hp <= 0 || max_hp > 1000000 ||
+      auto_hp > 1 || hit_dice_count < 0 || hit_dice_count > 1000 ||
+      !IsValidDamageTypeBit(resist) || !IsValidDamageTypeBit(vulnerable) ||
+      !IsValidDamageTypeBit(immune)) {
     return std::nullopt;
   }
   return Command{UpdateTokenSheet{.id = id,
@@ -890,6 +921,9 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
                                   .temp_hp = temp_hp,
                                   .hit_die = hit_die,
                                   .con_modifier = con_modifier,
+                                  .max_hp = max_hp,
+                                  .auto_hp = auto_hp != 0,
+                                  .hit_dice_count = hit_dice_count,
                                   .attack_range = attack_range,
                                   .resist = resist,
                                   .vulnerable = vulnerable,
@@ -1505,6 +1539,10 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U32(cmd.resist);
           writer.U32(cmd.vulnerable);
           writer.U32(cmd.immune);
+          writer.I32(cmd.hit_die);
+          writer.I32(cmd.con_modifier);
+          writer.I32(cmd.hit_dice_count);
+          writer.U8(cmd.auto_hp ? 1 : 0);
         } else if constexpr (std::is_same_v<T, RemoveToken>) {
           writer.U8(kCommandRemoveToken);
           writer.U32(cmd.id);
@@ -1558,6 +1596,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.swim_speed);
           writer.I32(cmd.climb_speed);
           writer.I32(cmd.darkvision_cells);
+          writer.I32(cmd.max_hp);
+          writer.U8(cmd.auto_hp ? 1 : 0);
+          writer.I32(cmd.hit_dice_count);
         } else if constexpr (std::is_same_v<T, SetTokenLight>) {
           writer.U8(kCommandSetTokenLight);
           writer.U32(cmd.id);

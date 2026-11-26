@@ -51,6 +51,12 @@ struct AddToken {
   std::string owner;
   TokenKind kind = TokenKind::kMonster;
   int max_hp = 10;
+  // Кости хитов и режим «максимум HP по костям»: у персонажа уровень берётся
+  // из опыта, у монстра — из hit_dice_count (core/hit_points).
+  int hit_die = 8;
+  int con_modifier = 0;
+  int hit_dice_count = 0;
+  bool auto_hp = false;
   int ac = 10;
   int speed = 9;
   std::string notes;
@@ -135,9 +141,14 @@ struct UpdateTokenSheet {
   std::string damage;
   int temp_hp = 0;
   // Кость хитов (d6/d8/d10/d12) и модификатор Телосложения: по ним считается
-  // прирост HP при повышении уровня.
+  // максимум HP в авто-режиме и прирост при повышении уровня.
   int hit_die = 8;
   int con_modifier = 0;
+  // Максимум HP в ручном режиме; в авто игнорируется.
+  int max_hp = 10;
+  bool auto_hp = false;
+  // Число костей хитов монстра; 0 — «по уровню» (у персонажей).
+  int hit_dice_count = 0;
   // Дальнобойная атака в клетках (0 — без ограничения) и маски защиты.
   int attack_range = 0;
   std::uint32_t resist = 0;

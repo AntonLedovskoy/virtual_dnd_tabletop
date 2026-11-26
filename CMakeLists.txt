@@ -133,6 +133,7 @@ add_library(dnd_core STATIC
   src/core/game_server.cpp
   src/core/game_state.cpp
   src/core/grid_map.cpp
+  src/core/hit_points.cpp
   src/core/image_name.cpp
   src/core/levels.cpp
   src/core/light.cpp
