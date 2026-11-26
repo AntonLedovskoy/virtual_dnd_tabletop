@@ -147,6 +147,7 @@ add_library(dnd_core STATIC
   src/core/overlay.cpp
   src/core/overlay_io.cpp
   src/core/overlay_save.cpp
+  src/core/ownership.cpp
   src/core/password.cpp
   src/core/player_name.cpp
   src/core/random.cpp

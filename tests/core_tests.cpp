@@ -49,6 +49,7 @@
 #include "core/overlay.h"
 #include "core/overlay_io.h"
 #include "core/overlay_save.h"
+#include "core/ownership.h"
 #include "core/password.h"
 #include "core/player_name.h"
 #include "core/scene_io.h"
@@ -4855,6 +4856,187 @@ auto TestMovementPathsAndDiagonals() -> void {
          "ending combat resets the diagonal parity");
 }
 
+auto TestDmOwnsCharacter() -> void {
+  // Взятый DM-ом персонаж играет по правилам игрока, а свободные персонажи,
+  // монстры и NPC остаются мастерскими: DM двигает их без очереди и бюджета.
+  dnd::GridMap map(12, 4);
+  map.SetTerrain(CellAt(1, 2), dnd::Terrain::kWall);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "",
+                         .speed = 6,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "rival",
+                         .owner = "alice",
+                         .attack_bonus = 100,
+                         .initiative_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 1)},
+              dnd::Token{.id = 3,
+                         .name = "extra",
+                         .owner = "",
+                         .speed = 6,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(4, 3)},
+              dnd::Token{.id = 4,
+                         .name = "goblin",
+                         .owner = std::string(dnd::kDmOwner),
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(8, 1)},
+          },
+      .next_token_id = 5,
+  };
+  dnd::GameServer server(snapshot, 12, 21);
+
+  // Предикат: свободному персонажу правила игрока не нужны.
+  Expect(!dnd::FollowsPlayerRules(TokenOf(server.State(), 1), true),
+         "a free character stays in the DM's hands");
+  Expect(!dnd::IsDmOwnedCharacter(TokenOf(server.State(), 4)),
+         "a monster owned by the DM is not a character");
+  Expect(dnd::FollowsPlayerRules(TokenOf(server.State(), 2), false),
+         "a player's character always follows player rules");
+
+  Expect(
+      server
+          .HandleCommand(
+              dnd::SetTokenOwner{.id = 1, .owner = std::string(dnd::kDmOwner)},
+              "", true)
+          .accepted,
+      "the DM takes a free character with C");
+  const dnd::Token taken = TokenOf(server.State(), 1);
+  Expect(dnd::IsDmOwnedCharacter(taken), "the character is now the DM's");
+  Expect(dnd::FollowsPlayerRules(taken, true),
+         "a DM-owned character follows player rules");
+  // Взятый персонаж не создаёт игроку тумана: DM видит весь стол.
+  const dnd::GameSnapshot party = server.Snapshot();
+  Expect(std::ranges::none_of(party.fog,
+                              [](const dnd::FogRecord& record) -> bool {
+                                return dnd::SamePlayerName(record.owner,
+                                                           dnd::kDmOwner);
+                              }),
+         "a DM-owned character adds no player fog record");
+
+  Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "the encounter starts");
+  Expect(server.State().ActiveTokenId() == 2, "the rival acts first");
+
+  // Чужая очередь: ни движения, ни действия, ни атаки без реакции.
+  const dnd::CommandOutcome early_move = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(2, 2)}, "", true);
+  Expect(
+      !early_move.accepted && early_move.reject_reason == "сейчас не ваш ход",
+      "a DM-owned character waits for its turn");
+  const dnd::CommandOutcome early_action = server.HandleCommand(
+      dnd::UseTurnAction{.id = 1, .kind = dnd::TurnActionKind::kHide}, "",
+      true);
+  Expect(!early_action.accepted &&
+             early_action.reject_reason == "сейчас не ваш ход",
+         "a DM-owned character has no actions outside its turn");
+  const dnd::CommandOutcome early_attack = server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 2}, "", true);
+  Expect(!early_attack.accepted &&
+             early_attack.reject_reason == "сейчас не ваш ход",
+         "a DM-owned character attacks outside its turn only as a reaction");
+  Expect(server
+             .HandleCommand(
+                 dnd::AttackToken{.attacker = 1, .target = 2, .reaction = true},
+                 "", true)
+             .accepted,
+         "the DM attacks as the character's reaction");
+  Expect(TokenOf(server.State(), 1).reaction_used,
+         "the character's reaction is spent");
+  Expect(
+      !server
+           .HandleCommand(
+               dnd::AttackToken{.attacker = 1, .target = 2, .reaction = true},
+               "", true)
+           .accepted,
+      "only one reaction per round");
+
+  for (int i = 0; i < 4 && server.State().ActiveTokenId() != 1; ++i) {
+    Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+           "the DM advances the turn");
+  }
+  Expect(server.State().ActiveTokenId() == 1, "the character gets its turn");
+
+  // Свой ход: путь, занятая клетка и бюджет движения работают как у игрока.
+  const dnd::CommandOutcome wall = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(1, 2)}, "", true);
+  Expect(!wall.accepted && wall.reject_reason == "нет пути к клетке",
+         "a DM-owned character cannot walk into a wall");
+  const dnd::CommandOutcome occupied = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(2, 1)}, "", true);
+  Expect(!occupied.accepted && occupied.reject_reason == "клетка занята",
+         "a DM-owned character cannot end a move on an occupied cell");
+  const dnd::CommandOutcome far = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(10, 1)}, "", true);
+  Expect(!far.accepted && far.reject_reason == "не хватает движения на ход",
+         "a DM-owned character spends the movement budget");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(3, 1)}, "",
+                            true)
+             .accepted,
+         "a legal move within the budget goes through");
+  Expect(TokenOf(server.State(), 1).movement_used == 2,
+         "the move is charged against the character's speed");
+
+  Expect(server
+             .HandleCommand(
+                 dnd::UpdateTokenCombat{
+                     .id = 1, .conditions = {dnd::Condition{"захвачен"}}},
+                 "", true)
+             .accepted,
+         "the DM grapples the character");
+  const dnd::CommandOutcome grappled = server.HandleCommand(
+      dnd::MoveToken{.id = 1, .target = CellAt(3, 2)}, "", true);
+  Expect(!grappled.accepted &&
+             grappled.reject_reason == "скорость 0: персонаж обездвижен",
+         "a grappled character has speed 0 even under the DM");
+  Expect(server
+             .HandleCommand(dnd::UpdateTokenCombat{.id = 1, .conditions = {}},
+                            "", true)
+             .accepted,
+         "the DM clears the condition");
+
+  // Свободный персонаж и монстр остаются мастерскими: без очереди, бюджета
+  // и проверки занятой клетки.
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 3, .target = CellAt(3, 1)}, "",
+                            true)
+             .accepted,
+         "a free character still moves freely");
+  Expect(TokenOf(server.State(), 3).movement_used == 0,
+         "a free character spends no movement budget");
+  Expect(
+      server
+          .HandleCommand(dnd::AttackToken{.attacker = 4, .target = 1}, "", true)
+          .accepted,
+      "a monster attacks without a reaction");
+  Expect(!TokenOf(server.State(), 4).action_used, "a monster spends no action");
+
+  // Отпущенный персонаж снова свободен для мастера.
+  Expect(server.HandleCommand(dnd::ReleaseToken{.id = 1}, "", true).accepted,
+         "the DM releases the character");
+  Expect(!dnd::FollowsPlayerRules(TokenOf(server.State(), 1), true),
+         "a released character is free again");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 1)}, "",
+                            true)
+             .accepted,
+         "a released character may be stacked by the DM");
+}
+
 auto TestCrawlJumpFall() -> void {
   // Ползание: не встаём, платим двойную цену, остаёмся «сбит с ног».
   const dnd::GridMap open(8, 8);
@@ -8290,6 +8472,14 @@ auto TestBottomHints() -> void {
   const std::vector<dnd::Hint> claimable_hints = dnd::BottomHints(claimable);
   Expect(has(claimable_hints, dnd::Hint::kClaim),
          "a free character offers claim");
+  dnd::HintContext dm_claim;
+  dm_claim.is_dm = true;
+  dm_claim.has_selection = true;
+  dm_claim.can_dm_claim = true;
+  Expect(has(dnd::BottomHints(dm_claim), dnd::Hint::kDmClaim),
+         "the DM is offered to take a free character");
+  Expect(!has(claimable_hints, dnd::Hint::kDmClaim),
+         "a player is not offered the DM claim key");
 
   // DM: добавки роли, а ход — только в бою.
   dnd::HintContext dm;
@@ -8567,6 +8757,7 @@ auto main() -> int {
     TestMovementBudget();
     TestTurnEconomy();
     TestMovementPathsAndDiagonals();
+    TestDmOwnsCharacter();
     TestCrawlJumpFall();
     TestAoe();
     TestAoeCommands();

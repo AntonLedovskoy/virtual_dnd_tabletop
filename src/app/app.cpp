@@ -33,6 +33,7 @@
 #include "core/light.h"
 #include "core/movement.h"
 #include "core/navigation.h"
+#include "core/ownership.h"
 #include "core/player_name.h"
 #include "core/scene_io.h"
 #include "core/scene_light.h"
@@ -3273,6 +3274,10 @@ auto App::BottomHintText() const -> std::string {
                       selected->kind == TokenKind::kPlayer &&
                       selected->owner.empty() && !PlayerHasCharacter() &&
                       !claimed_once_;
+  // DM берёт свободного персонажа клавишей C; занятого игроком отдаёт /owner.
+  context.can_dm_claim = context.is_dm && selected != nullptr &&
+                         selected->kind == TokenKind::kPlayer &&
+                         selected->owner.empty();
   context.in_combat = view_.EncounterState().active;
   context.log_scrolled = log_scroll_.Offset() > 0;
   context.prone = selected != nullptr && IsProne(*selected);
@@ -3310,7 +3315,21 @@ auto App::ClaimSelectedToken() -> void {
     return;
   }
   if (options_.mode == AppMode::kHost) {
-    view_.AddLocalLine("DM: назначьте владельца командой /owner имя");
+    // DM ведёт персонажей без игрока: C берёт свободного, повторный C
+    // отпускает. Занятого игроком персонажа отдаёт только /owner.
+    if (token->kind != TokenKind::kPlayer) {
+      view_.AddLocalLine(std::string(strings::kDmControlsMonsters));
+      return;
+    }
+    if (IsDmOwnedCharacter(*token)) {
+      SendCommand(ReleaseToken{.id = token->id});
+      return;
+    }
+    if (!token->owner.empty()) {
+      view_.AddLocalLine(std::string(strings::kOwnerPlayerOnly));
+      return;
+    }
+    SendCommand(SetTokenOwner{.id = token->id, .owner = std::string(kDmOwner)});
     return;
   }
   if (token->kind != TokenKind::kPlayer) {
@@ -3643,13 +3662,14 @@ auto App::AttackTarget(bool advantage, bool disadvantage) -> void {
     view_.AddLocalLine(std::string(strings::kAttackSelf));
     return;
   }
-  // Хост — DM и не ограничен ходом. Клиент в чужой ход отправляет атаку как
-  // реакцию: сервер проверит запас реакции и соседнюю цель.
+  // Клиент и взятый DM-ом персонаж в чужой ход отправляют атаку как реакцию:
+  // сервер проверит запас реакции и соседнюю цель. Мастерские токены DM
+  // (монстры, NPC, свободные персонажи) ход не соблюдают.
   const Encounter& encounter = view_.EncounterState();
   const bool own_turn = !encounter.active ||
                         (encounter.turn_index < encounter.order.size() &&
                          encounter.order[encounter.turn_index] == attacker->id);
-  const bool reaction = options_.mode == AppMode::kClient && !own_turn;
+  const bool reaction = FollowsPlayerRules(*attacker, IsDm()) && !own_turn;
   SendCommand(AttackToken{.attacker = attacker->id,
                           .target = target_id,
                           .advantage = advantage,
@@ -5850,7 +5870,9 @@ auto App::Iterate() -> void {
     if (range_token != nullptr) {
       const int budget = EffectiveSpeedCells(*range_token);
       int radius = budget;
-      if (encounter.active && !is_dm) {
+      // Остаток хода показываем всем, кто играет по правилам игрока: игроку и
+      // взятому DM-ом персонажу. Мастерским токенам DM доступен весь путь.
+      if (encounter.active && FollowsPlayerRules(*range_token, is_dm)) {
         radius = RemainingMovementCells(*range_token);
       }
       // Монстры и NPC перекрывают путь, персонажи — нет; встать на занятую
@@ -5946,8 +5968,12 @@ auto App::Iterate() -> void {
                          selected->kind == TokenKind::kPlayer &&
                          selected->owner.empty() && !PlayerHasCharacter() &&
                          !claimed_once_;
+  // Остаток движения показываем тому, кто играет по правилам игрока: игроку и
+  // взятому DM-ом персонажу. Остальные мастерские токены ходят свободно.
+  const bool player_rules =
+      selected != nullptr && FollowsPlayerRules(*selected, is_dm);
   MovementInfo movement = MovementInfo::kFree;
-  if (is_dm) {
+  if (is_dm && !player_rules) {
     movement = MovementInfo::kHidden;
   } else if (encounter.active) {
     movement = MovementInfo::kBudget;

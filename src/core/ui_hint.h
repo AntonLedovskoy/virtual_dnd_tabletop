@@ -29,6 +29,7 @@ enum class Hint : std::uint8_t {
   kJournal,
   kSelect,
   kClaim,
+  kDmClaim,
   kAttack,
   kSave,
   kInitiative,
@@ -71,6 +72,8 @@ struct HintContext {
   // цвет меняет только DM (is_dm).
   bool can_view_sheet = false;
   bool can_claim = false;
+  // Свободный персонаж под курсором у DM: C берёт его в ведение мастера.
+  bool can_dm_claim = false;
   bool in_combat = false;
   bool log_scrolled = false;
   // Выбранный токен «сбит с ног»: показываем, как ползти.

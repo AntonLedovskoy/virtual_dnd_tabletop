@@ -26,6 +26,12 @@ inline constexpr std::string_view kPlayer = "персонаж";
 inline constexpr std::string_view kNpc = "NPC";
 inline constexpr std::string_view kMonster = "монстр";
 inline constexpr std::string_view kClaimHint = "C — забрать персонажа";
+inline constexpr std::string_view kDmClaimHint = "C — взять персонажа DM";
+inline constexpr std::string_view kOwnerDmLabel = "DM";
+inline constexpr std::string_view kOwnerPlayerOnly =
+    "Персонажа ведёт игрок; владельца меняет только /owner";
+inline constexpr std::string_view kDmControlsMonsters =
+    "Монстрами и NPC мастер управляет и без C";
 inline constexpr std::string_view kClaimOnce =
     "Персонажа выбирают один раз, дальше назначает DM";
 inline constexpr std::string_view kReleaseDmOnly =
@@ -554,6 +560,8 @@ inline constexpr std::string_view kLightUsage =
       return kHintSelect;
     case Hint::kClaim:
       return kClaimHint;
+    case Hint::kDmClaim:
+      return kDmClaimHint;
     case Hint::kAttack:
       return kHintAttack;
     case Hint::kSave:

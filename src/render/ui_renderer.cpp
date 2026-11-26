@@ -454,8 +454,12 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
     return 0.0F;
   }
 
-  const std::string owner =
-      token->owner.empty() ? std::string(strings::kFree) : token->owner;
+  std::string owner = token->owner;
+  if (owner.empty()) {
+    owner = std::string(strings::kFree);
+  } else if (SamePlayerName(owner, kDmOwner)) {
+    owner = std::string(strings::kOwnerDmLabel);
+  }
   const int level = LevelForXp(token->xp);
   std::vector<std::string> lines;
   lines.emplace_back(std::string(strings::kName) + ": " + token->name);

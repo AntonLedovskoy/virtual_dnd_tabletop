@@ -16,6 +16,7 @@
 #include "core/dice.h"
 #include "core/levels.h"
 #include "core/movement.h"
+#include "core/ownership.h"
 #include "core/player_name.h"
 #include "core/scene_light.h"
 #include "core/units.h"
@@ -290,7 +291,9 @@ auto GameServer::CanControl(const Token& token, const std::string& actor,
 
 auto GameServer::TurnRejectReason(const Token& token,
                                   bool can_control_all) const -> const char* {
-  if (can_control_all) {
+  // Монстры, NPC и ещё не взятые персонажи остаются мастерскими: DM ведёт их
+  // без очереди. Взятый DM-ом персонаж играет по правилам игрока.
+  if (!FollowsPlayerRules(token, can_control_all)) {
     return nullptr;
   }
   // Недееспособный персонаж не действует ни в свой ход, ни в чужой.
@@ -312,6 +315,9 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   if (!CanControl(*token, actor, can_control_all)) {
     return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
   }
+  // Взятый DM-ом персонаж ходит по правилам игрока: путь, клетки, бюджет.
+  // Монстры, NPC и свободные персонажи для DM по-прежнему без ограничений.
+  const bool player_rules = FollowsPlayerRules(*token, can_control_all);
   // В свой ход двигается только тот, чья сейчас очередь; вне боя и у DM
   // ограничений нет. Недееспособного не двигает даже владелец.
   if (const char* reason = TurnRejectReason(*token, can_control_all)) {
@@ -325,7 +331,7 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   }
   // Захваченный, опутанный, парализованный и лежащий без сознания не
   // двигаются: скорость 0 (SRD 5.2.1).
-  if (!can_control_all && IsSpeedZeroed(*token)) {
+  if (player_rules && IsSpeedZeroed(*token)) {
     return CommandOutcome{.reject_reason = "скорость 0: персонаж обездвижен"};
   }
 
@@ -345,11 +351,11 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
       blockers.push_back(other.cell);
     }
   }
-  if (!can_control_all && target_occupied) {
+  if (player_rules && target_occupied) {
     return CommandOutcome{.reject_reason = "клетка занята"};
   }
 
-  const bool budgeted = state_.EncounterState().active && !can_control_all;
+  const bool budgeted = state_.EncounterState().active && player_rules;
   const bool prone = IsProne(*token);
 
   // Прыжок по прямой до 10 футов (в модели нет Силы, это упрощение 2024):
@@ -404,7 +410,7 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   // положения «сбит с ног» сначала платит половину скорости за вставание.
   const bool crawl = prone && command.crawl;
   std::optional<PathCost> path;
-  if (!can_control_all) {
+  if (player_rules) {
     path = PathCostCells(state_.Map(), token->cell, command.target,
                          token->diagonal_parity, blockers,
                          MovementProfileFor(*token));
@@ -995,7 +1001,10 @@ auto GameServer::HandleAttack(const AttackToken& command,
   const bool own_turn =
       !encounter_active || state_.ActiveTokenId() == attacker->id;
   const bool is_reaction = encounter_active && !own_turn;
-  if (!can_control_all) {
+  // Взятый DM-ом персонаж бьёт по правилам игрока; остальные мастерские токены
+  // DM — без счёта действий и реакций.
+  const bool player_rules = FollowsPlayerRules(*attacker, can_control_all);
+  if (player_rules) {
     if (IsIncapacitated(*attacker)) {
       return CommandOutcome{.reject_reason = "персонаж недееспособен"};
     }
@@ -1152,7 +1161,7 @@ auto GameServer::HandleAttack(const AttackToken& command,
                       .text = text.str(),
                       .timestamp = CurrentTimeSeconds()},
   });
-  if (!can_control_all && encounter_active) {
+  if (player_rules && encounter_active) {
     const std::optional<Token> spent = is_reaction
                                            ? state_.SpendReaction(attacker->id)
                                            : state_.SpendAction(attacker->id);
@@ -1183,7 +1192,7 @@ auto GameServer::HandleUseTurnAction(const UseTurnAction& command,
   if (const char* reason = TurnRejectReason(*token, can_control_all)) {
     return CommandOutcome{.reject_reason = reason};
   }
-  if (!can_control_all && token->action_used) {
+  if (FollowsPlayerRules(*token, can_control_all) && token->action_used) {
     return CommandOutcome{.reject_reason = "действие уже потрачено"};
   }
 
@@ -2809,15 +2818,18 @@ auto GameServer::RecomputeFog() -> void {
     }
     // Владелец персонажа остаётся владельцем и тогда, когда персонаж ослеплён,
     // без сознания или мёртв: такой игрок смотрит в свой пустой туман, а не
-    // получает партийный обзор.
-    if (!token.owner.empty()) {
+    // получает партийный обзор. Взятые DM-ом персонажи тумана игрока не
+    // создают: DM видит весь стол, а партийный обзор их видит как обычных.
+    const bool player_owned =
+        !token.owner.empty() && !SamePlayerName(token.owner, kDmOwner);
+    if (player_owned) {
       character_owners_.insert(PlayerNameKey(token.owner));
     }
     if (!sees(token)) {
       continue;
     }
     party_observers.push_back(observer(token));
-    if (!token.owner.empty()) {
+    if (player_owned) {
       observers[PlayerNameKey(token.owner)].push_back(observer(token));
     }
   }

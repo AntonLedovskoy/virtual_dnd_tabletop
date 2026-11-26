@@ -31,6 +31,9 @@ auto BottomHints(const HintContext& context) -> std::vector<Hint> {
   if (context.can_claim) {
     hints.push_back(Hint::kClaim);
   }
+  if (context.can_dm_claim) {
+    hints.push_back(Hint::kDmClaim);
+  }
   // Без выделения половина клавиш только пишет «сначала выберите токен».
   if (!context.has_selection) {
     hints.push_back(Hint::kSelect);
