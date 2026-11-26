@@ -135,6 +135,7 @@ add_library(dnd_core STATIC
   src/core/grid_map.cpp
   src/core/image_name.cpp
   src/core/levels.cpp
+  src/core/light.cpp
   src/core/local_transport.cpp
   src/core/log_history.cpp
   src/core/log_scroll.cpp

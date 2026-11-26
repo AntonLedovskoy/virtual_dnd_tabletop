@@ -75,9 +75,15 @@ auto IsOverlayWritable(const Overlay& overlay) -> bool {
   return true;
 }
 
-// Снимки партии версии 1 писались форматом сохранения 30.
+// Снимки партии версии 1 писались форматом сохранения 30, версии 2 — 31.
 auto OverlaySnapshotFormat(std::uint32_t overlay_version) -> SnapshotFormat {
-  return overlay_version >= 2 ? SnapshotFormat{} : SaveSnapshotFormat(30);
+  if (overlay_version >= 3) {
+    return SnapshotFormat{};
+  }
+  if (overlay_version >= 2) {
+    return SaveSnapshotFormat(31);
+  }
+  return SaveSnapshotFormat(30);
 }
 
 auto DecodeOverlay(const std::uint8_t* data, std::size_t size,

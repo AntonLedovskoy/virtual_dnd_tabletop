@@ -508,14 +508,12 @@ auto GameState::SetTokenPortrait(TokenId id, std::string portrait)
   return *token;
 }
 
-auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
-                                 std::string notes, int attack_bonus,
-                                 int save_bonus, int initiative_bonus,
-                                 std::string damage, int temp_hp, int hit_die,
-                                 int con_modifier, int attack_range,
-                                 std::uint32_t resist, std::uint32_t vulnerable,
-                                 std::uint32_t immune, int swim_speed,
-                                 int climb_speed) -> std::optional<Token> {
+auto GameState::UpdateTokenSheet(
+    TokenId id, int ac, int speed, std::string notes, int attack_bonus,
+    int save_bonus, int initiative_bonus, std::string damage, int temp_hp,
+    int hit_die, int con_modifier, int attack_range, std::uint32_t resist,
+    std::uint32_t vulnerable, std::uint32_t immune, int swim_speed,
+    int climb_speed, int darkvision_cells) -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -537,6 +535,18 @@ auto GameState::UpdateTokenSheet(TokenId id, int ac, int speed,
   token->immune = immune & kAllDamageTypes;
   token->swim_speed = swim_speed;
   token->climb_speed = climb_speed;
+  token->darkvision_cells = std::max(0, darkvision_cells);
+  return *token;
+}
+
+auto GameState::SetTokenLight(TokenId id, int bright_cells, int dim_cells)
+    -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->light_bright_cells = std::max(0, bright_cells);
+  token->light_dim_cells = std::max(token->light_bright_cells, dim_cells);
   return *token;
 }
 

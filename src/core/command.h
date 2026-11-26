@@ -146,6 +146,16 @@ struct UpdateTokenSheet {
   // Скорости плавания и лазания в клетках; 0 — их нет.
   int swim_speed = 0;
   int climb_speed = 0;
+  // Тёмное зрение в клетках; 0 — его нет.
+  int darkvision_cells = 0;
+};
+
+// Владелец или DM: свет, который носит токен. Радиусы в клетках, 0 — свет
+// выключен. Тусклый свет обычно вдвое больше яркого.
+struct SetTokenLight {
+  TokenId id = 0;
+  int bright_cells = 0;
+  int dim_cells = 0;
 };
 
 // Атака одним токеном другого: сервер бросает d20 + бонус атаки против КД
@@ -301,6 +311,6 @@ using Command = std::variant<
     StartEncounter, EndEncounter, NextTurn, SetEncounterComposition, SetAoe,
     AttackToken, DamageToken, HealToken, RestParty, FallToken, AdvanceTime,
     AoeDamage, DeathSave, PingAt, SetMapBackground, SetTokenPortrait,
-    RevealArea, HideArea, ClearRevealed, AwardXp, UseTurnAction>;
+    RevealArea, HideArea, ClearRevealed, AwardXp, UseTurnAction, SetTokenLight>;
 
 }  // namespace dnd

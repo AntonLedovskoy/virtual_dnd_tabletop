@@ -109,7 +109,10 @@ class GameState {
       int save_bonus, int initiative_bonus, std::string damage, int temp_hp,
       int hit_die, int con_modifier, int attack_range = 0,
       std::uint32_t resist = 0, std::uint32_t vulnerable = 0,
-      std::uint32_t immune = 0, int swim_speed = 0, int climb_speed = 0)
+      std::uint32_t immune = 0, int swim_speed = 0, int climb_speed = 0,
+      int darkvision_cells = 0) -> std::optional<Token>;
+  // Свет, который носит токен: радиусы в клетках, 0 — выключить.
+  [[nodiscard]] auto SetTokenLight(TokenId id, int bright_cells, int dim_cells)
       -> std::optional<Token>;
   [[nodiscard]] auto UpdateTokenCombat(TokenId id,
                                        std::vector<Condition> conditions)

@@ -29,10 +29,12 @@
 #include "core/dice.h"
 #include "core/editor_token.h"
 #include "core/levels.h"
+#include "core/light.h"
 #include "core/movement.h"
 #include "core/navigation.h"
 #include "core/player_name.h"
 #include "core/scene_io.h"
+#include "core/scene_light.h"
 #include "core/ui_hint.h"
 #include "core/units.h"
 #include "core/update.h"
@@ -50,7 +52,8 @@ constexpr int kWindowWidth = 1280;
 constexpr int kWindowHeight = 720;
 constexpr int kMapWidth = 24;
 constexpr int kMapHeight = 12;
-constexpr int kSightRadius = 6;
+// В игре обзор не ограничен радиусом: предел есть только в тестах.
+constexpr int kSightRadius = 0;
 constexpr float kFontSize = 16.0F;
 // Шаги масштаба интерфейса: 100%, 125%, 150%, 200%.
 constexpr std::array<float, 4> kUiScales{1.0F, 1.25F, 1.5F, 2.0F};

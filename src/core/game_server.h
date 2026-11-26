@@ -174,6 +174,10 @@ class GameServer {
                                             const std::string& actor,
                                             bool can_control_all)
       -> CommandOutcome;
+  [[nodiscard]] auto HandleSetTokenLight(const SetTokenLight& command,
+                                         const std::string& actor,
+                                         bool can_control_all)
+      -> CommandOutcome;
   [[nodiscard]] auto HandleUpdateTokenSheet(const UpdateTokenSheet& command,
                                             bool can_control_all)
       -> CommandOutcome;
@@ -221,6 +225,9 @@ class GameServer {
   // если токен действительно вступил.
   auto JoinEncounterIfNeeded(TokenId id, std::vector<Event>& events) -> bool;
   [[nodiscard]] auto PlayerFog(std::string_view actor) const -> const FogOfWar*;
+  // Токен виден игроку: клетка в его тумане и не в сильном затемнении.
+  [[nodiscard]] auto IsTokenVisibleTo(std::string_view actor,
+                                      const Token& token) const -> bool;
   // Туман сцены: переживает смену мира, карту другой формы не переносит.
   auto RestoreFog(const std::vector<FogRecord>& records) -> void;
   [[nodiscard]] auto FogRecords() const -> std::vector<FogRecord>;

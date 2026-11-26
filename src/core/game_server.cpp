@@ -17,6 +17,7 @@
 #include "core/levels.h"
 #include "core/movement.h"
 #include "core/player_name.h"
+#include "core/scene_light.h"
 #include "core/units.h"
 
 namespace dnd {
@@ -220,6 +221,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleSetTokenColor(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, SetTokenPortrait>) {
           return HandleSetTokenPortrait(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, SetTokenLight>) {
+          return HandleSetTokenLight(cmd, actor, can_control_all);
         } else if constexpr (std::is_same_v<T, UpdateTokenSheet>) {
           return HandleUpdateTokenSheet(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
@@ -1000,8 +1003,10 @@ auto GameServer::HandleAttack(const AttackToken& command,
     }
   }
   // Игрок не бьёт то, чего не видит: иначе командой вручную можно нащупать
-  // монстра в тумане. DM видит весь стол.
-  if (!can_control_all && !IsVisibleTo(actor, target->cell)) {
+  // монстра в тумане. DM видит весь стол. Ослеплённый бьёт вслепую (помеху
+  // даёт состояние): карта у него чёрная, но соседа он знает на ощупь.
+  if (!can_control_all && !HasCondition(*attacker, kBlinded) &&
+      !IsVisibleTo(actor, target->cell)) {
     return CommandOutcome{.reject_reason = "цель не видна"};
   }
   if (command.advantage && command.disadvantage) {
@@ -1759,6 +1764,45 @@ auto GameServer::HandleSetTokenPortrait(const SetTokenPortrait& command,
   return outcome;
 }
 
+auto GameServer::HandleSetTokenLight(const SetTokenLight& command,
+                                     const std::string& actor,
+                                     bool can_control_all) -> CommandOutcome {
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!CanControl(*token, actor, can_control_all)) {
+    return CommandOutcome{.reject_reason = ControlRejectReason(*token)};
+  }
+  if (command.bright_cells < 0 || command.bright_cells > kMaxLightCells ||
+      command.dim_cells < command.bright_cells ||
+      command.dim_cells > kMaxLightCells) {
+    return CommandOutcome{.reject_reason = "некорректный свет"};
+  }
+  const std::optional<Token> updated =
+      state_.SetTokenLight(command.id, command.bright_cells, command.dim_cells);
+  if (!updated.has_value()) {
+    return CommandOutcome{.reject_reason = "не удалось изменить свет"};
+  }
+  // Свет факела меняет и поле света, и туман всех игроков.
+  RecomputeFog();
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  outcome.events.emplace_back(LogLineAdded{
+      .line =
+          LogLine{.author = actor,
+                  .text = command.bright_cells > 0
+                              ? token->name + ": свет " +
+                                    std::to_string(command.bright_cells) + "/" +
+                                    std::to_string(command.dim_cells) +
+                                    " клеток"
+                              : token->name + ": свет выключен",
+                  .timestamp = CurrentTimeSeconds()},
+  });
+  return outcome;
+}
+
 auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
                                         bool can_control_all)
     -> CommandOutcome {
@@ -1816,16 +1860,22 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
     return CommandOutcome{.reject_reason =
                               "некорректная скорость плавания или лазания"};
   }
+  if (command.darkvision_cells < 0 ||
+      command.darkvision_cells > kMaxLightCells) {
+    return CommandOutcome{.reject_reason = "некорректное тёмное зрение"};
+  }
   const Token before = *token;
   const std::optional<Token> updated = state_.UpdateTokenSheet(
       command.id, command.ac, command.speed, command.notes,
       command.attack_bonus, command.save_bonus, command.initiative_bonus,
       command.damage, command.temp_hp, command.hit_die, command.con_modifier,
       command.attack_range, command.resist, command.vulnerable, command.immune,
-      command.swim_speed, command.climb_speed);
+      command.swim_speed, command.climb_speed, command.darkvision_cells);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }
+  // Тёмное зрение из листа расширяет туман владельца.
+  RecomputeFog();
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
@@ -1836,6 +1886,11 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
                   command.swim_speed);
   AppendIntChange(changes, "скорость лазания", before.climb_speed,
                   command.climb_speed);
+  // Лист и интерфейс показывают тёмное зрение в метрах, хотя внутри оно
+  // хранится в клетках: лог не должен путать игрока.
+  AppendIntChange(changes, "тёмное зрение",
+                  LightMetersFromCells(before.darkvision_cells),
+                  LightMetersFromCells(command.darkvision_cells));
   AppendIntChange(changes, "бонус атаки", before.attack_bonus,
                   command.attack_bonus);
   AppendIntChange(changes, "бонус спасброска", before.save_bonus,
@@ -1925,6 +1980,9 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
       concentration_broken = true;
     }
   }
+  // Состояния меняют зрение: слепота, «без сознания» и смерть гасят обзор,
+  // поэтому туман пересчитывается сразу, а не к следующему действию.
+  RecomputeFog();
   CommandOutcome outcome;
   outcome.accepted = true;
   outcome.events.emplace_back(TokenUpdated{.token = *updated});
@@ -2514,7 +2572,7 @@ auto GameServer::Snapshot() const -> GameSnapshot {
 auto GameServer::ClientSnapshot(std::string_view actor) const -> GameSnapshot {
   GameSnapshot snapshot = state_.Snapshot();
   std::erase_if(snapshot.tokens, [this, actor](const Token& token) -> bool {
-    return !IsVisibleTo(actor, token.cell);
+    return !IsTokenVisibleTo(actor, token);
   });
   // Открытые DM-ом клетки клиенту не нужны: их видимость уже в тумане, а
   // список может быть длинным и повторялся бы в каждом обновлении вида.
@@ -2542,7 +2600,17 @@ auto GameServer::FullFogState() const -> FogSnapshot {
       .height = height,
       .visible = std::vector<std::uint8_t>(cells, 1),
       .explored = std::vector<std::uint8_t>(cells, 1),
+      .light = std::vector<std::uint8_t>(
+          cells, static_cast<std::uint8_t>(LightLevel::kBright)),
   };
+}
+
+auto GameServer::IsTokenVisibleTo(std::string_view actor,
+                                  const Token& token) const -> bool {
+  // Сильное затемнение (тьма, дым) прячет существо, даже если клетку видно:
+  // позиция неизвестна, пока оно само не выдаст себя.
+  return IsVisibleTo(actor, token.cell) &&
+         state_.Map().ObscurementAt(token.cell) != Obscurement::kHeavy;
 }
 
 auto GameServer::EventVisibleTo(const Event& event,
@@ -2551,10 +2619,11 @@ auto GameServer::EventVisibleTo(const Event& event,
       [this, actor](const auto& ev) -> bool {
         using T = std::decay_t<decltype(ev)>;
         if constexpr (std::is_same_v<T, TokenMoved>) {
-          return IsVisibleTo(actor, ev.to);
+          return IsVisibleTo(actor, ev.to) &&
+                 state_.Map().ObscurementAt(ev.to) != Obscurement::kHeavy;
         } else if constexpr (std::is_same_v<T, TokenAdded> ||
                              std::is_same_v<T, TokenUpdated>) {
-          return IsVisibleTo(actor, ev.token.cell);
+          return IsTokenVisibleTo(actor, ev.token);
         }
         return true;
       },
@@ -2567,7 +2636,7 @@ auto GameServer::TakeViewDelta(std::string_view actor) -> std::vector<Event> {
   std::vector<TokenId> visible;
   visible.reserve(state_.Tokens().size());
   for (const Token& token : state_.Tokens()) {
-    if (IsVisibleTo(actor, token.cell)) {
+    if (IsTokenVisibleTo(actor, token)) {
       visible.push_back(token.id);
     }
   }
@@ -2597,7 +2666,8 @@ auto GameServer::TakeViewDelta(std::string_view actor) -> std::vector<Event> {
   const bool same_map =
       sent.fog.width == fog.width && sent.fog.height == fog.height &&
       sent.fog.visible.size() == cells && sent.fog.explored.size() == cells &&
-      fog.explored.size() == cells;
+      sent.fog.light.size() == cells && fog.explored.size() == cells &&
+      fog.light.size() == cells;
   const int width = std::max(fog.width, 1);
   const auto fog_cell = [&fog, width](std::size_t index) -> FogCell {
     return FogCell{
@@ -2607,13 +2677,15 @@ auto GameServer::TakeViewDelta(std::string_view actor) -> std::vector<Event> {
                 .y = static_cast<int>(index / static_cast<std::size_t>(width))},
         .visible = fog.visible[index] != 0,
         .explored = fog.explored[index] != 0,
+        .light = fog.light[index],
     };
   };
   FogChanged changed;
   for (std::size_t i = 0; i < cells; ++i) {
     // Другая карта: точечная правка невозможна, отдаём туман целиком.
     if (same_map && sent.fog.visible[i] == fog.visible[i] &&
-        sent.fog.explored[i] == fog.explored[i]) {
+        sent.fog.explored[i] == fog.explored[i] &&
+        sent.fog.light[i] == fog.light[i]) {
       continue;
     }
     changed.cells.push_back(fog_cell(i));
@@ -2630,7 +2702,7 @@ auto GameServer::MarkViewSent(std::string_view actor) -> void {
   view.fog = FogState(actor);
   view.tokens.reserve(state_.Tokens().size());
   for (const Token& token : state_.Tokens()) {
-    if (IsVisibleTo(actor, token.cell)) {
+    if (IsTokenVisibleTo(actor, token)) {
       view.tokens.push_back(token.id);
     }
   }
@@ -2684,41 +2756,62 @@ auto GameServer::FogRecords() const -> std::vector<FogRecord> {
 }
 
 auto GameServer::RecomputeFog() -> void {
-  // Обзор дают только персонажи; у каждого игрока свои наблюдатели.
-  std::map<std::string, std::vector<Cell>, std::less<>> observers;
-  std::vector<Cell> party_observers;
+  // Свет сцены считается один раз: свойства клеток плюс свет всех токенов.
+  const LightField light =
+      ComputeLightField(state_.Map(), TokenLightSources(state_.Tokens()));
+  auto observer = [](const Token& token) -> Observer {
+    return Observer{.cell = token.cell,
+                    .darkvision_cells = token.darkvision_cells,
+                    .blinded = HasCondition(token, kBlinded)};
+  };
+  // Слепой, лежачий без сознания и мёртвый персонаж обзора не даёт.
+  auto sees = [](const Token& token) -> bool {
+    return !HasCondition(token, kBlinded) &&
+           !HasCondition(token, kUnconscious) && !HasCondition(token, kDead);
+  };
+
+  std::map<std::string, std::vector<Observer>, std::less<>> observers;
+  std::vector<Observer> party_observers;
+  character_owners_.clear();
   for (const Token& token : state_.Tokens()) {
     if (token.kind != TokenKind::kPlayer) {
       continue;
     }
-    party_observers.push_back(token.cell);
+    // Владелец персонажа остаётся владельцем и тогда, когда персонаж ослеплён,
+    // без сознания или мёртв: такой игрок смотрит в свой пустой туман, а не
+    // получает партийный обзор.
     if (!token.owner.empty()) {
-      observers[PlayerNameKey(token.owner)].push_back(token.cell);
+      character_owners_.insert(PlayerNameKey(token.owner));
+    }
+    if (!sees(token)) {
+      continue;
+    }
+    party_observers.push_back(observer(token));
+    if (!token.owner.empty()) {
+      observers[PlayerNameKey(token.owner)].push_back(observer(token));
     }
   }
 
-  character_owners_.clear();
-  for (const auto& [owner, cells] : observers) {
-    character_owners_.insert(owner);
-  }
-
   const std::vector<Cell>& revealed = state_.Revealed();
-  party_fog_.Recompute(state_.Map(), party_observers, sight_radius_);
+  party_fog_.Recompute(state_.Map(), party_observers, light, sight_radius_);
   party_fog_.Reveal(revealed);
   // Игрок без персонажа больше не видит клетку, но помнит исследованное.
   for (auto& [owner, fog] : fogs_) {
     const auto it = observers.find(owner);
     fog.Recompute(state_.Map(),
-                  it == observers.end() ? std::vector<Cell>{} : it->second,
-                  sight_radius_);
+                  it == observers.end() ? std::vector<Observer>{} : it->second,
+                  light, sight_radius_);
     fog.Reveal(revealed);
   }
-  for (const auto& [owner, cells] : observers) {
+  for (const std::string& owner : character_owners_) {
     if (fogs_.contains(owner)) {
       continue;
     }
     FogOfWar fog(state_.Map().Width(), state_.Map().Height());
-    fog.Recompute(state_.Map(), cells, sight_radius_);
+    const auto it = observers.find(owner);
+    fog.Recompute(state_.Map(),
+                  it == observers.end() ? std::vector<Observer>{} : it->second,
+                  light, sight_radius_);
     fog.Reveal(revealed);
     fogs_.emplace(owner, std::move(fog));
   }

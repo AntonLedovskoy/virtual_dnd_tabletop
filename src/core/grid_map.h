@@ -7,16 +7,11 @@
 #include <string>
 #include <vector>
 
+#include "core/cell.h"
 #include "core/damage.h"
+#include "core/light.h"
 
 namespace dnd {
-
-struct Cell {
-  int x = 0;
-  int y = 0;
-
-  friend auto operator==(const Cell&, const Cell&) -> bool = default;
-};
 
 // Рельеф клетки. Стена перекрывает и движение, и обзор; дерево проходимо,
 // но стоит вдвое дороже и сокращает обзор; вода проходима плаванием (по
@@ -134,6 +129,10 @@ struct CellProps {
   std::uint8_t hazard = kNoHazard;
   int slippery_dc = 0;
   std::uint8_t cover_sides = 0;
+  // Освещённость клетки: LightLevel или kAmbientLight («как вся сцена»).
+  std::uint8_t light = kAmbientLight;
+  // Затемнение на клетке: Obscurement.
+  Obscurement obscurement = Obscurement::kNone;
 
   friend auto operator==(const CellProps&, const CellProps&) -> bool = default;
 };
@@ -162,9 +161,17 @@ class GridMap {
   [[nodiscard]] auto HazardAt(Cell cell) const -> const HazardProfile*;
   // Непроходимый рельеф: только стена и пропасть. Вода проходима плаванием.
   [[nodiscard]] auto IsBlocked(Cell cell) const -> bool;
-  // Перекрывает ли клетка линию обзора. Стена — да, остальной рельеф — нет;
-  // деревья сокращают обзор отдельным правилом в visibility.cpp.
+  // Перекрывает ли клетка линию обзора. Стена — да, остальной рельеф — нет.
+  // Дерево даёт слабое затемнение и обзор не режет (core/visibility).
   [[nodiscard]] auto BlocksSight(Cell cell) const -> bool;
+  // Затемнение клетки: свойство либо дерево (слабое). Сильное затемнение
+  // (тьма, дым) обрывает луч и прячет существ.
+  [[nodiscard]] auto ObscurementAt(Cell cell) const -> Obscurement;
+  // Освещённость всей сцены для клеток с light == kAmbientLight.
+  [[nodiscard]] auto AmbientLight() const -> LightLevel {
+    return ambient_light_;
+  }
+  auto SetAmbientLight(LightLevel level) -> void { ambient_light_ = level; }
   // Клетка стоит двойного движения (2024: difficult terrain).
   [[nodiscard]] auto IsDifficultTerrain(Cell cell) const -> bool;
   // Стоимость входа в клетку в 5-футовых шагах (1 или 2); -1 — непроходима.
@@ -188,6 +195,7 @@ class GridMap {
   std::vector<std::uint8_t> terrain_;
   std::vector<CellProps> props_;
   std::vector<HazardProfile> hazards_;
+  LightLevel ambient_light_ = LightLevel::kBright;
 };
 
 // Результат прокладки пути по опциональному правилу 5–10–5: первая

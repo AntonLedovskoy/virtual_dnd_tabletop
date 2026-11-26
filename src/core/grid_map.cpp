@@ -347,6 +347,19 @@ auto GridMap::BlocksSight(Cell cell) const -> bool {
   return Contains(cell) && TerrainAt(cell) == Terrain::kWall;
 }
 
+auto GridMap::ObscurementAt(Cell cell) const -> Obscurement {
+  if (!Contains(cell)) {
+    return Obscurement::kNone;
+  }
+  const Obscurement stored = PropsAt(cell).obscurement;
+  if (stored != Obscurement::kNone) {
+    return stored;
+  }
+  // Крона дерева даёт слабое затемнение, но взгляд не режет.
+  return TerrainAt(cell) == Terrain::kTree ? Obscurement::kLight
+                                           : Obscurement::kNone;
+}
+
 auto GridMap::IsDifficultTerrain(Cell cell) const -> bool {
   if (!Contains(cell)) {
     return false;

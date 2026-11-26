@@ -77,6 +77,8 @@ struct FogCell {
   Cell cell{};
   bool visible = false;
   bool explored = false;
+  // Освещённость для отрисовки; у невидимой клетки — 0 (тьма).
+  std::uint8_t light = 0;
 };
 
 // Точечное обновление тумана: только клетки, у которых поменялись видимость

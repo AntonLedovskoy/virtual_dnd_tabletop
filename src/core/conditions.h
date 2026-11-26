@@ -21,6 +21,8 @@ inline constexpr std::string_view kExhaustion = "истощение";
 // Застигнутый врасплох бросает инициативу с помехой и теряет состояние
 // после броска (2024).
 inline constexpr std::string_view kSurprised = "застигнут врасплох";
+// Ослеплённый персонаж не даёт обзора и не видит карту (core/visibility).
+inline constexpr std::string_view kBlinded = "ослеплён";
 inline constexpr int kMaxExhaustionLevel = 6;
 
 // Время в D&D: раунд — 6 секунд, минута — 10 раундов. Длительности

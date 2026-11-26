@@ -39,11 +39,14 @@ auto WriteU32(std::ostream& out, std::uint32_t value) -> void {
 }
 
 // Кампания 13 хранит снимки сохранения 26, 14 — 27, 15 — 28 или 29, 16–17 —
-// 30, 18 — текущий снимок. Набор полей берём из версии сохранения, чтобы
-// история формата жила в одном месте (scene_io).
+// 30, 18 — 31, 19 — текущий снимок. Набор полей берём из версии сохранения,
+// чтобы история формата жила в одном месте (scene_io).
 auto CampaignSnapshotFormat(std::uint32_t campaign_version) -> SnapshotFormat {
-  if (campaign_version >= 18) {
+  if (campaign_version >= 19) {
     return SaveSnapshotFormat(kSaveVersion);
+  }
+  if (campaign_version >= 18) {
+    return SaveSnapshotFormat(31);
   }
   if (campaign_version >= 16) {
     return SaveSnapshotFormat(30);

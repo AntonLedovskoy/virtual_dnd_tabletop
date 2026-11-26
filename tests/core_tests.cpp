@@ -38,6 +38,7 @@
 #include "core/game_state.h"
 #include "core/grid_map.h"
 #include "core/levels.h"
+#include "core/light.h"
 #include "core/local_transport.h"
 #include "core/log_history.h"
 #include "core/log_scroll.h"
@@ -466,9 +467,8 @@ auto TestFogLineOfSight() -> void {
   dnd::FogOfWar tree_fog(6, 1);
   tree_fog.Recompute(tree_map, {CellAt(0, 0)}, 5);
   Expect(tree_fog.IsVisible(CellAt(2, 0)), "the tree cell itself is visible");
-  Expect(tree_fog.IsVisible(CellAt(4, 0)),
-         "two cells behind a tree stay visible");
-  Expect(!tree_fog.IsVisible(CellAt(5, 0)), "a tree shortens sight beyond it");
+  Expect(tree_fog.IsVisible(CellAt(5, 0)),
+         "a tree is light obscurement and does not shorten sight");
 
   dnd::GridMap water_map(6, 1);
   water_map.SetTerrain(CellAt(2, 0), dnd::Terrain::kWater);
@@ -477,6 +477,26 @@ auto TestFogLineOfSight() -> void {
   water_fog.Recompute(water_map, {CellAt(0, 0)}, 5);
   Expect(water_fog.IsVisible(CellAt(5, 0)),
          "water and lava do not block sight");
+
+  // Сильное затемнение обрывает луч, но сама клетка видна облаком.
+  dnd::GridMap smoke_map(6, 1);
+  dnd::CellProps smoke = smoke_map.PropsAt(CellAt(2, 0));
+  smoke.obscurement = dnd::Obscurement::kHeavy;
+  smoke_map.SetProps(CellAt(2, 0), smoke);
+  dnd::FogOfWar smoke_fog(6, 1);
+  smoke_fog.Recompute(smoke_map, {CellAt(0, 0)}, 5);
+  Expect(smoke_fog.IsVisible(CellAt(2, 0)), "the smoke cell is visible");
+  Expect(!smoke_fog.IsVisible(CellAt(3, 0)), "smoke blocks sight beyond it");
+
+  // Слабое затемнение (кустарник) обзор не режет.
+  dnd::GridMap haze_map(6, 1);
+  dnd::CellProps haze = haze_map.PropsAt(CellAt(2, 0));
+  haze.obscurement = dnd::Obscurement::kLight;
+  haze_map.SetProps(CellAt(2, 0), haze);
+  dnd::FogOfWar haze_fog(6, 1);
+  haze_fog.Recompute(haze_map, {CellAt(0, 0)}, 5);
+  Expect(haze_fog.IsVisible(CellAt(5, 0)),
+         "light obscurement does not block sight");
 }
 
 auto TestFogDiagonalSeal() -> void {
@@ -523,6 +543,210 @@ auto TestFogExploredMemory() -> void {
          "a cell patch can hide an explored cell");
   fog.SetCell(CellAt(99, 99), true, true);
   Expect(!fog.IsVisible(CellAt(99, 99)), "patches outside the map are ignored");
+}
+
+auto TestLightField() -> void {
+  dnd::GridMap map(8, 1);
+  map.SetAmbientLight(dnd::LightLevel::kDark);
+  const dnd::LightField field = dnd::ComputeLightField(
+      map, {dnd::LightSource{
+               .cell = CellAt(0, 0), .bright_cells = 1, .dim_cells = 3}});
+  Expect(field.At(CellAt(0, 0)) == dnd::LightLevel::kBright,
+         "the source cell is bright");
+  Expect(field.At(CellAt(1, 0)) == dnd::LightLevel::kBright,
+         "the bright radius covers the next cell");
+  Expect(field.At(CellAt(2, 0)) == dnd::LightLevel::kDim,
+         "outside the bright radius is dim");
+  Expect(field.At(CellAt(3, 0)) == dnd::LightLevel::kDim,
+         "the dim radius reaches its edge");
+  Expect(field.At(CellAt(4, 0)) == dnd::LightLevel::kDark,
+         "beyond the dim radius is dark");
+
+  dnd::GridMap walled(8, 1);
+  walled.SetAmbientLight(dnd::LightLevel::kDark);
+  walled.SetBlocked(CellAt(2, 0), true);
+  const dnd::LightField wall_light = dnd::ComputeLightField(
+      walled, {dnd::LightSource{
+                  .cell = CellAt(0, 0), .bright_cells = 1, .dim_cells = 6}});
+  Expect(wall_light.At(CellAt(2, 0)) == dnd::LightLevel::kDim,
+         "the wall face itself is lit");
+  Expect(wall_light.At(CellAt(3, 0)) == dnd::LightLevel::kDark,
+         "cells behind a wall stay dark");
+
+  // Кисть редактора задаёт свет клетки, пока источник его не поднимет.
+  dnd::GridMap painted(3, 1);
+  dnd::CellProps props = painted.PropsAt(CellAt(1, 0));
+  props.light = static_cast<std::uint8_t>(dnd::LightLevel::kDim);
+  painted.SetProps(CellAt(1, 0), props);
+  const dnd::LightField painted_light = dnd::ComputeLightField(painted, {});
+  Expect(painted_light.At(CellAt(1, 0)) == dnd::LightLevel::kDim,
+         "a painted cell keeps its light");
+  Expect(painted_light.At(CellAt(0, 0)) == dnd::LightLevel::kBright,
+         "other cells use the ambient light");
+
+  Expect(dnd::LightCellsFromMeters(9) == 6 && dnd::LightMetersFromCells(6) == 9,
+         "meters and cells convert both ways");
+}
+
+auto TestDarkvisionAndSmoke() -> void {
+  dnd::GridMap map(8, 1);
+  map.SetAmbientLight(dnd::LightLevel::kDark);
+  const dnd::LightField dark = dnd::ComputeLightField(map, {});
+  dnd::FogOfWar fog(8, 1);
+  fog.Recompute(map,
+                {dnd::Observer{.cell = CellAt(0, 0), .darkvision_cells = 3}},
+                dark, 0);
+  Expect(fog.IsVisible(CellAt(0, 0)),
+         "the observer sees its own cell in the dark");
+  Expect(fog.IsVisible(CellAt(3, 0)), "darkvision reaches its radius");
+  Expect(!fog.IsVisible(CellAt(4, 0)), "beyond darkvision is unseen");
+  Expect(fog.LightAt(CellAt(0, 0)) == dnd::LightLevel::kDark,
+         "a cell seen by darkvision stays dark for drawing");
+
+  dnd::FogOfWar blind(8, 1);
+  blind.Recompute(
+      map,
+      {dnd::Observer{
+          .cell = CellAt(0, 0), .darkvision_cells = 6, .blinded = true}},
+      dark, 0);
+  Expect(!blind.IsVisible(CellAt(0, 0)) && !blind.IsVisible(CellAt(3, 0)),
+         "a blinded observer sees nothing");
+
+  // Сильное затемнение: облако видно, луча за ним нет.
+  dnd::GridMap smoke(8, 1);
+  dnd::CellProps smoke_props = smoke.PropsAt(CellAt(2, 0));
+  smoke_props.obscurement = dnd::Obscurement::kHeavy;
+  smoke.SetProps(CellAt(2, 0), smoke_props);
+  const dnd::LightField bright = dnd::ComputeLightField(smoke, {});
+  dnd::FogOfWar smoke_fog(8, 1);
+  smoke_fog.Recompute(smoke, {dnd::Observer{.cell = CellAt(0, 0)}}, bright, 0);
+  Expect(smoke_fog.IsVisible(CellAt(2, 0)),
+         "the smoke cloud itself is visible");
+  Expect(!smoke_fog.IsVisible(CellAt(3, 0)), "smoke blocks sight");
+
+  // Наблюдатели сливаются: тёмное зрение одного видит за всю партию.
+  dnd::FogOfWar group(8, 1);
+  group.Recompute(map,
+                  {dnd::Observer{.cell = CellAt(0, 0)},
+                   dnd::Observer{.cell = CellAt(7, 0), .darkvision_cells = 2}},
+                  dark, 0);
+  Expect(group.IsVisible(CellAt(6, 0)), "another observer's darkvision counts");
+}
+
+auto TestTokenLight() -> void {
+  dnd::GridMap map(10, 1);
+  map.SetAmbientLight(dnd::LightLevel::kDark);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(6, 0)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 0);
+  Expect(server.ClientSnapshot("alice").tokens.size() == 1,
+         "a monster in the dark is hidden");
+
+  const dnd::CommandOutcome foreign = server.HandleCommand(
+      dnd::SetTokenLight{.id = 1, .bright_cells = 3, .dim_cells = 6}, "bob",
+      false);
+  Expect(!foreign.accepted, "a stranger cannot light another token");
+
+  const dnd::CommandOutcome lit = server.HandleCommand(
+      dnd::SetTokenLight{.id = 1, .bright_cells = 3, .dim_cells = 6}, "alice",
+      false);
+  Expect(lit.accepted, "the owner lights their own token");
+  Expect(server.State().Tokens().front().light_bright_cells == 3 &&
+             server.State().Tokens().front().light_dim_cells == 6,
+         "token light is stored in cells");
+  Expect(FogVisibleAt(server.FogState("alice"), 6, 0),
+         "the torch lights the corridor for its owner");
+  Expect(server.ClientSnapshot("alice").tokens.size() == 2,
+         "a monster in the light is revealed");
+
+  const dnd::CommandOutcome off =
+      server.HandleCommand(dnd::SetTokenLight{.id = 1}, "alice", false);
+  Expect(
+      off.accepted && server.State().Tokens().front().light_bright_cells == 0,
+      "an empty light puts the torch out");
+  Expect(server.ClientSnapshot("alice").tokens.size() == 1,
+         "the monster disappears in the dark again");
+
+  // Дым прячет существо, хотя облако видно.
+  dnd::GridMap smoky(10, 1);
+  smoky.SetAmbientLight(dnd::LightLevel::kBright);
+  dnd::CellProps smoke = smoky.PropsAt(CellAt(6, 0));
+  smoke.obscurement = dnd::Obscurement::kHeavy;
+  smoky.SetProps(CellAt(6, 0), smoke);
+  dnd::GameSnapshot smoky_snapshot = snapshot;
+  smoky_snapshot.map = smoky;
+  dnd::GameServer smoke_server(smoky_snapshot, 0);
+  Expect(FogVisibleAt(smoke_server.FogState("alice"), 6, 0),
+         "the smoke cloud is visible to the party");
+  Expect(smoke_server.ClientSnapshot("alice").tokens.size() == 1,
+         "a token inside smoke is hidden");
+}
+
+// Ослеплённый персонаж не должен видеть партию: у игрока есть персонаж, значит
+// его личный туман пуст, и партийный обзор ему не подменяет зрение.
+auto TestBlindedCharacterKeepsOwnFog() -> void {
+  dnd::GridMap map(10, 1);
+  map.SetAmbientLight(dnd::LightLevel::kDark);
+  dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              // Второй персонаж партии без владельца: он даёт партийный туман,
+              // которым не должен пользоваться ослеплённый игрок.
+              dnd::Token{.id = 2,
+                         .name = "ally",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(9, 0)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 0);
+  Expect(FogVisibleAt(server.FogState("alice"), 0, 0),
+         "a sighted character sees its own cell first");
+
+  // Боевой путь: DM ставит состояние командой, а не правкой снимка.
+  const dnd::CommandOutcome blind = server.HandleCommand(
+      dnd::UpdateTokenCombat{.id = 1,
+                             .conditions = {dnd::Condition("ослеплён")}},
+      "", true);
+  Expect(blind.accepted, "the DM blinds the hero by command");
+  Expect(!FogVisibleAt(server.FogState("alice"), 0, 0),
+         "blinding clears the personal fog right away");
+  Expect(server.ClientSnapshot("alice").tokens.empty(),
+         "blinding hides every token from that player");
+  Expect(FogVisibleAt(server.FogState("bob"), 9, 0),
+         "an unowned player still shares the party view");
+
+  snapshot.tokens.front().conditions.emplace_back(std::string(dnd::kBlinded));
+  dnd::GameServer blinded(snapshot, 0);
+  Expect(!FogVisibleAt(blinded.FogState("alice"), 0, 0),
+         "a blinded character sees nothing, not even its own cell");
+  Expect(!FogVisibleAt(blinded.FogState("alice"), 9, 0),
+         "a blinded player gets no party view");
+  Expect(blinded.ClientSnapshot("alice").tokens.empty(),
+         "a blinded player receives no tokens");
+  Expect(FogVisibleAt(blinded.FogState("bob"), 9, 0),
+         "a player without a character still shares the party view");
 }
 
 auto TestServerVisibility() -> void {
@@ -2876,7 +3100,8 @@ auto TestIncrementalView() -> void {
   const auto same_fog = [](const dnd::FogSnapshot& left,
                            const dnd::FogSnapshot& right) -> bool {
     return left.width == right.width && left.height == right.height &&
-           left.visible == right.visible && left.explored == right.explored;
+           left.visible == right.visible && left.explored == right.explored &&
+           left.light == right.light;
   };
 
   // Мир не менялся: дельта пустая, полный снимок зря не ходит.
@@ -4772,9 +4997,12 @@ auto TestSaveLoadRoundtrip() -> void {
   props.current_strength = 3;
   props.slippery_dc = 15;
   props.hazard = 2;
+  props.light = static_cast<std::uint8_t>(dnd::LightLevel::kDim);
+  props.obscurement = dnd::Obscurement::kHeavy;
   dnd::SetCoverOnSide(props.cover_sides, 1, dnd::CoverLevel::kHalf);
   dnd::SetCoverOnSide(props.cover_sides, 2, dnd::CoverLevel::kThreeQuarters);
   map.SetProps(CellAt(0, 3), props);
+  map.SetAmbientLight(dnd::LightLevel::kDim);
   const std::vector<std::uint8_t> party_fog(24, 0);
   std::vector<std::uint8_t> alice_fog(24, 0);
   alice_fog[13] = 1;
@@ -4797,6 +5025,9 @@ auto TestSaveLoadRoundtrip() -> void {
                   .speed = 9,
                   .swim_speed = 4,
                   .climb_speed = 2,
+                  .darkvision_cells = 4,
+                  .light_bright_cells = 2,
+                  .light_dim_cells = 4,
                   .notes = "Атака: +5, 1d8+3",
                   .attack_bonus = 5,
                   .save_bonus = 2,
@@ -4878,6 +5109,12 @@ auto TestSaveLoadRoundtrip() -> void {
                dnd::CoverOnSide(loaded_props.cover_sides, 2) ==
                    dnd::CoverLevel::kThreeQuarters,
            "cell properties survive the roundtrip");
+    Expect(loaded_props.light ==
+                   static_cast<std::uint8_t>(dnd::LightLevel::kDim) &&
+               loaded_props.obscurement == dnd::Obscurement::kHeavy,
+           "cell light and obscurement survive the roundtrip");
+    Expect(loaded->map.AmbientLight() == dnd::LightLevel::kDim,
+           "the map ambient light survives the roundtrip");
     Expect(loaded->tokens.size() == 2, "token count survives the roundtrip");
     Expect(loaded->tokens.front().name == "hero", "token name survives");
     Expect(loaded->revealed.size() == 2 &&
@@ -4930,6 +5167,10 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().swim_speed == 4 &&
                loaded->tokens.front().climb_speed == 2,
            "swim and climb speeds survive the roundtrip");
+    Expect(loaded->tokens.front().darkvision_cells == 4 &&
+               loaded->tokens.front().light_bright_cells == 2 &&
+               loaded->tokens.front().light_dim_cells == 4,
+           "darkvision and token light survive the roundtrip");
     Expect(
         loaded->tokens.front().hazards_done == std::vector<std::uint8_t>{1, 5},
         "hazards fired this turn survive the roundtrip");
@@ -4994,8 +5235,14 @@ auto WriteVersionedFile(const std::filesystem::path& path, std::uint32_t magic,
 // Обещание раздела 7: файлы прошлых релизов открываются. Версия задаёт набор
 // полей снимка, поэтому проверяем всю поддерживаемую линейку.
 auto TestReadsPreviousVersions() -> void {
+  dnd::GridMap old_map(5, 4);
+  old_map.SetAmbientLight(dnd::LightLevel::kDim);
+  dnd::CellProps old_props = old_map.PropsAt(CellAt(0, 0));
+  old_props.light = static_cast<std::uint8_t>(dnd::LightLevel::kDark);
+  old_props.obscurement = dnd::Obscurement::kHeavy;
+  old_map.SetProps(CellAt(0, 0), old_props);
   const dnd::GameSnapshot original{
-      .map = dnd::GridMap(5, 4),
+      .map = old_map,
       .tokens =
           {
               dnd::Token{
@@ -5004,6 +5251,9 @@ auto TestReadsPreviousVersions() -> void {
                   .hp = 5,
                   .max_hp = 10,
                   .hit_dice_spent = 1,
+                  .darkvision_cells = 4,
+                  .light_bright_cells = 2,
+                  .light_dim_cells = 4,
                   .resist = dnd::DamageTypeBit(dnd::DamageType::kFire),
                   .attack_range = 3,
                   .conditions = {dnd::Condition{"оглушён", 60, 12}},
@@ -5050,6 +5300,19 @@ auto TestReadsPreviousVersions() -> void {
     Expect(loaded->game_time_seconds == (version >= 30 ? 7200 : 0) &&
                loaded->last_long_rest_seconds == (version >= 30 ? 3600 : -1),
            "the game clock appears with its version");
+    Expect(token.darkvision_cells == (version >= 32 ? 4 : 0) &&
+               token.light_bright_cells == (version >= 32 ? 2 : 0) &&
+               token.light_dim_cells == (version >= 32 ? 4 : 0),
+           "darkvision and token light appear with their version");
+    Expect(
+        loaded->map.AmbientLight() ==
+            (version >= 32 ? dnd::LightLevel::kDim : dnd::LightLevel::kBright),
+        "the ambient light appears with its version");
+    Expect(
+        loaded->map.PropsAt(CellAt(0, 0)).light ==
+            (version >= 32 ? static_cast<std::uint8_t>(dnd::LightLevel::kDark)
+                           : dnd::kAmbientLight),
+        "cell light appears with its version");
   }
 
   WriteVersionedFile(save_path, save_magic, dnd::kMinSaveVersion - 1,
@@ -5094,6 +5357,8 @@ auto TestReadsPreviousVersions() -> void {
     Expect(loaded->scenes.front().snapshot.game_time_seconds ==
                (version >= 16 ? 7200 : 0),
            "the campaign game clock appears with its version");
+    Expect(token.darkvision_cells == (version >= 19 ? 4 : 0),
+           "campaign darkvision appears with its version");
   }
 
   WriteVersionedFile(campaign_path, campaign_magic,
@@ -6577,6 +6842,37 @@ auto TestCommandEventSerialization() -> void {
              std::get<dnd::AwardXp>(*award_decoded).party,
          "xp command survives serialization");
 
+  const dnd::Command set_light{
+      dnd::SetTokenLight{.id = 4, .bright_cells = 3, .dim_cells = 6}};
+  const std::vector<std::uint8_t> set_light_bytes =
+      dnd::EncodeCommand(set_light);
+  const std::optional<dnd::Command> set_light_decoded =
+      dnd::DecodeCommand(set_light_bytes.data(), set_light_bytes.size());
+  Expect(
+      set_light_decoded.has_value() &&
+          std::holds_alternative<dnd::SetTokenLight>(*set_light_decoded) &&
+          std::get<dnd::SetTokenLight>(*set_light_decoded).id == 4 &&
+          std::get<dnd::SetTokenLight>(*set_light_decoded).bright_cells == 3 &&
+          std::get<dnd::SetTokenLight>(*set_light_decoded).dim_cells == 6,
+      "token light command survives serialization");
+
+  const dnd::Event fog_changed{
+      dnd::FogChanged{.cells = {dnd::FogCell{.cell = CellAt(1, 1),
+                                             .visible = true,
+                                             .explored = true,
+                                             .light = 1}}}};
+  const std::vector<std::uint8_t> fog_changed_bytes =
+      dnd::EncodeEvent(fog_changed);
+  const std::optional<dnd::Event> fog_changed_decoded =
+      dnd::DecodeEvent(fog_changed_bytes.data(), fog_changed_bytes.size());
+  Expect(
+      fog_changed_decoded.has_value() &&
+          std::holds_alternative<dnd::FogChanged>(*fog_changed_decoded) &&
+          std::get<dnd::FogChanged>(*fog_changed_decoded).cells.size() == 1 &&
+          std::get<dnd::FogChanged>(*fog_changed_decoded).cells.front().light ==
+              1,
+      "a fog delta carries the light of the cell");
+
   const dnd::Command attack_command{dnd::AttackToken{
       .attacker = 4, .target = 7, .advantage = true, .reaction = true}};
   const std::vector<std::uint8_t> attack_bytes =
@@ -8009,6 +8305,10 @@ auto main() -> int {
     TestFogLineOfSight();
     TestFogDiagonalSeal();
     TestFogExploredMemory();
+    TestLightField();
+    TestDarkvisionAndSmoke();
+    TestTokenLight();
+    TestBlindedCharacterKeepsOwnFog();
     TestServerVisibility();
     TestPendingMove();
     TestOwnership();

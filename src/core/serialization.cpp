@@ -67,6 +67,7 @@ constexpr std::uint8_t kCommandAdvanceTime = 34;
 constexpr std::uint8_t kCommandUseTurnAction = 35;
 constexpr std::uint8_t kCommandSetEncounterComposition = 36;
 constexpr std::uint8_t kCommandFallToken = 37;
+constexpr std::uint8_t kCommandSetTokenLight = 38;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -139,6 +140,11 @@ auto WriteToken(ByteWriter& writer, const Token& token,
       writer.U8(hazard);
     }
   }
+  if (format.has_vision) {
+    writer.I32(token.darkvision_cells);
+    writer.I32(token.light_bright_cells);
+    writer.I32(token.light_dim_cells);
+  }
 }
 
 auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
@@ -186,6 +192,9 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
   std::int32_t climb_speed = 0;
   std::uint32_t hazards_done_count = 0;
   std::vector<std::uint8_t> hazards_done;
+  std::int32_t darkvision_cells = 0;
+  std::int32_t light_bright_cells = 0;
+  std::int32_t light_dim_cells = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -243,6 +252,11 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       hazards_done.push_back(hazard);
     }
   }
+  if (format.has_vision &&
+      (!reader.I32(darkvision_cells) || !reader.I32(light_bright_cells) ||
+       !reader.I32(light_dim_cells))) {
+    return false;
+  }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
       initiative < -1000000 || initiative > 1000000 || ac <= 0 || ac > 1000 ||
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
@@ -259,7 +273,11 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       !IsValidDamageTypeBit(resist) || !IsValidDamageTypeBit(vulnerable) ||
       !IsValidDamageTypeBit(immune) || attack_range < 0 ||
       attack_range > 1000 || swim_speed < 0 || swim_speed > 1000 ||
-      climb_speed < 0 || climb_speed > 1000) {
+      climb_speed < 0 || climb_speed > 1000 || darkvision_cells < 0 ||
+      darkvision_cells > kMaxLightCells || light_bright_cells < 0 ||
+      light_bright_cells > kMaxLightCells || light_dim_cells < 0 ||
+      light_dim_cells > kMaxLightCells ||
+      light_dim_cells < light_bright_cells) {
     return false;
   }
   if (!std::ranges::is_sorted(hazards_done) ||
@@ -282,6 +300,9 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       .speed = speed,
       .swim_speed = swim_speed,
       .climb_speed = climb_speed,
+      .darkvision_cells = darkvision_cells,
+      .light_bright_cells = light_bright_cells,
+      .light_dim_cells = light_dim_cells,
       .notes = std::move(notes),
       .attack_bonus = attack_bonus,
       .save_bonus = save_bonus,
@@ -840,6 +861,7 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
   std::uint32_t immune = 0;
   std::int32_t swim_speed = 0;
   std::int32_t climb_speed = 0;
+  std::int32_t darkvision_cells = 0;
   if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.I32(initiative_bonus) ||
@@ -847,11 +869,13 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
       !reader.I32(hit_die) || !reader.I32(con_modifier) ||
       !reader.I32(attack_range) || !reader.U32(resist) ||
       !reader.U32(vulnerable) || !reader.U32(immune) ||
-      !reader.I32(swim_speed) || !reader.I32(climb_speed) || !reader.Done() ||
+      !reader.I32(swim_speed) || !reader.I32(climb_speed) ||
+      !reader.I32(darkvision_cells) || !reader.Done() ||
       !IsValidHitDie(hit_die) || con_modifier < -kMaxConModifier ||
       con_modifier > kMaxConModifier || attack_range < 0 ||
       attack_range > 1000 || swim_speed < 0 || swim_speed > 1000 ||
-      climb_speed < 0 || climb_speed > 1000 || !IsValidDamageTypeBit(resist) ||
+      climb_speed < 0 || climb_speed > 1000 || darkvision_cells < 0 ||
+      darkvision_cells > kMaxLightCells || !IsValidDamageTypeBit(resist) ||
       !IsValidDamageTypeBit(vulnerable) || !IsValidDamageTypeBit(immune)) {
     return std::nullopt;
   }
@@ -871,7 +895,21 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
                                   .vulnerable = vulnerable,
                                   .immune = immune,
                                   .swim_speed = swim_speed,
-                                  .climb_speed = climb_speed}};
+                                  .climb_speed = climb_speed,
+                                  .darkvision_cells = darkvision_cells}};
+}
+
+auto DecodeSetTokenLightCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::int32_t bright = 0;
+  std::int32_t dim = 0;
+  if (!reader.U32(id) || !reader.I32(bright) || !reader.I32(dim) ||
+      !reader.Done() || bright < 0 || bright > kMaxLightCells || dim < bright ||
+      dim > kMaxLightCells) {
+    return std::nullopt;
+  }
+  return Command{
+      SetTokenLight{.id = id, .bright_cells = bright, .dim_cells = dim}};
 }
 
 auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
@@ -962,16 +1000,19 @@ auto DecodeFogChangedEvent(ByteReader& reader) -> std::optional<Event> {
   for (std::uint32_t i = 0; i < count; ++i) {
     Cell cell;
     std::uint8_t flags = 0;
+    std::uint8_t light = 0;
     if (!ReadPosition(reader, cell) || cell.x < 0 || cell.y < 0 ||
         std::cmp_greater_equal(cell.x, kMaxDimension) ||
         std::cmp_greater_equal(cell.y, kMaxDimension) || !reader.U8(flags) ||
-        flags > 3) {
+        flags > 3 || !reader.U8(light) ||
+        light > static_cast<std::uint8_t>(LightLevel::kBright)) {
       return std::nullopt;
     }
     cells.push_back(FogCell{
         .cell = cell,
         .visible = (flags & 1) != 0,
         .explored = (flags & 2) != 0,
+        .light = light,
     });
   }
   if (!reader.Done()) {
@@ -1149,7 +1190,8 @@ auto ReadHazards(ByteReader& reader, std::vector<HazardProfile>& hazards)
   return true;
 }
 
-auto WriteCellProps(ByteWriter& writer, const CellProps& props) -> void {
+auto WriteCellProps(ByteWriter& writer, const CellProps& props,
+                    const SnapshotFormat& format) -> void {
   writer.U8(props.flags);
   writer.U8(static_cast<std::uint8_t>(props.water));
   writer.U8(props.current_dir);
@@ -1157,26 +1199,39 @@ auto WriteCellProps(ByteWriter& writer, const CellProps& props) -> void {
   writer.U8(props.hazard);
   writer.I32(props.slippery_dc);
   writer.U8(props.cover_sides);
+  if (format.has_vision) {
+    writer.U8(props.light);
+    writer.U8(static_cast<std::uint8_t>(props.obscurement));
+  }
 }
 
 auto ReadCellProps(ByteReader& reader, CellProps& props,
-                   const std::vector<HazardProfile>& hazards) -> bool {
+                   const std::vector<HazardProfile>& hazards,
+                   const SnapshotFormat& format) -> bool {
   std::uint8_t flags = 0;
   std::uint8_t water = 0;
   std::uint8_t hazard = 0;
+  std::uint8_t light = kAmbientLight;
+  std::uint8_t obscurement = 0;
   if (!reader.U8(flags) || !reader.U8(water) || !reader.U8(props.current_dir) ||
       !reader.U8(props.current_strength) || !reader.U8(hazard) ||
       !reader.I32(props.slippery_dc) || !reader.U8(props.cover_sides)) {
     return false;
   }
+  if (format.has_vision && (!reader.U8(light) || !reader.U8(obscurement))) {
+    return false;
+  }
   if ((flags & ~kCellAllFlags) != 0 || water > 2 || props.current_dir > 8 ||
       props.current_strength > 3 || hazard >= hazards.size() ||
-      props.slippery_dc < 0 || props.slippery_dc > 100) {
+      props.slippery_dc < 0 || props.slippery_dc > 100 ||
+      !IsValidLightValue(light) || !IsValidObscurement(obscurement)) {
     return false;
   }
   props.flags = flags;
   props.water = static_cast<WaterDepth>(water);
   props.hazard = hazard;
+  props.light = light;
+  props.obscurement = static_cast<Obscurement>(obscurement);
   return true;
 }
 
@@ -1201,8 +1256,12 @@ auto EncodeSnapshot(const GameSnapshot& snapshot, const SnapshotFormat& format)
     WriteHazards(writer, snapshot.map.Hazards());
     for (int y = 0; y < snapshot.map.Height(); ++y) {
       for (int x = 0; x < snapshot.map.Width(); ++x) {
-        WriteCellProps(writer, snapshot.map.PropsAt(Cell{.x = x, .y = y}));
+        WriteCellProps(writer, snapshot.map.PropsAt(Cell{.x = x, .y = y}),
+                       format);
       }
+    }
+    if (format.has_vision) {
+      writer.U8(static_cast<std::uint8_t>(snapshot.map.AmbientLight()));
     }
   }
   writer.U32(static_cast<std::uint32_t>(snapshot.tokens.size()));
@@ -1263,11 +1322,19 @@ auto DecodeSnapshot(const std::uint8_t* data, std::size_t size,
     for (int y = 0; y < map.Height(); ++y) {
       for (int x = 0; x < map.Width(); ++x) {
         CellProps props;
-        if (!ReadCellProps(reader, props, map.Hazards())) {
+        if (!ReadCellProps(reader, props, map.Hazards(), format)) {
           return std::nullopt;
         }
         map.SetProps(Cell{.x = x, .y = y}, props);
       }
+    }
+    if (format.has_vision) {
+      std::uint8_t ambient = 0;
+      if (!reader.U8(ambient) ||
+          ambient > static_cast<std::uint8_t>(LightLevel::kBright)) {
+        return std::nullopt;
+      }
+      map.SetAmbientLight(static_cast<LightLevel>(ambient));
     }
   }
 
@@ -1355,6 +1422,7 @@ auto EncodeFog(const FogSnapshot& fog) -> std::vector<std::uint8_t> {
   writer.U32(static_cast<std::uint32_t>(fog.height));
   writer.Raw(fog.visible);
   writer.Raw(fog.explored);
+  writer.Raw(fog.light);
   return writer.Data();
 }
 
@@ -1371,7 +1439,7 @@ auto DecodeFog(const std::uint8_t* data, std::size_t size)
     return std::nullopt;
   }
   const auto cells = width * height;
-  if (reader.Remaining() != static_cast<std::size_t>(cells) * 2) {
+  if (reader.Remaining() != static_cast<std::size_t>(cells) * 3) {
     return std::nullopt;
   }
 
@@ -1379,8 +1447,13 @@ auto DecodeFog(const std::uint8_t* data, std::size_t size)
   fog.width = static_cast<int>(width);
   fog.height = static_cast<int>(height);
   if (!reader.Bytes(cells, fog.visible) || !reader.Bytes(cells, fog.explored) ||
-      !reader.Done()) {
+      !reader.Bytes(cells, fog.light) || !reader.Done()) {
     return std::nullopt;
+  }
+  for (const std::uint8_t level : fog.light) {
+    if (level > static_cast<std::uint8_t>(LightLevel::kBright)) {
+      return std::nullopt;
+    }
   }
   return fog;
 }
@@ -1484,6 +1557,12 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U32(cmd.immune);
           writer.I32(cmd.swim_speed);
           writer.I32(cmd.climb_speed);
+          writer.I32(cmd.darkvision_cells);
+        } else if constexpr (std::is_same_v<T, SetTokenLight>) {
+          writer.U8(kCommandSetTokenLight);
+          writer.U32(cmd.id);
+          writer.I32(cmd.bright_cells);
+          writer.I32(cmd.dim_cells);
         } else if constexpr (std::is_same_v<T, UpdateTokenCombat>) {
           writer.U8(kCommandUpdateTokenCombat);
           writer.U32(cmd.id);
@@ -1623,6 +1702,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeSetTokenMaxHpCommand(reader);
     case kCommandSetTokenColor:
       return DecodeSetTokenColorCommand(reader);
+    case kCommandSetTokenLight:
+      return DecodeSetTokenLightCommand(reader);
     case kCommandUpdateTokenSheet:
       return DecodeUpdateTokenSheetCommand(reader);
     case kCommandUpdateTokenCombat:
@@ -1738,6 +1819,7 @@ auto EncodeEvent(const Event& event) -> std::vector<std::uint8_t> {
             writer.I32(cell.cell.y);
             writer.U8(static_cast<std::uint8_t>((cell.visible ? 1 : 0) |
                                                 (cell.explored ? 2 : 0)));
+            writer.U8(cell.light);
           }
         }
       },

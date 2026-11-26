@@ -60,6 +60,11 @@ struct Token {
   // проходима, но дороже (core/grid_map, MovementProfile).
   int swim_speed = 0;
   int climb_speed = 0;
+  // Тёмное зрение в клетках (в листе — метры); 0 — его нет. Свет, который
+  // носит токен (факел, фонарь): радиусы яркого и тусклого света в клетках.
+  int darkvision_cells = 0;
+  int light_bright_cells = 0;
+  int light_dim_cells = 0;
   std::string notes;
   int attack_bonus = 0;
   int save_bonus = 0;

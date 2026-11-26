@@ -5,15 +5,26 @@
 #include <vector>
 
 #include "core/grid_map.h"
+#include "core/light.h"
 
 namespace dnd {
 
-// Передаваемая форма экземпляра FogOfWar.
+// Передаваемая форма экземпляра FogOfWar. light — освещённость видимых
+// клеток для отрисовки; для невидимых она нулевая, чтобы не утекала разведка.
 struct FogSnapshot {
   int width = 0;
   int height = 0;
   std::vector<std::uint8_t> visible;
   std::vector<std::uint8_t> explored;
+  std::vector<std::uint8_t> light;
+};
+
+// Наблюдатель: своя клетка, радиус тёмного зрения и «ослеплён». Слепой
+// наблюдатель не видит ничего; слепота проверяется сервером по состояниям.
+struct Observer {
+  Cell cell{};
+  int darkvision_cells = 0;
+  bool blinded = false;
 };
 
 // Туман для каждого наблюдателя: что сейчас в поле зрения и что когда-либо
@@ -26,9 +37,16 @@ class FogOfWar {
   [[nodiscard]] auto Height() const -> int { return height_; }
   [[nodiscard]] auto IsVisible(Cell cell) const -> bool;
   [[nodiscard]] auto IsExplored(Cell cell) const -> bool;
+  // Освещённость разведанной клетки; для невидимой — kDark.
+  [[nodiscard]] auto LightAt(Cell cell) const -> LightLevel;
 
-  // Пересчитывает видимое множество по позициям наблюдателей и добавляет его
-  // в исследованное. Наблюдатели вне карты игнорируются.
+  // Пересчитывает видимое множество по наблюдателям, полю света и пределу
+  // обзора. max_sight_cells <= 0 — без предела (игра), малый предел остаётся
+  // для тестов. Наблюдатели вне карты игнорируются.
+  auto Recompute(const GridMap& map, const std::vector<Observer>& observers,
+                 const LightField& light, int max_sight_cells) -> void;
+
+  // Совместимость: яркий свет, без тёмного зрения, радиус как предел обзора.
   auto Recompute(const GridMap& map, const std::vector<Cell>& observers,
                  int radius) -> void;
 
@@ -39,7 +57,8 @@ class FogOfWar {
   // Точечная правка после FogChanged: клетка становится видимой/разведанной
   // ровно в том состоянии, что пришло от сервера. Клетки вне карты
   // игнорируются.
-  auto SetCell(Cell cell, bool visible, bool explored) -> void;
+  auto SetCell(Cell cell, bool visible, bool explored,
+               LightLevel light = LightLevel::kBright) -> void;
 
   [[nodiscard]] auto Snapshot() const -> FogSnapshot;
   auto Restore(const FogSnapshot& snapshot) -> void;
@@ -56,6 +75,7 @@ class FogOfWar {
   int height_;
   std::vector<std::uint8_t> visible_;
   std::vector<std::uint8_t> explored_;
+  std::vector<std::uint8_t> light_;
 };
 
 }  // namespace dnd
