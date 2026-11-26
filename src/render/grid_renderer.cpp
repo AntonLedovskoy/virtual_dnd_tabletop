@@ -88,6 +88,13 @@ constexpr SDL_Color kRuler{.r = 0xf5, .g = 0xe0, .b = 0x8c, .a = 0xff};
 constexpr SDL_Color kAoeFill{.r = 0xff, .g = 0x6b, .b = 0x4a, .a = 0x48};
 constexpr SDL_Color kAoeBorder{.r = 0xff, .g = 0x9a, .b = 0x7a, .a = 0xc0};
 constexpr SDL_Color kPing{.r = 0xff, .g = 0xe0, .b = 0x5a, .a = 0xff};
+// Освещённость: тусклый свет темнит клетку, тьма почти скрывает цвет.
+constexpr SDL_Color kDimTint{.r = 0x0a, .g = 0x0a, .b = 0x18, .a = 0x50};
+constexpr SDL_Color kDarkTint{.r = 0x04, .g = 0x04, .b = 0x08, .a = 0x9c};
+// Затемнение: слабое — дымка, сильное — густое облако дыма.
+constexpr SDL_Color kLightHaze{.r = 0xa8, .g = 0xa8, .b = 0xb0, .a = 0x38};
+constexpr SDL_Color kHeavySmoke{.r = 0x9a, .g = 0x9a, .b = 0xa4, .a = 0x98};
+constexpr SDL_Color kSmokePuff{.r = 0xc8, .g = 0xc8, .b = 0xd0, .a = 0x60};
 
 constexpr std::array<SDL_Color, 4> kTokenColors{{
     {.r = 0xc8, .g = 0x50, .b = 0x46, .a = SDL_ALPHA_OPAQUE},
@@ -689,6 +696,64 @@ auto DrawPings(SDL_Renderer* renderer, const std::vector<MapPing>& pings,
     if (text != nullptr && !ping.author.empty()) {
       text->Draw(ping.author, outer.x, outer.y - 18.0F, kPing,
                  cell_size * 3.0F);
+    }
+  }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+}
+
+auto DrawLight(SDL_Renderer* renderer, const GridMap& map,
+               const LightView& view, float cell_size, float offset_x,
+               float offset_y) -> void {
+  if (renderer == nullptr) {
+    return;
+  }
+  if (view.fog == nullptr && view.field == nullptr) {
+    return;
+  }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  for (int y = 0; y < map.Height(); ++y) {
+    for (int x = 0; x < map.Width(); ++x) {
+      const Cell cell{.x = x, .y = y};
+      // Туман игрока: свет и дым видны только в открытых клетках.
+      if (view.fog != nullptr && !view.fog->IsVisible(cell)) {
+        continue;
+      }
+      const LightLevel light =
+          view.fog != nullptr ? view.fog->LightAt(cell) : view.field->At(cell);
+      const SDL_FRect rect =
+          CellRect(cell, cell_size, offset_x, offset_y, 0.0F);
+      if (light == LightLevel::kDim) {
+        SetDrawColor(renderer, kDimTint);
+        SDL_RenderFillRect(renderer, &rect);
+      } else if (light == LightLevel::kDark) {
+        SetDrawColor(renderer, kDarkTint);
+        SDL_RenderFillRect(renderer, &rect);
+      }
+      switch (map.ObscurementAt(cell)) {
+        case Obscurement::kNone:
+          break;
+        case Obscurement::kLight:
+          SetDrawColor(renderer, kLightHaze);
+          SDL_RenderFillRect(renderer, &rect);
+          break;
+        case Obscurement::kHeavy: {
+          // Облако дыма видно само по себе: клетка с ним остаётся открытой,
+          // но существо внутри прячется (game_server).
+          SetDrawColor(renderer, kHeavySmoke);
+          SDL_RenderFillRect(renderer, &rect);
+          const SDL_FPoint center =
+              CellCenter(cell, cell_size, offset_x, offset_y);
+          DrawCircle(renderer,
+                     SDL_FPoint{.x = center.x - (cell_size * 0.18F),
+                                .y = center.y - (cell_size * 0.10F)},
+                     cell_size * 0.22F, kSmokePuff);
+          DrawCircle(renderer,
+                     SDL_FPoint{.x = center.x + (cell_size * 0.16F),
+                                .y = center.y + (cell_size * 0.14F)},
+                     cell_size * 0.18F, kSmokePuff);
+          break;
+        }
+      }
     }
   }
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);

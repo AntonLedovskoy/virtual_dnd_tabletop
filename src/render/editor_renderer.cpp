@@ -54,6 +54,12 @@ auto BrushLabel(EditorBrush brush) -> std::string_view {
       return strings::kBrushSnow;
     case EditorBrush::kMud:
       return strings::kBrushMud;
+    case EditorBrush::kLight:
+      return strings::kBrushLight;
+    case EditorBrush::kObscurement:
+      return strings::kBrushObscurement;
+    case EditorBrush::kLightClear:
+      return strings::kBrushLightClear;
   }
   return strings::kBrushWall;
 }

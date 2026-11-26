@@ -82,7 +82,9 @@ enum class InspectorField : std::uint8_t {
   kSlippery = 6,
   kCoverSide = 7,
   kCoverLevel = 8,
-  kCount = 9,
+  kLight = 9,
+  kObscurement = 10,
+  kCount = 11,
 };
 inline constexpr InspectorField kInspectorFields = InspectorField::kCount;
 

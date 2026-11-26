@@ -45,6 +45,16 @@ auto DrawTokens(SDL_Renderer* renderer, const std::vector<Token>& tokens,
                 const std::vector<TokenArt>* art = nullptr) -> void;
 auto DrawFog(SDL_Renderer* renderer, const FogOfWar& fog, float cell_size,
              float offset_x, float offset_y) -> void;
+// Свет и затемнение карты: тусклый и тёмный оттенок, дымка и облако дыма.
+// Для игрока view.fog задаёт видимость и свет открытых клеток; редактор
+// передаёт готовое поле света без тумана (view.fog == nullptr).
+struct LightView {
+  const FogOfWar* fog = nullptr;
+  const LightField* field = nullptr;
+};
+auto DrawLight(SDL_Renderer* renderer, const GridMap& map,
+               const LightView& view, float cell_size, float offset_x,
+               float offset_y) -> void;
 
 // Подсветка клеток, доступных для перемещения.
 auto DrawMovementRange(SDL_Renderer* renderer, const std::vector<Cell>& cells,

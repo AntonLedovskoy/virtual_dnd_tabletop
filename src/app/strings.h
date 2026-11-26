@@ -295,6 +295,9 @@ inline constexpr std::string_view kBrushSwamp = "болото";
 inline constexpr std::string_view kBrushBrush = "заросли";
 inline constexpr std::string_view kBrushSnow = "снег";
 inline constexpr std::string_view kBrushMud = "грязь";
+inline constexpr std::string_view kBrushLight = "свет клетки";
+inline constexpr std::string_view kBrushObscurement = "затемнение";
+inline constexpr std::string_view kBrushLightClear = "свет сцены";
 inline constexpr std::string_view kInspectorTitle = "Клетка";
 inline constexpr std::string_view kInspectorHint =
     "Tab / ↑ ↓ — поле | ← → — значение | Enter — применить | Esc — закрыть";
@@ -309,6 +312,8 @@ inline constexpr std::string_view kInspectorClimb = "Лазание";
 inline constexpr std::string_view kInspectorSlippery = "Скользко (КС)";
 inline constexpr std::string_view kInspectorCoverSide = "Укрытие: сторона";
 inline constexpr std::string_view kInspectorCoverLevel = "Укрытие: уровень";
+inline constexpr std::string_view kInspectorLight = "Свет";
+inline constexpr std::string_view kInspectorObscurement = "Затемнение";
 inline constexpr std::string_view kInspectorNo = "нет";
 inline constexpr std::string_view kInspectorYes = "да";
 inline constexpr std::string_view kEditorSizeHint =
@@ -318,10 +323,12 @@ inline constexpr std::string_view kEditorMouseHint =
     "кисть (не поверх токена) | ПКМ — стереть, по токену дважды — удалить | "
     "СКМ — панорама | колесо — зум";
 inline constexpr std::string_view kEditorKeyHint =
-    "1–6 — кисть | 7 — дорога | 8 — трудная местность | G — свойства "
+    "1–6 — кисть | 7 — дорога | 8 — трудная местность | 9 — свет клетки, "
+    "Shift+9 — затемнение, 0 — сброс | F4 — свет сцены | G — свойства "
     "клетки | P — персонаж | B — бестиарий | V — цвет | L — лист | "
     "R — имя токена | M — подложка | Tab — карты | F2 — панель | "
     "F5 — сохранить | F9 — загрузить | Enter — играть | Esc — меню";
+inline constexpr std::string_view kEditorAmbientLight = "Свет сцены: ";
 inline constexpr std::string_view kEditorScenesHint =
     "↑ ↓ — выбрать | Enter — открыть | 1–9 — карта | N — новая из этой "
     "карты | R — переименовать | Del — удалить | F5 — сохранить | "

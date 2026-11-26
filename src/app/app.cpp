@@ -995,6 +995,34 @@ auto App::ApplyEditorBrush(Cell cell) -> void {
     case EditorBrush::kMud:
       scene_.map.SetTerrain(cell, Terrain::kMud);
       break;
+    case EditorBrush::kLight: {
+      // Одна кисть на цикл: клетка делает шаг как сцена → яркий → тусклый →
+      // тёмный → как сцена; штрих проходит по каждой клетке один раз.
+      CellProps props = scene_.map.PropsAt(cell);
+      const auto bright = static_cast<std::uint8_t>(LightLevel::kBright);
+      const auto dim = static_cast<std::uint8_t>(LightLevel::kDim);
+      const auto dark = static_cast<std::uint8_t>(LightLevel::kDark);
+      props.light = props.light == kAmbientLight ? bright
+                    : props.light == bright      ? dim
+                    : props.light == dim         ? dark
+                                                 : kAmbientLight;
+      scene_.map.SetProps(cell, props);
+      break;
+    }
+    case EditorBrush::kObscurement: {
+      CellProps props = scene_.map.PropsAt(cell);
+      props.obscurement = static_cast<Obscurement>(
+          (static_cast<int>(props.obscurement) + 1) % 3);
+      scene_.map.SetProps(cell, props);
+      break;
+    }
+    case EditorBrush::kLightClear: {
+      CellProps props = scene_.map.PropsAt(cell);
+      props.light = kAmbientLight;
+      props.obscurement = Obscurement::kNone;
+      scene_.map.SetProps(cell, props);
+      break;
+    }
   }
   scene_.encounter = Encounter{};
 }
@@ -1043,6 +1071,14 @@ auto App::EraseEditorCell(Cell cell) -> void {
     // ПКМ со кистью дороги снимает только дорогу, рельеф остаётся.
     CellProps props = scene_.map.PropsAt(cell);
     props.flags &= static_cast<std::uint8_t>(~kCellRoad);
+    scene_.map.SetProps(cell, props);
+  } else if (editor_brush_ == EditorBrush::kLight ||
+             editor_brush_ == EditorBrush::kObscurement ||
+             editor_brush_ == EditorBrush::kLightClear) {
+    // Кисти света ПКМ возвращает клетке освещённость сцены.
+    CellProps props = scene_.map.PropsAt(cell);
+    props.light = kAmbientLight;
+    props.obscurement = Obscurement::kNone;
     scene_.map.SetProps(cell, props);
   } else {
     scene_.map.SetTerrain(cell, Terrain::kFloor);
@@ -1267,6 +1303,16 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
     case SDLK_F2:
       editor_panel_visible_ = !editor_panel_visible_;
       return;
+    case SDLK_F4: {
+      // Освещённость всей сцены: яркий → тёмный → тусклый.
+      const int next = (static_cast<int>(scene_.map.AmbientLight()) + 1) % 3;
+      scene_.map.SetAmbientLight(static_cast<LightLevel>(next));
+      editor_status_.Set(std::string(strings::kEditorAmbientLight) +
+                         std::string(next == 2   ? "яркий"
+                                     : next == 1 ? "тусклый"
+                                                 : "тёмный"));
+      return;
+    }
     case SDLK_F5:
       SaveScene();
       return;
@@ -1326,6 +1372,15 @@ auto App::HandleEditorKeyDown(const SDL_KeyboardEvent& key) -> void {
           editor_brush_ = EditorBrush::kSwamp;
           break;
       }
+      return;
+    case SDLK_9:
+      // Shift+9 — затемнение клетки, 9 — освещённость по кругу.
+      editor_brush_ = (key.mod & SDL_KMOD_SHIFT) != 0
+                          ? EditorBrush::kObscurement
+                          : EditorBrush::kLight;
+      return;
+    case SDLK_0:
+      editor_brush_ = EditorBrush::kLightClear;
       return;
     case SDLK_G:
       OpenEditorInspector();
@@ -1468,6 +1523,25 @@ auto App::HandleEditorInspectorKeyDown(const SDL_KeyboardEvent& key) -> void {
           editor_inspector_cover_level_ = static_cast<CoverLevel>(level);
           break;
         }
+        case InspectorField::kLight: {
+          // Сцена → яркий → тусклый → тёмный.
+          constexpr std::array<std::uint8_t, 4> kValues{
+              kAmbientLight, static_cast<std::uint8_t>(LightLevel::kBright),
+              static_cast<std::uint8_t>(LightLevel::kDim),
+              static_cast<std::uint8_t>(LightLevel::kDark)};
+          const auto found =
+              std::find(kValues.begin(), kValues.end(), props.light);
+          const int index = found == kValues.end()
+                                ? 0
+                                : static_cast<int>(found - kValues.begin());
+          props.light =
+              kValues[static_cast<std::size_t>((index + step + 4) % 4)];
+          break;
+        }
+        case InspectorField::kObscurement:
+          props.obscurement = static_cast<Obscurement>(
+              (static_cast<int>(props.obscurement) + step + 3) % 3);
+          break;
         case InspectorField::kCount:
           break;
       }
@@ -1534,6 +1608,14 @@ auto App::EditorInspectorFields() const
   add(strings::kInspectorCoverLevel,
       std::string(
           kLevels[static_cast<int>(editor_inspector_cover_level_) % 4]));
+  constexpr std::array<std::string_view, 4> kLightNames{"тёмный", "тусклый",
+                                                        "яркий", "как сцена"};
+  add(strings::kInspectorLight,
+      std::string(kLightNames[props.light % kLightNames.size()]));
+  constexpr std::array<std::string_view, 3> kObscurementNames{"нет", "слабое",
+                                                              "сильное"};
+  add(strings::kInspectorObscurement,
+      std::string(kObscurementNames[static_cast<int>(props.obscurement) % 3]));
   return fields;
 }
 
@@ -5561,6 +5643,10 @@ auto App::Iterate() -> void {
     DrawTerrain(renderer_, scene_.map, camera_.cell_size, camera_.x, camera_.y);
     DrawCellProps(renderer_, scene_.map, camera_.cell_size, camera_.x,
                   camera_.y);
+    const LightField editor_light =
+        ComputeLightField(scene_.map, TokenLightSources(scene_.tokens));
+    DrawLight(renderer_, scene_.map, LightView{.field = &editor_light},
+              camera_.cell_size, camera_.x, camera_.y);
     std::vector<TokenArt> editor_art;
     editor_art.reserve(scene_.tokens.size());
     for (const Token& token : scene_.tokens) {
@@ -5704,6 +5790,8 @@ auto App::Iterate() -> void {
     }
   }
   if (!client_is_dm_) {
+    DrawLight(renderer_, view_.Map(), LightView{.fog = &view_.Fog()},
+              camera_.cell_size, camera_.x, camera_.y);
     DrawFog(renderer_, view_.Fog(), camera_.cell_size, camera_.x, camera_.y);
     // Чёрная карта без единой видимой клетки — это туман, а не потеря карты.
     bool any_visible = false;
