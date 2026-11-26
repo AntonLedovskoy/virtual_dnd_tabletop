@@ -28,6 +28,15 @@ auto CheckAttack(int d20, int attack_bonus, int ac) -> AttackCheck {
   return AttackCheck{.hit = d20 + attack_bonus >= ac};
 }
 
+auto AttackReachCells(int attack_range) -> int {
+  return attack_range > 0 ? attack_range * 2 : 1;
+}
+
+auto IsAttackInReach(int attack_range, int distance_cells) -> bool {
+  return distance_cells >= 0 &&
+         distance_cells <= AttackReachCells(attack_range);
+}
+
 auto RollAttackDamage(const DiceExpression& damage, bool critical,
                       std::mt19937& rng) -> DiceRollResult {
   if (!critical) {

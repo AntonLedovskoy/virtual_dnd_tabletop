@@ -88,6 +88,7 @@ inline constexpr std::string_view kSelectToken = "Сначала выберит�
 inline constexpr std::string_view kAttackNoTarget =
     "Наведите курсор на цель атаки";
 inline constexpr std::string_view kAttackSelf = "Нельзя атаковать самого себя";
+inline constexpr std::string_view kAttackOutOfReach = "Цель вне досягаемости";
 inline constexpr std::string_view kAttackModes =
     "Нельзя одновременно преимущество и помеху";
 inline constexpr std::string_view kSelectTokenForCommand =
@@ -443,6 +444,8 @@ inline constexpr std::string_view kMovementFree =
     "Вне боя запас движения не тратится";
 inline constexpr std::string_view kSheetDamage = "Урон";
 inline constexpr std::string_view kSheetNotes = "Заметки";
+inline constexpr std::string_view kSheetRangeHint =
+    "Дальность 0 — ближний бой, досягаемость 1 клетка";
 inline constexpr std::string_view kSheetHint =
     "Tab — поле | Enter — сохранить | Esc — закрыть";
 inline constexpr std::string_view kSheetViewHint =

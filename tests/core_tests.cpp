@@ -1674,6 +1674,7 @@ auto TestAttack() -> void {
                             .hp = 10,
                             .max_hp = 10,
                             .ac = 12,
+                            .attack_range = 2,
                             .kind = dnd::TokenKind::kPlayer,
                             .cell = CellAt(0, 0)},
                  dnd::Token{.id = 2,
@@ -1747,6 +1748,100 @@ auto TestAttack() -> void {
     saw_hit = saw_hit || TokenOf(server.State(), 2).hp < hp_before;
   }
   Expect(saw_hit, "a long series of attacks lands at least once");
+}
+
+auto TestMeleeReach() -> void {
+  Expect(dnd::AttackReachCells(0) == 1, "melee reaches one cell");
+  Expect(dnd::AttackReachCells(2) == 4,
+         "ranged reach is twice the normal distance");
+  Expect(dnd::IsAttackInReach(0, 1), "an adjacent target is in melee reach");
+  Expect(dnd::IsAttackInReach(0, 0), "a token can target its own cell");
+  Expect(!dnd::IsAttackInReach(0, 2),
+         "a target two cells away is out of melee reach");
+  Expect(dnd::IsAttackInReach(2, 4), "a shot up to twice the range is allowed");
+  Expect(!dnd::IsAttackInReach(2, 5), "a shot beyond twice the range is out");
+
+  const dnd::GameSnapshot snapshot{
+      .map = dnd::GridMap(12, 12),
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "ogre",
+                         .owner = "dm",
+                         .hp = 1000,
+                         .max_hp = 1000,
+                         .ac = 10,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "far",
+                         .owner = "dm",
+                         .hp = 1000,
+                         .max_hp = 1000,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(0, 2)},
+              dnd::Token{.id = 3,
+                         .name = "near",
+                         .owner = "dm",
+                         .hp = 1000,
+                         .max_hp = 1000,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 4,
+                         .name = "archer",
+                         .owner = "dm",
+                         .hp = 1000,
+                         .max_hp = 1000,
+                         .ac = 10,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .attack_range = 2,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(4, 4)},
+              dnd::Token{.id = 5,
+                         .name = "long shot",
+                         .owner = "dm",
+                         .hp = 1000,
+                         .max_hp = 1000,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(8, 4)},
+              dnd::Token{.id = 6,
+                         .name = "too far",
+                         .owner = "dm",
+                         .hp = 1000,
+                         .max_hp = 1000,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(9, 4)},
+          },
+      .next_token_id = 7,
+  };
+  dnd::GameServer server(snapshot, 6, 44);
+  const dnd::CommandOutcome melee_far = server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 2}, "", true);
+  Expect(
+      !melee_far.accepted && melee_far.reject_reason == "цель дальше 1 клетки",
+      "the server rejects a melee attack two cells away");
+  Expect(
+      server
+          .HandleCommand(dnd::AttackToken{.attacker = 1, .target = 3}, "", true)
+          .accepted,
+      "a diagonal neighbour is within melee reach");
+  Expect(
+      server
+          .HandleCommand(dnd::AttackToken{.attacker = 4, .target = 5}, "", true)
+          .accepted,
+      "a ranged attack up to twice the normal range is allowed");
+  const dnd::CommandOutcome beyond = server.HandleCommand(
+      dnd::AttackToken{.attacker = 4, .target = 6}, "", true);
+  Expect(
+      !beyond.accepted && beyond.reject_reason == "цель за пределами дистанции",
+      "the server rejects a ranged attack beyond twice the range");
 }
 
 auto TestAoeDamage() -> void {
@@ -5018,6 +5113,11 @@ auto TestDmOwnsCharacter() -> void {
          "a free character still moves freely");
   Expect(TokenOf(server.State(), 3).movement_used == 0,
          "a free character spends no movement budget");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 4, .target = CellAt(4, 1)}, "",
+                            true)
+             .accepted,
+         "a monster moves freely to reach the hero");
   Expect(
       server
           .HandleCommand(dnd::AttackToken{.attacker = 4, .target = 1}, "", true)
@@ -8722,6 +8822,7 @@ auto main() -> int {
     TestRestChoicesAndClock();
     TestConcentration();
     TestAttack();
+    TestMeleeReach();
     TestAoeDamage();
     TestDeathSaves();
     TestConditionDurationAndInitiative();

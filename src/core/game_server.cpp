@@ -1038,8 +1038,10 @@ auto GameServer::HandleAttack(const AttackToken& command,
       std::max(std::abs(attacker->cell.x - target->cell.x),
                std::abs(attacker->cell.y - target->cell.y));
   const int attack_range = attacker->attack_range;
-  if (attack_range > 0 && distance_cells > attack_range * 2) {
-    return CommandOutcome{.reject_reason = "цель за пределами дистанции"};
+  if (!IsAttackInReach(attack_range, distance_cells)) {
+    return CommandOutcome{.reject_reason = attack_range > 0
+                                               ? "цель за пределами дистанции"
+                                               : "цель дальше 1 клетки"};
   }
   // Дальнобойная атака в 5 футах от другого противника идёт с помехой.
   // Враждебность в токенах не хранится, поэтому учитывается любой сосед,

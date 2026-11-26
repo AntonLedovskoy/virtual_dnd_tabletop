@@ -15,6 +15,14 @@ struct AttackCheck {
 
 auto CheckAttack(int d20, int attack_bonus, int ac) -> AttackCheck;
 
+// Досягаемость атаки в клетках: ближний бой (0) — одна клетка, дальнобойная —
+// двойная обычная дистанция (за ней — автоматический промах). Свойство Reach
+// (10 футов) не моделируется.
+[[nodiscard]] auto AttackReachCells(int attack_range) -> int;
+
+[[nodiscard]] auto IsAttackInReach(int attack_range, int distance_cells)
+    -> bool;
+
 // Урон атаки: при критическом попадании кости бросаются дважды, а
 // модификатор выражения прибавляется один раз.
 auto RollAttackDamage(const DiceExpression& damage, bool critical,

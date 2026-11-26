@@ -881,9 +881,16 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   DrawModalField(renderer, text, notes_field, std::string(strings::kSheetNotes),
                  notes, editing && active == SheetField::kNotes);
 
-  text->Draw(
-      std::string(read_only ? strings::kSheetViewHint : strings::kSheetHint),
-      left, y + height - 30.0F, kHintText, content_width);
+  if (read_only) {
+    text->Draw(std::string(strings::kSheetViewHint), left, y + height - 30.0F,
+               kHintText, content_width);
+  } else {
+    // Отдельная строка: 0 в «Дальности» — ближний бой на 1 клетку.
+    text->Draw(std::string(strings::kSheetRangeHint), left, y + height - 48.0F,
+               kHintText, content_width);
+    text->Draw(std::string(strings::kSheetHint), left, y + height - 28.0F,
+               kHintText, content_width);
+  }
 }
 
 auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,

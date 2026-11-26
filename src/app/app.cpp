@@ -22,6 +22,7 @@
 #include "app/icon_png.h"
 #include "app/strings.h"
 #include "app/update_service.h"
+#include "core/attack.h"
 #include "core/bestiary.h"
 #include "core/clock.h"
 #include "core/conditions.h"
@@ -3660,6 +3661,14 @@ auto App::AttackTarget(bool advantage, bool disadvantage) -> void {
   }
   if (target_id == attacker->id) {
     view_.AddLocalLine(std::string(strings::kAttackSelf));
+    return;
+  }
+  // Клиент проверяет досягаемость сам, чтобы не гонять команду впустую;
+  // сервер проверяет ещё раз.
+  const int distance_cells = std::max(std::abs(attacker->cell.x - cell.x),
+                                      std::abs(attacker->cell.y - cell.y));
+  if (!IsAttackInReach(attacker->attack_range, distance_cells)) {
+    view_.AddLocalLine(std::string(strings::kAttackOutOfReach));
     return;
   }
   // Клиент и взятый DM-ом персонаж в чужой ход отправляют атаку как реакцию:
