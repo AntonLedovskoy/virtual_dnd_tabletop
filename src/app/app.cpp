@@ -224,6 +224,8 @@ auto ChatUsageText(ChatCommandError error) -> std::string_view {
       return strings::kRestUsage;
     case ChatCommandError::kBadFall:
       return strings::kFallUsage;
+    case ChatCommandError::kBadLight:
+      return strings::kLightUsage;
     case ChatCommandError::kNone:
       break;
   }
@@ -3309,6 +3311,8 @@ auto App::LoadSheetFields(const Token& token) -> void {
   sheet_hit_die_ = "d" + std::to_string(token.hit_die);
   sheet_con_ = std::to_string(token.con_modifier);
   sheet_range_ = std::to_string(token.attack_range);
+  sheet_darkvision_ =
+      std::to_string(LightMetersFromCells(token.darkvision_cells));
   sheet_damage_ = token.damage;
   sheet_resist_ = FormatDamageTypeList(token.resist);
   sheet_vulnerable_ = FormatDamageTypeList(token.vulnerable);
@@ -3348,7 +3352,7 @@ auto App::DrawActiveSheet() -> void {
                  sheet_save_, sheet_initiative_, sheet_temp_hp_, sheet_hit_die_,
                  sheet_con_, sheet_range_, sheet_damage_, sheet_resist_,
                  sheet_vulnerable_, sheet_immune_, sheet_notes_,
-                 sheet_read_only_);
+                 sheet_darkvision_, sheet_read_only_);
 }
 
 auto App::CloseSheet() -> void {
@@ -3386,6 +3390,7 @@ auto App::SaveSheet() -> void {
     token->hit_die = values.hit_die;
     token->con_modifier = values.con;
     token->attack_range = values.attack_range;
+    token->darkvision_cells = LightCellsFromMeters(values.darkvision);
     token->resist = values.resist & kAllDamageTypes;
     token->vulnerable = values.vulnerable & kAllDamageTypes;
     token->immune = values.immune & kAllDamageTypes;
@@ -3404,23 +3409,25 @@ auto App::SaveSheet() -> void {
     CloseSheet();
     return;
   }
-  SendCommand(UpdateTokenSheet{.id = token->id,
-                               .ac = values.ac,
-                               .speed = values.speed,
-                               .notes = std::move(values.notes),
-                               .attack_bonus = values.attack,
-                               .save_bonus = values.save,
-                               .initiative_bonus = values.initiative,
-                               .damage = std::move(values.damage),
-                               .temp_hp = values.temp_hp,
-                               .hit_die = values.hit_die,
-                               .con_modifier = values.con,
-                               .attack_range = values.attack_range,
-                               .resist = values.resist,
-                               .vulnerable = values.vulnerable,
-                               .immune = values.immune,
-                               .swim_speed = values.swim,
-                               .climb_speed = values.climb});
+  SendCommand(UpdateTokenSheet{
+      .id = token->id,
+      .ac = values.ac,
+      .speed = values.speed,
+      .notes = std::move(values.notes),
+      .attack_bonus = values.attack,
+      .save_bonus = values.save,
+      .initiative_bonus = values.initiative,
+      .damage = std::move(values.damage),
+      .temp_hp = values.temp_hp,
+      .hit_die = values.hit_die,
+      .con_modifier = values.con,
+      .attack_range = values.attack_range,
+      .resist = values.resist,
+      .vulnerable = values.vulnerable,
+      .immune = values.immune,
+      .swim_speed = values.swim,
+      .climb_speed = values.climb,
+      .darkvision_cells = LightCellsFromMeters(values.darkvision)});
   CloseSheet();
 }
 
@@ -3455,6 +3462,11 @@ auto App::ReadSheetValues(SheetValues& values) -> bool {
   if (!ParseSignedNumber(sheet_range_, values.attack_range) ||
       values.attack_range < 0 || values.attack_range > 1000) {
     ShowStatus(std::string(strings::kSheetBadRange));
+    return false;
+  }
+  if (!ParseSignedNumber(sheet_darkvision_, values.darkvision) ||
+      values.darkvision < 0 || values.darkvision > 1000) {
+    ShowStatus(std::string(strings::kSheetBadDarkvision));
     return false;
   }
   if (!sheet_damage_.empty()) {
@@ -3544,7 +3556,8 @@ auto App::HandleSheetTextInput(const char* text) -> void {
       sheet_field_ == SheetField::kInitiative ||
       sheet_field_ == SheetField::kTempHp ||
       sheet_field_ == SheetField::kHitDie || sheet_field_ == SheetField::kCon ||
-      sheet_field_ == SheetField::kRange) {
+      sheet_field_ == SheetField::kRange ||
+      sheet_field_ == SheetField::kDarkvision) {
     switch (sheet_field_) {
       case SheetField::kAc:
         AppendBoundedNumber(sheet_ac_, text, 1, 1000, false);
@@ -3579,6 +3592,9 @@ auto App::HandleSheetTextInput(const char* text) -> void {
         break;
       case SheetField::kRange:
         AppendBoundedNumber(sheet_range_, text, 0, 1000, false);
+        break;
+      case SheetField::kDarkvision:
+        AppendBoundedNumber(sheet_darkvision_, text, 0, 1000, false);
         break;
       default:
         break;
@@ -3662,6 +3678,9 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SheetField::kRange:
       buffer = &sheet_range_;
+      break;
+    case SheetField::kDarkvision:
+      buffer = &sheet_darkvision_;
       break;
     case SheetField::kDamage:
       buffer = &sheet_damage_;
@@ -4450,6 +4469,16 @@ auto App::SubmitChat() -> void {
         return;
       }
       SendCommand(AwardXp{.id = token->id, .amount = command.value});
+      return;
+    case ChatCommandKind::kLight:
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      SendCommand(SetTokenLight{
+          .id = token->id,
+          .bright_cells = LightCellsFromMeters(command.light_bright_meters),
+          .dim_cells = LightCellsFromMeters(command.light_dim_meters)});
       return;
   }
 }

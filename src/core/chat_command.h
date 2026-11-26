@@ -39,6 +39,7 @@ enum class ChatCommandKind : std::uint8_t {
   kUnreveal,
   kRevealOff,
   kXp,
+  kLight,
 };
 
 // Причина отказа в разборе. Русские подсказки живут в src/app/strings.h:
@@ -58,6 +59,7 @@ enum class ChatCommandError : std::uint8_t {
   kBadTime,
   kBadRest,
   kBadFall,
+  kBadLight,
 };
 
 // Разобранная строка чата. При error != kNone команду отправлять нельзя,
@@ -78,6 +80,9 @@ struct ChatCommand {
   bool long_rest = false;
   // /xp N all — опыт всей партии.
   bool party = false;
+  // /light: радиусы яркого и тусклого света в метрах; 0 — свет выключен.
+  int light_bright_meters = 0;
+  int light_dim_meters = 0;
 };
 
 // Разбирает строку чата, не обращаясь к миру: роль (DM или игрок), выбранный

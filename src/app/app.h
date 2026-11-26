@@ -245,6 +245,8 @@ class App {
     int hit_die = 0;
     int con = 0;
     int attack_range = 0;
+    // Тёмное зрение в метрах: в токене оно хранится в клетках.
+    int darkvision = 0;
     std::string damage;
     std::string notes;
     std::uint32_t resist = 0;
@@ -469,6 +471,7 @@ class App {
   std::string sheet_hit_die_;
   std::string sheet_con_;
   std::string sheet_range_;
+  std::string sheet_darkvision_;
   std::string sheet_damage_;
   std::string sheet_resist_;
   std::string sheet_vulnerable_;

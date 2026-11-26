@@ -751,7 +751,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& range, const std::string& damage,
                     const std::string& resist, const std::string& vulnerable,
                     const std::string& immune, const std::string& notes,
-                    bool read_only) -> void {
+                    const std::string& darkvision, bool read_only) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -808,7 +808,8 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
   const SDL_FRect temp_hp_field{left + 193.0F, y + 196.0F, 174.0F, 38.0F};
   const SDL_FRect hit_die_field{left + 386.0F, y + 196.0F, 174.0F, 38.0F};
   const SDL_FRect con_field{left, y + 244.0F, 174.0F, 38.0F};
-  const SDL_FRect range_field{left + 193.0F, y + 244.0F, 348.0F, 38.0F};
+  const SDL_FRect range_field{left + 193.0F, y + 244.0F, 174.0F, 38.0F};
+  const SDL_FRect darkvision_field{left + 386.0F, y + 244.0F, 174.0F, 38.0F};
   const SDL_FRect damage_field{left, y + 296.0F, content_width, 38.0F};
   const SDL_FRect resist_field{left, y + 344.0F, content_width, 38.0F};
   const SDL_FRect vulnerable_field{left, y + 392.0F, content_width, 38.0F};
@@ -842,6 +843,9 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                  con, editing && active == SheetField::kCon);
   DrawModalField(renderer, text, range_field, std::string(strings::kSheetRange),
                  range, editing && active == SheetField::kRange);
+  DrawModalField(renderer, text, darkvision_field,
+                 std::string(strings::kSheetDarkvision), darkvision,
+                 editing && active == SheetField::kDarkvision);
   DrawModalField(renderer, text, damage_field,
                  std::string(strings::kSheetDamage), damage,
                  editing && active == SheetField::kDamage);

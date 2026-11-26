@@ -107,8 +107,9 @@ enum class SheetField : std::uint8_t {
   kVulnerable = 13,
   kImmune = 14,
   kNotes = 15,
+  kDarkvision = 16,
 };
-inline constexpr int kSheetFieldCount = 16;
+inline constexpr int kSheetFieldCount = 17;
 
 // Модальный лист персонажа или монстра. read_only — игрок только смотрит,
 // поля не подсвечиваются и не редактируются.
@@ -122,7 +123,7 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& range, const std::string& damage,
                     const std::string& resist, const std::string& vulnerable,
                     const std::string& immune, const std::string& notes,
-                    bool read_only) -> void;
+                    const std::string& darkvision, bool read_only) -> void;
 
 // Модальный список встроенного бестиария.
 auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,

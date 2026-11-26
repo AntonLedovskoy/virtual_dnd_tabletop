@@ -8,11 +8,15 @@
 #include "core/dice.h"
 #include "core/image_name.h"
 #include "core/levels.h"
+#include "core/light.h"
 #include "core/map_background.h"
 #include "core/movement.h"
 
 namespace dnd {
 namespace {
+
+// Предел радиуса света в метрах: 1500 м заведомо больше любой карты.
+inline constexpr int kMaxLightMeters = 1000;
 
 // Команда без хвоста или команда с хвостом через пробел: «/map» и «/map off».
 auto MatchesCommand(std::string_view text, std::string_view name) -> bool {
@@ -328,6 +332,36 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
 
   if (MatchesCommand(text, "/reveal")) {
     return reject(ChatCommandError::kBadReveal);
+  }
+
+  if (MatchesCommand(text, "/light")) {
+    command.kind = ChatCommandKind::kLight;
+    const std::string_view args = CommandArgs(text, "/light");
+    if (args == "off") {
+      return command;
+    }
+    // «/light 6» — тусклый по умолчанию вдвое больше яркого; «/light 6 12».
+    const std::size_t space = args.find(' ');
+    int bright = 0;
+    int dim = 0;
+    if (!ParsePositiveNumber(
+            space == std::string_view::npos ? args : args.substr(0, space),
+            bright) ||
+        bright > kMaxLightMeters ||
+        (space != std::string_view::npos &&
+         (!ParsePositiveNumber(args.substr(space + 1), dim) ||
+          dim > kMaxLightMeters))) {
+      return reject(ChatCommandError::kBadLight);
+    }
+    if (dim == 0) {
+      dim = bright * 2;
+    }
+    if (dim < bright || dim > kMaxLightMeters) {
+      return reject(ChatCommandError::kBadLight);
+    }
+    command.light_bright_meters = bright;
+    command.light_dim_meters = dim;
+    return command;
   }
 
   if (MatchesCommand(text, "/xp")) {

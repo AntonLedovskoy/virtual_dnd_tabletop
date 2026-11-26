@@ -366,6 +366,7 @@ inline constexpr std::string_view kSheetTempHp = "Временные HP";
 inline constexpr std::string_view kSheetHitDie = "Кость хитов (d6–d12)";
 inline constexpr std::string_view kSheetCon = "Мод. Телосложения";
 inline constexpr std::string_view kSheetRange = "Дальность атаки";
+inline constexpr std::string_view kSheetDarkvision = "Тёмное зрение, м";
 inline constexpr std::string_view kSheetResist =
     "Сопротивления (через запятую)";
 inline constexpr std::string_view kSheetVulnerable = "Уязвимости";
@@ -436,6 +437,8 @@ inline constexpr std::string_view kSheetBadCon =
     "Модификатор Телосложения: от -20 до 20";
 inline constexpr std::string_view kSheetBadRange =
     "Дистанция атаки — целое число клеток";
+inline constexpr std::string_view kSheetBadDarkvision =
+    "Тёмное зрение — целое число метров (0 — нет)";
 inline constexpr std::string_view kSheetBadDamage =
     "Некорректное выражение урона";
 inline constexpr std::string_view kSheetBadDamageType =
@@ -512,6 +515,8 @@ inline constexpr std::string_view kRestUsage =
 inline constexpr std::string_view kFallUsage =
     "Использование: /fall 30 (высота падения в футах)";
 inline constexpr std::string_view kFallDmOnly = "Падение объявляет только DM";
+inline constexpr std::string_view kLightUsage =
+    "Использование: /light 6 (яркий, тусклый вдвое), /light 6 12, /light off";
 
 // Текст одного действия нижней подсказки. Какие действия показывать и в каком
 // порядке, решает core/ui_hint, поэтому строки остаются здесь.

@@ -6370,6 +6370,26 @@ auto TestChatCommandParsing() -> void {
   Expect(parse("/fall высоко").error == ChatCommandError::kBadFall,
          "/fall rejects text");
 
+  // /light: метры, тусклый по умолчанию вдвое больше яркого.
+  const dnd::ChatCommand torch = parse("/light 6");
+  Expect(torch.kind == ChatCommandKind::kLight &&
+             torch.light_bright_meters == 6 && torch.light_dim_meters == 12,
+         "/light defaults the dim radius to twice the bright one");
+  const dnd::ChatCommand lantern = parse("/light 6 15");
+  Expect(lantern.light_bright_meters == 6 && lantern.light_dim_meters == 15,
+         "/light keeps both radii");
+  const dnd::ChatCommand no_light = parse("/light off");
+  Expect(no_light.kind == ChatCommandKind::kLight &&
+             no_light.light_bright_meters == 0 &&
+             no_light.light_dim_meters == 0,
+         "/light off turns the light off");
+  Expect(parse("/light 0").error == ChatCommandError::kBadLight,
+         "/light rejects zero");
+  Expect(parse("/light 9 4").error == ChatCommandError::kBadLight,
+         "/light rejects a dim radius smaller than the bright one");
+  Expect(parse("/light").error == ChatCommandError::kBadLight,
+         "/light without radii is an error");
+
   // /time: по умолчанию минуты, суффиксы s/m/h.
   const dnd::ChatCommand minutes = parse("/time 10");
   Expect(minutes.kind == ChatCommandKind::kTime && minutes.value == 600,
