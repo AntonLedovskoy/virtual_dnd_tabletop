@@ -219,6 +219,10 @@ class GameServer {
   [[nodiscard]] auto HandleAwardXp(const AwardXp& command, bool can_control_all)
       -> CommandOutcome;
   [[nodiscard]] auto HandleNextTurn(bool can_control_all) -> CommandOutcome;
+  // DM бросает проверку способности за выбранный токен. «Помощь» союзнику
+  // даёт преимущество и тратится.
+  [[nodiscard]] auto HandleSkillCheck(const SkillCheck& command,
+                                      bool can_control_all) -> CommandOutcome;
 
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;
   // Виден ли стол клетке: общий обзор партии и ручные открытия DM.
@@ -234,9 +238,16 @@ class GameServer {
   // если токен действительно вступил.
   auto JoinEncounterIfNeeded(TokenId id, std::vector<Event>& events) -> bool;
   [[nodiscard]] auto PlayerFog(std::string_view actor) const -> const FogOfWar*;
-  // Токен виден игроку: клетка в его тумане и не в сильном затемнении.
+  // Токен виден игроку: клетка в его тумане, не в сильном затемнении, и
+  // скрытный токен замечает пассивное Восприятие его персонажей.
   [[nodiscard]] auto IsTokenVisibleTo(std::string_view actor,
                                       const Token& token) const -> bool;
+  // Замечает ли игрок скрытный токен: пассивное Восприятие его персонажей
+  // против результата Скрытности; в тусклом свете пассивное значение −5.
+  [[nodiscard]] auto NoticesHidden(std::string_view actor,
+                                   const Token& token) const -> bool;
+  // Пассивное Восприятие наблюдателя с поправкой на свет в его клетке.
+  [[nodiscard]] auto PassivePerception(const Token& observer) const -> int;
   // Туман сцены: переживает смену мира, карту другой формы не переносит.
   auto RestoreFog(const std::vector<FogRecord>& records) -> void;
   [[nodiscard]] auto FogRecords() const -> std::vector<FogRecord>;

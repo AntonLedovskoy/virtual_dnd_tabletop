@@ -57,6 +57,7 @@
 #include "core/session_crypto.h"
 #include "core/session_log.h"
 #include "core/sha256.h"
+#include "core/skills.h"
 #include "core/status_message.h"
 #include "core/ui_hint.h"
 #include "core/units.h"
@@ -5140,6 +5141,292 @@ auto TestTurnEconomy() -> void {
          "an incapacitated token has no actions");
 }
 
+auto TestSkills() -> void {
+  using dnd::Skill;
+  Expect(dnd::ParseSkill("Восприятие") == Skill::kPerception,
+         "a Russian skill name is parsed");
+  Expect(dnd::ParseSkill("STEALTH") == Skill::kStealth,
+         "an English skill name is parsed without case");
+  Expect(dnd::ParseSkill("уход за животными") == Skill::kAnimalHandling,
+         "a two-word skill name is parsed");
+  Expect(!dnd::ParseSkill("телепортация").has_value(),
+         "an unknown skill name is rejected");
+  Expect(dnd::SkillAbility(Skill::kAthletics) == dnd::Ability::kStrength,
+         "Athletics belongs to Strength");
+  Expect(dnd::SkillName(Skill::kMedicine) == "Медицина",
+         "a skill has a Russian name");
+
+  dnd::Token token;
+  token.skill_bonus = 3;
+  token.skill_proficiency =
+      dnd::SkillBit(Skill::kPerception) | dnd::SkillBit(Skill::kAthletics);
+  // Уровень 1 даёт бонус мастерства +2: владение прибавляется к основе.
+  Expect(dnd::SkillCheckBonus(token, Skill::kPerception) == 5,
+         "proficiency adds the proficiency bonus");
+  Expect(dnd::SkillCheckBonus(token, Skill::kStealth) == 3,
+         "an untrained skill keeps the sheet bonus");
+  Expect(dnd::PassiveSkillScore(token, Skill::kPerception) == 15,
+         "passive Perception is 10 plus the modifier");
+  Expect(dnd::PassiveSkillScore(token, Skill::kPerception, true) == 10,
+         "disadvantage lowers passive Perception by 5");
+  token.conditions.emplace_back(std::string(dnd::kExhaustion));
+  Expect(dnd::SkillCheckBonus(token, Skill::kPerception) == 3 &&
+             dnd::PassiveSkillScore(token, Skill::kPerception) == 13,
+         "exhaustion lowers checks and passive Perception");
+  Expect(
+      dnd::FormatSkillMask(token.skill_proficiency) == "Атлетика, Восприятие",
+      "skill proficiency is printed in enum order");
+  Expect(dnd::ParseSkillMask("восприятие, Атлетика") == token.skill_proficiency,
+         "a proficiency list is parsed back");
+  const std::optional<std::uint32_t> empty_mask = dnd::ParseSkillMask("");
+  Expect(dnd::ParseSkillMask("—") == 0, "an em dash clears proficiencies");
+  Expect(empty_mask.has_value() && empty_mask.value_or(1U) == 0,
+         "an empty list clears proficiencies");
+  Expect(!dnd::ParseSkillMask("Восприятие, ерунда").has_value(),
+         "an unknown skill in the list is rejected");
+
+  const dnd::ChatCommand check = dnd::ParseChatCommand("/check скрытность 18");
+  Expect(check.kind == dnd::ChatCommandKind::kCheck &&
+             check.skill == Skill::kStealth && check.save_dc == 18,
+         "/check parses a skill and a DC");
+  const dnd::ChatCommand default_dc =
+      dnd::ParseChatCommand("/check уход за животными");
+  Expect(default_dc.kind == dnd::ChatCommandKind::kCheck &&
+             default_dc.skill == Skill::kAnimalHandling &&
+             default_dc.save_dc == dnd::kDefaultSkillDc,
+         "/check without a DC uses the default 15");
+  Expect(dnd::ParseChatCommand("/check ерунда").error ==
+             dnd::ChatCommandError::kBadCheck,
+         "/check rejects an unknown skill");
+}
+
+auto TestHelpReadyAndSkillCheck() -> void {
+  const dnd::GridMap map(12, 3);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .initiative = 20,
+                         .ac = 10,
+                         .speed = 9,
+                         .attack_bonus = 100,
+                         .initiative_bonus = 100,
+                         .skill_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+              dnd::Token{.id = 2,
+                         .name = "rival",
+                         .owner = "bob",
+                         .initiative = 10,
+                         .ac = 1,
+                         .speed = 9,
+                         .attack_bonus = 100,
+                         .initiative_bonus = 0,
+                         .skill_bonus = 1000,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(2, 1)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 12, 7);
+  Expect(server.HandleCommand(dnd::StartEncounter{}, "", true).accepted,
+         "a help encounter starts");
+  Expect(server.State().ActiveTokenId() == 1, "the hero acts first");
+
+  // «Помощь» — союзнику в соседней клетке; сам себе помочь нельзя.
+  const dnd::CommandOutcome selfish = server.HandleCommand(
+      dnd::UseTurnAction{
+          .id = 1, .kind = dnd::TurnActionKind::kHelp, .target = 1},
+      "alice", false);
+  Expect(!selfish.accepted, "Help needs another token as the target");
+  Expect(server
+             .HandleCommand(
+                 dnd::UseTurnAction{
+                     .id = 1, .kind = dnd::TurnActionKind::kHelp, .target = 2},
+                 "alice", false)
+             .accepted,
+         "Help spends the action");
+  Expect(TokenOf(server.State(), 1).action_used &&
+             TokenOf(server.State(), 2).helped,
+         "Help marks the ally helped");
+  // Союзник бьёт в ответ (реакция): преимущество тратится броском.
+  Expect(server
+             .HandleCommand(
+                 dnd::AttackToken{.attacker = 2, .target = 1, .reaction = true},
+                 "bob", false)
+             .accepted,
+         "the helped ally attacks");
+  Expect(!TokenOf(server.State(), 2).helped,
+         "an attack spends the Help advantage");
+
+  // «Подготовиться» тратит действие, а реакция исполняет отложенное действие.
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the turn passes to the rival");
+  Expect(
+      server
+          .HandleCommand(
+              dnd::UseTurnAction{.id = 2, .kind = dnd::TurnActionKind::kReady},
+              "bob", false)
+          .accepted,
+      "Ready spends the action");
+  Expect(TokenOf(server.State(), 2).readied, "Ready marks the reaction armed");
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the turn returns to the hero");
+  Expect(server
+             .HandleCommand(
+                 dnd::AttackToken{.attacker = 2, .target = 1, .reaction = true},
+                 "bob", false)
+             .accepted,
+         "the readied reaction attacks");
+  Expect(!TokenOf(server.State(), 2).readied &&
+             TokenOf(server.State(), 2).reaction_used,
+         "the readied action spends the reaction");
+
+  // Скрытность прячет токен; поиск союзника его раскрывает.
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the rival ends their turn");
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the hero gets a new turn");
+  Expect(server.State().ActiveTokenId() == 1, "the hero acts again");
+  Expect(
+      server
+          .HandleCommand(
+              dnd::UseTurnAction{.id = 1, .kind = dnd::TurnActionKind::kHide},
+              "alice", false)
+          .accepted,
+      "Hide rolls Stealth");
+  const dnd::Token hidden = TokenOf(server.State(), 1);
+  Expect(hidden.hidden && hidden.stealth_total >= dnd::kDefaultSkillDc,
+         "a high Stealth check hides the hero");
+  Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
+         "the rival searches on their turn");
+  Expect(server
+             .HandleCommand(
+                 dnd::UseTurnAction{.id = 2,
+                                    .kind = dnd::TurnActionKind::kSearch,
+                                    .dc = dnd::kDefaultSkillDc},
+                 "bob", false)
+             .accepted,
+         "Search rolls Perception");
+  Expect(!TokenOf(server.State(), 1).hidden,
+         "a successful Search reveals a hidden neighbour");
+
+  // Проверка способности — инструмент DM: только мастер и только по КС.
+  const dnd::CommandOutcome player_check = server.HandleCommand(
+      dnd::SkillCheck{.id = 1, .skill = dnd::Skill::kPerception, .dc = 15},
+      "alice", false);
+  Expect(!player_check.accepted, "a player cannot roll ability checks");
+  const dnd::CommandOutcome bad_dc = server.HandleCommand(
+      dnd::SkillCheck{.id = 1, .skill = dnd::Skill::kPerception, .dc = 0}, "",
+      true);
+  Expect(!bad_dc.accepted, "a zero DC is rejected");
+  const dnd::CommandOutcome dm_check = server.HandleCommand(
+      dnd::SkillCheck{.id = 1, .skill = dnd::Skill::kAthletics, .dc = 15}, "",
+      true);
+  Expect(dm_check.accepted, "the DM rolls an ability check");
+  bool check_logged = false;
+  for (const dnd::Event& event : dm_check.events) {
+    if (const auto* line = std::get_if<dnd::LogLineAdded>(&event);
+        line != nullptr) {
+      check_logged = line->line.text.find("Атлетика") != std::string::npos &&
+                     line->line.text.find("КС 15") != std::string::npos;
+    }
+  }
+  Expect(check_logged, "the check log names the skill and the DC");
+
+  // Новые поля команд переживают сериализацию.
+  const std::vector<std::uint8_t> action_bytes = dnd::EncodeCommand(
+      dnd::Command{dnd::UseTurnAction{.id = 7,
+                                      .kind = dnd::TurnActionKind::kSearch,
+                                      .target = 4,
+                                      .dc = 18}});
+  const std::optional<dnd::Command> action_decoded =
+      dnd::DecodeCommand(action_bytes.data(), action_bytes.size());
+  Expect(action_decoded.has_value() &&
+             std::holds_alternative<dnd::UseTurnAction>(*action_decoded) &&
+             std::get<dnd::UseTurnAction>(*action_decoded).target == 4 &&
+             std::get<dnd::UseTurnAction>(*action_decoded).dc == 18,
+         "a turn action keeps its target and DC");
+  const std::vector<std::uint8_t> check_bytes = dnd::EncodeCommand(dnd::Command{
+      dnd::SkillCheck{.id = 3, .skill = dnd::Skill::kStealth, .dc = 12}});
+  const std::optional<dnd::Command> check_decoded =
+      dnd::DecodeCommand(check_bytes.data(), check_bytes.size());
+  Expect(check_decoded.has_value() &&
+             std::holds_alternative<dnd::SkillCheck>(*check_decoded) &&
+             std::get<dnd::SkillCheck>(*check_decoded).skill ==
+                 dnd::Skill::kStealth &&
+             std::get<dnd::SkillCheck>(*check_decoded).dc == 12,
+         "a skill check command survives serialization");
+}
+
+auto TestHiddenTokenVisibility() -> void {
+  const dnd::GridMap map(12, 2);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 0)},
+              dnd::Token{
+                  .id = 2,
+                  .name = "scout",
+                  .owner = "bob",
+                  .ac = 10,
+                  .skill_bonus = 6,
+                  .skill_proficiency = dnd::SkillBit(dnd::Skill::kPerception),
+                  .kind = dnd::TokenKind::kPlayer,
+                  .cell = CellAt(6, 0)},
+              dnd::Token{.id = 3,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .ac = 10,
+                         .skill_bonus = 100,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(4, 0),
+                         .hidden = true,
+                         .stealth_total = 15},
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameServer server(snapshot, 12);
+  // Пассивное Восприятие следопыта: 10 + 6 + 2 = 18, оно перебивает 15.
+  bool alice_sees = false;
+  bool bob_sees = false;
+  for (const dnd::Token& token : server.ClientSnapshot("alice").tokens) {
+    alice_sees = alice_sees || token.id == 3;
+  }
+  for (const dnd::Token& token : server.ClientSnapshot("bob").tokens) {
+    bob_sees = bob_sees || token.id == 3;
+  }
+  Expect(!alice_sees, "passive Perception 10 does not notice Stealth 15");
+  Expect(bob_sees, "passive Perception 18 notices Stealth 15");
+  bool dm_sees = false;
+  for (const dnd::Token& token : server.DmSnapshot().tokens) {
+    dm_sees = dm_sees || token.id == 3;
+  }
+  Expect(dm_sees, "the DM always sees hidden tokens");
+
+  // Скрытный токен с более высоким результатом не виден никому из игроков.
+  Expect(
+      server
+          .HandleCommand(
+              dnd::UseTurnAction{.id = 3, .kind = dnd::TurnActionKind::kHide},
+              "", true)
+          .accepted,
+      "the DM hides a monster with a Stealth check");
+  const dnd::Token goblin = TokenOf(server.State(), 3);
+  Expect(goblin.hidden, "the goblin is hidden after the check");
+}
+
 auto TestMovementPathsAndDiagonals() -> void {
   const dnd::GridMap corridor(6, 1);
   const dnd::GameSnapshot snapshot{
@@ -5987,6 +6274,8 @@ auto TestReadsPreviousVersions() -> void {
                   .darkvision_cells = 4,
                   .light_bright_cells = 2,
                   .light_dim_cells = 4,
+                  .skill_bonus = 4,
+                  .skill_proficiency = dnd::SkillBit(dnd::Skill::kStealth),
                   .resist = dnd::DamageTypeBit(dnd::DamageType::kFire),
                   .attack_range = 3,
                   .conditions = {dnd::Condition{"оглушён", 60, 12}},
@@ -5994,6 +6283,10 @@ auto TestReadsPreviousVersions() -> void {
                   .cell = CellAt(1, 1),
                   .action_used = true,
                   .dodging = true,
+                  .helped = true,
+                  .readied = true,
+                  .hidden = true,
+                  .stealth_total = 17,
               },
           },
       .next_token_id = 2,
@@ -6049,6 +6342,15 @@ auto TestReadsPreviousVersions() -> void {
             (version >= 32 ? static_cast<std::uint8_t>(dnd::LightLevel::kDark)
                            : dnd::kAmbientLight),
         "cell light appears with its version");
+    Expect(token.skill_bonus == (version >= 34 ? 4 : 0) &&
+               token.skill_proficiency ==
+                   (version >= 34 ? dnd::SkillBit(dnd::Skill::kStealth) : 0U),
+           "skill check fields appear with their version");
+    Expect(token.helped == (version >= 34) &&
+               token.readied == (version >= 34) &&
+               token.hidden == (version >= 34) &&
+               token.stealth_total == (version >= 34 ? 17 : 0),
+           "help, ready and stealth appear with their version");
   }
 
   WriteVersionedFile(save_path, save_magic, dnd::kMinSaveVersion - 1,
@@ -9150,6 +9452,9 @@ auto main() -> int {
     TestEncounterCommands();
     TestMovementBudget();
     TestTurnEconomy();
+    TestSkills();
+    TestHelpReadyAndSkillCheck();
+    TestHiddenTokenVisibility();
     TestMovementPathsAndDiagonals();
     TestDmOwnsCharacter();
     TestCrawlJumpFall();

@@ -253,6 +253,9 @@ class App {
     int hit_dice_count = 0;
     // Тёмное зрение в метрах: в токене оно хранится в клетках.
     int darkvision = 0;
+    // Общий модификатор проверок и маска владений навыками.
+    int skill = 0;
+    std::uint32_t proficiencies = 0;
     std::string damage;
     std::string notes;
     std::uint32_t resist = 0;
@@ -486,6 +489,8 @@ class App {
   std::string sheet_vulnerable_;
   std::string sheet_immune_;
   std::string sheet_notes_;
+  std::string sheet_skill_;
+  std::string sheet_proficiencies_;
 
   bool bestiary_active_ = false;
   bool conditions_active_ = false;

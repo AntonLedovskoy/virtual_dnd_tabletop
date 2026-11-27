@@ -526,6 +526,26 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
     }
     lines.push_back(std::move(condition_line));
   }
+  // Метки состояний проверок: их видно до броска, который их снимает.
+  std::string state_line;
+  const auto add_state = [&state_line](std::string_view label) -> void {
+    if (!state_line.empty()) {
+      state_line += ", ";
+    }
+    state_line += label;
+  };
+  if (token->hidden) {
+    add_state(strings::kStateHidden);
+  }
+  if (token->readied) {
+    add_state(strings::kStateReadied);
+  }
+  if (token->helped) {
+    add_state(strings::kStateHelped);
+  }
+  if (!state_line.empty()) {
+    lines.push_back(std::move(state_line));
+  }
 
   std::vector<std::string> hints;
   if (is_client && can_claim) {
@@ -758,7 +778,8 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& immune, const std::string& notes,
                     const std::string& darkvision, const std::string& max_hp,
                     const std::string& auto_hp,
-                    const std::string& hit_dice_count, bool read_only) -> void {
+                    const std::string& hit_dice_count, const std::string& skill,
+                    const std::string& proficiencies, bool read_only) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -805,27 +826,53 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                left, cursor_y, kHintText, content_width);
   }
 
-  const SDL_FRect ac_field{left, y + 100.0F, 174.0F, 36.0F};
-  const SDL_FRect speed_field{left + 193.0F, y + 100.0F, 174.0F, 36.0F};
-  const SDL_FRect initiative_field{left + 386.0F, y + 100.0F, 174.0F, 36.0F};
-  const SDL_FRect swim_field{left, y + 152.0F, 174.0F, 36.0F};
-  const SDL_FRect climb_field{left + 193.0F, y + 152.0F, 174.0F, 36.0F};
-  const SDL_FRect attack_field{left + 386.0F, y + 152.0F, 174.0F, 36.0F};
-  const SDL_FRect save_field{left, y + 204.0F, 174.0F, 36.0F};
-  const SDL_FRect temp_hp_field{left + 193.0F, y + 204.0F, 174.0F, 36.0F};
-  const SDL_FRect hit_die_field{left + 386.0F, y + 204.0F, 174.0F, 36.0F};
-  const SDL_FRect con_field{left, y + 256.0F, 174.0F, 36.0F};
-  const SDL_FRect range_field{left + 193.0F, y + 256.0F, 174.0F, 36.0F};
-  const SDL_FRect darkvision_field{left + 386.0F, y + 256.0F, 174.0F, 36.0F};
-  const SDL_FRect max_hp_field{left, y + 308.0F, 174.0F, 36.0F};
-  const SDL_FRect auto_hp_field{left + 193.0F, y + 308.0F, 174.0F, 36.0F};
-  const SDL_FRect hit_dice_count_field{left + 386.0F, y + 308.0F, 174.0F,
-                                       36.0F};
-  const SDL_FRect damage_field{left, y + 360.0F, content_width, 36.0F};
-  const SDL_FRect resist_field{left, y + 408.0F, content_width, 36.0F};
-  const SDL_FRect vulnerable_field{left, y + 456.0F, content_width, 36.0F};
-  const SDL_FRect immune_field{left, y + 504.0F, content_width, 36.0F};
-  const SDL_FRect notes_field{left, y + 552.0F, content_width, 36.0F};
+  // Сетка из трёх колонок шагом 44 при высоте поля 24: метка поля рисуется
+  // на 20 px выше рамки и как раз укладывается в промежуток.
+  constexpr float row_step = 44.0F;
+  constexpr float field_height = 24.0F;
+  constexpr float column_width = 174.0F;
+  constexpr float column_step = 193.0F;
+  const auto grid_row = [&](int row) -> float {
+    return y + 96.0F + row_step * static_cast<float>(row);
+  };
+  const SDL_FRect ac_field{left, grid_row(0), column_width, field_height};
+  const SDL_FRect speed_field{left + column_step, grid_row(0), column_width,
+                              field_height};
+  const SDL_FRect initiative_field{left + 2.0F * column_step, grid_row(0),
+                                   column_width, field_height};
+  const SDL_FRect swim_field{left, grid_row(1), column_width, field_height};
+  const SDL_FRect climb_field{left + column_step, grid_row(1), column_width,
+                              field_height};
+  const SDL_FRect attack_field{left + 2.0F * column_step, grid_row(1),
+                               column_width, field_height};
+  const SDL_FRect save_field{left, grid_row(2), column_width, field_height};
+  const SDL_FRect temp_hp_field{left + column_step, grid_row(2), column_width,
+                                field_height};
+  const SDL_FRect hit_die_field{left + 2.0F * column_step, grid_row(2),
+                                column_width, field_height};
+  const SDL_FRect con_field{left, grid_row(3), column_width, field_height};
+  const SDL_FRect range_field{left + column_step, grid_row(3), column_width,
+                              field_height};
+  const SDL_FRect darkvision_field{left + 2.0F * column_step, grid_row(3),
+                                   column_width, field_height};
+  const SDL_FRect max_hp_field{left, grid_row(4), column_width, field_height};
+  const SDL_FRect auto_hp_field{left + column_step, grid_row(4), column_width,
+                                field_height};
+  const SDL_FRect hit_dice_count_field{left + 2.0F * column_step, grid_row(4),
+                                       column_width, field_height};
+  const SDL_FRect skill_field{left, grid_row(5), column_width, field_height};
+  // Широкие строки идут шагом 40 и заканчиваются выше подсказок.
+  const auto wide_row = [&](int row) -> float {
+    return y + 364.0F + 40.0F * static_cast<float>(row);
+  };
+  const SDL_FRect damage_field{left, wide_row(0), content_width, field_height};
+  const SDL_FRect resist_field{left, wide_row(1), content_width, field_height};
+  const SDL_FRect vulnerable_field{left, wide_row(2), content_width,
+                                   field_height};
+  const SDL_FRect immune_field{left, wide_row(3), content_width, field_height};
+  const SDL_FRect notes_field{left, wide_row(4), content_width, field_height};
+  const SDL_FRect proficiencies_field{left, wide_row(5), content_width,
+                                      field_height};
 
   const bool editing = !read_only;
   DrawModalField(renderer, text, ac_field, std::string(strings::kSheetAc), ac,
@@ -880,6 +927,11 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                  editing && active == SheetField::kImmune);
   DrawModalField(renderer, text, notes_field, std::string(strings::kSheetNotes),
                  notes, editing && active == SheetField::kNotes);
+  DrawModalField(renderer, text, skill_field, std::string(strings::kSheetSkill),
+                 skill, editing && active == SheetField::kSkill);
+  DrawModalField(renderer, text, proficiencies_field,
+                 std::string(strings::kSheetProficiencies), proficiencies,
+                 editing && active == SheetField::kProficiencies);
 
   if (read_only) {
     text->Draw(std::string(strings::kSheetViewHint), left, y + height - 30.0F,
@@ -1087,7 +1139,7 @@ auto DrawActionsPanel(SDL_Renderer* renderer, TextRenderer* text,
     return;
   }
   constexpr float width = 560.0F;
-  constexpr float height = 360.0F;
+  constexpr float height = 390.0F;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};

@@ -38,6 +38,7 @@
 #include "core/player_name.h"
 #include "core/scene_io.h"
 #include "core/scene_light.h"
+#include "core/skills.h"
 #include "core/ui_hint.h"
 #include "core/units.h"
 #include "core/update.h"
@@ -229,6 +230,8 @@ auto ChatUsageText(ChatCommandError error) -> std::string_view {
       return strings::kFallUsage;
     case ChatCommandError::kBadLight:
       return strings::kLightUsage;
+    case ChatCommandError::kBadCheck:
+      return strings::kCheckUsage;
     case ChatCommandError::kNone:
       break;
   }
@@ -3444,6 +3447,8 @@ auto App::LoadSheetFields(const Token& token) -> void {
   sheet_vulnerable_ = FormatDamageTypeList(token.vulnerable);
   sheet_immune_ = FormatDamageTypeList(token.immune);
   sheet_notes_ = token.notes;
+  sheet_skill_ = std::to_string(token.skill_bonus);
+  sheet_proficiencies_ = FormatSkillMask(token.skill_proficiency);
 }
 
 auto App::ShowStatus(std::string_view message) -> void {
@@ -3473,13 +3478,13 @@ auto App::DrawActiveSheet() -> void {
     CloseSheet();
     return;
   }
-  DrawSheetPanel(renderer_, text_.get(), *token, sheet_field_, sheet_ac_,
-                 sheet_speed_, sheet_swim_, sheet_climb_, sheet_attack_,
-                 sheet_save_, sheet_initiative_, sheet_temp_hp_, sheet_hit_die_,
-                 sheet_con_, sheet_range_, sheet_damage_, sheet_resist_,
-                 sheet_vulnerable_, sheet_immune_, sheet_notes_,
-                 sheet_darkvision_, sheet_max_hp_, sheet_auto_hp_,
-                 sheet_hit_dice_, sheet_read_only_);
+  DrawSheetPanel(
+      renderer_, text_.get(), *token, sheet_field_, sheet_ac_, sheet_speed_,
+      sheet_swim_, sheet_climb_, sheet_attack_, sheet_save_, sheet_initiative_,
+      sheet_temp_hp_, sheet_hit_die_, sheet_con_, sheet_range_, sheet_damage_,
+      sheet_resist_, sheet_vulnerable_, sheet_immune_, sheet_notes_,
+      sheet_darkvision_, sheet_max_hp_, sheet_auto_hp_, sheet_hit_dice_,
+      sheet_skill_, sheet_proficiencies_, sheet_read_only_);
 }
 
 auto App::CloseSheet() -> void {
@@ -3529,6 +3534,8 @@ auto App::SaveSheet() -> void {
     token->resist = values.resist & kAllDamageTypes;
     token->vulnerable = values.vulnerable & kAllDamageTypes;
     token->immune = values.immune & kAllDamageTypes;
+    token->skill_bonus = values.skill;
+    token->skill_proficiency = values.proficiencies;
     editor_status_.Set(std::string(strings::kEditorSheetSaved) + token->name);
     CloseSheet();
     return;
@@ -3565,7 +3572,9 @@ auto App::SaveSheet() -> void {
       .immune = values.immune,
       .swim_speed = values.swim,
       .climb_speed = values.climb,
-      .darkvision_cells = LightCellsFromMeters(values.darkvision)});
+      .darkvision_cells = LightCellsFromMeters(values.darkvision),
+      .skill_bonus = values.skill,
+      .skill_proficiency = values.proficiencies});
   CloseSheet();
 }
 
@@ -3640,6 +3649,18 @@ auto App::ReadSheetValues(SheetValues& values) -> bool {
   }
   values.damage = sheet_damage_;
   values.notes = sheet_notes_;
+  if (!ParseSignedNumber(sheet_skill_, values.skill) || values.skill < -100 ||
+      values.skill > 100) {
+    ShowStatus(std::string(strings::kSheetBadSkill));
+    return false;
+  }
+  const std::optional<std::uint32_t> proficiencies =
+      ParseSkillMask(sheet_proficiencies_);
+  if (!proficiencies.has_value()) {
+    ShowStatus(std::string(strings::kSheetBadProficiency));
+    return false;
+  }
+  values.proficiencies = *proficiencies;
   return true;
 }
 
@@ -3723,7 +3744,8 @@ auto App::HandleSheetTextInput(const char* text) -> void {
       sheet_field_ == SheetField::kRange ||
       sheet_field_ == SheetField::kDarkvision ||
       sheet_field_ == SheetField::kMaxHp ||
-      sheet_field_ == SheetField::kHitDiceCount) {
+      sheet_field_ == SheetField::kHitDiceCount ||
+      sheet_field_ == SheetField::kSkill) {
     switch (sheet_field_) {
       case SheetField::kAc:
         AppendBoundedNumber(sheet_ac_, text, 1, 1000, false);
@@ -3771,6 +3793,9 @@ auto App::HandleSheetTextInput(const char* text) -> void {
       case SheetField::kHitDiceCount:
         AppendBoundedNumber(sheet_hit_dice_, text, 0, 1000, false);
         break;
+      case SheetField::kSkill:
+        AppendBoundedNumber(sheet_skill_, text, -100, 100, true);
+        break;
       default:
         break;
     }
@@ -3798,6 +3823,10 @@ auto App::HandleSheetTextInput(const char* text) -> void {
   }
   if (sheet_field_ == SheetField::kImmune) {
     AppendUtf8(sheet_immune_, text, 128);
+    return;
+  }
+  if (sheet_field_ == SheetField::kProficiencies) {
+    AppendUtf8(sheet_proficiencies_, text, kMaxSkillListBytes);
     return;
   }
   AppendUtf8(sheet_notes_, text, 512);
@@ -3889,6 +3918,12 @@ auto App::HandleSheetKeyDown(const SDL_KeyboardEvent& key) -> void {
       break;
     case SheetField::kNotes:
       buffer = &sheet_notes_;
+      break;
+    case SheetField::kSkill:
+      buffer = &sheet_skill_;
+      break;
+    case SheetField::kProficiencies:
+      buffer = &sheet_proficiencies_;
       break;
   }
   if (buffer != nullptr) {
@@ -4053,8 +4088,20 @@ auto App::HandleActionsKeyDown(const SDL_KeyboardEvent& key) -> void {
   if (key.key >= SDLK_1 &&
       key.key < SDLK_1 + static_cast<SDL_Keycode>(kTurnActionCount)) {
     const auto index = static_cast<std::uint8_t>(key.key - SDLK_1);
-    SendCommand(UseTurnAction{.id = actions_token_id_,
-                              .kind = static_cast<TurnActionKind>(index)});
+    const auto kind = static_cast<TurnActionKind>(index);
+    UseTurnAction action{.id = actions_token_id_, .kind = kind};
+    if (kind == TurnActionKind::kHelp) {
+      // Цель «Помощи» — союзник под курсором, как у атаки.
+      action.target = TokenAt(CellFromPixel(mouse_x_, mouse_y_));
+      if (action.target == 0 || action.target == actions_token_id_) {
+        view_.AddLocalLine("Наведите курсор на союзника в соседней клетке");
+        return;
+      }
+    }
+    if (kind == TurnActionKind::kSearch || kind == TurnActionKind::kStudy) {
+      action.dc = static_cast<int>(kDefaultSkillDc);
+    }
+    SendCommand(action);
     CloseActions();
   }
 }
@@ -4692,6 +4739,18 @@ auto App::SubmitChat() -> void {
           .id = token->id,
           .bright_cells = LightCellsFromMeters(command.light_bright_meters),
           .dim_cells = LightCellsFromMeters(command.light_dim_meters)});
+      return;
+    case ChatCommandKind::kCheck:
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine(std::string(strings::kCheckDmOnly));
+        return;
+      }
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      SendCommand(SkillCheck{
+          .id = token->id, .skill = command.skill, .dc = command.save_dc});
       return;
   }
 }

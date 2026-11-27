@@ -15,13 +15,15 @@ constexpr std::uint32_t kMagic = 0x53444E44;  // "DNDS" в little-endian
 constexpr std::uint32_t kMaxPayload = 64U * 1024U * 1024U;
 // Что появилось когда: экономика хода — сохранение 28, защиты от урона и
 // дистанция атаки — 29, игровые часы и время длинного отдыха — 30,
-// свойства клеток и палитра урона — 31, свет и зрение — 32, HP по костям — 33.
+// свойства клеток и палитра урона — 31, свет и зрение — 32, HP по костям — 33,
+// проверки способностей и скрытность — 34.
 constexpr std::uint32_t kTurnEconomySaveVersion = 28;
 constexpr std::uint32_t kDamageProfileSaveVersion = 29;
 constexpr std::uint32_t kGameClockSaveVersion = 30;
 constexpr std::uint32_t kCellPropsSaveVersion = 31;
 constexpr std::uint32_t kVisionSaveVersion = 32;
 constexpr std::uint32_t kAutoHpSaveVersion = 33;
+constexpr std::uint32_t kSkillsSaveVersion = 34;
 
 auto ReadU32(std::istream& in, std::uint32_t& value) -> bool {
   std::uint32_t result = 0;
@@ -53,6 +55,7 @@ auto SaveSnapshotFormat(std::uint32_t save_version) -> SnapshotFormat {
       .has_cell_props = save_version >= kCellPropsSaveVersion,
       .has_vision = save_version >= kVisionSaveVersion,
       .has_auto_hp = save_version >= kAutoHpSaveVersion,
+      .has_skills = save_version >= kSkillsSaveVersion,
   };
 }
 

@@ -151,7 +151,7 @@ inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "R — освободить своего персонажа",
     "/portrait файл.png — портрет своего персонажа",
 };
-inline constexpr std::array<std::string_view, 20> kHelpDm = {
+inline constexpr std::array<std::string_view, 21> kHelpDm = {
     "P — персонаж под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -172,6 +172,7 @@ inline constexpr std::array<std::string_view, 20> kHelpDm = {
     "/xp 300 — опыт выбранному, /xp 300 all — всей партии",
     "/time 10 — прокрутить 10 минут вне боя (s/m/h)",
     "/deathsave вручную, /stabilize — Медицина КС 10 (DM)",
+    "/check восприятие 15 — проверка способности (DM)",
 };
 
 inline constexpr std::string_view kWindowTitle = "Виртуальный стол для D&D";
@@ -414,7 +415,7 @@ inline constexpr std::string_view kConditionExhaustionMax =
 // Панель действий хода: список 2024 и подсказки о счётчиках.
 inline constexpr std::string_view kActionsTitle = "Действия";
 inline constexpr std::string_view kActionsHint =
-    "1–8 — потратить действие | Esc — закрыть";
+    "1–9 — потратить действие | Esc — закрыть";
 inline constexpr std::string_view kActionsNoAccess =
     "Действиями управляет владелец токена";
 inline constexpr std::string_view kActionAvailable = "Действие доступно";
@@ -428,24 +429,31 @@ inline constexpr std::string_view kActionReaction = "Реакция";
 inline constexpr std::string_view kCounterAvailable = "есть";
 inline constexpr std::string_view kCounterSpent = "потрачено";
 inline constexpr std::string_view kActionDashBonus = "Рывок: ещё ";
-inline constexpr std::array<std::string_view, 8> kActionNames = {
-    "Рывок",    "Отход", "Уклонение", "Помощь",
-    "Скрыться", "Поиск", "Изучение",  "Использовать предмет"};
-inline constexpr std::array<std::string_view, 8> kActionNotes = {
+inline constexpr std::array<std::string_view, 9> kActionNames = {
+    "Рывок",        "Отход", "Уклонение", "Помощь",
+    "Скрыться",     "Поиск", "Изучение",  "Использовать предмет",
+    "Подготовиться"};
+inline constexpr std::array<std::string_view, 9> kActionNotes = {
     "дополнительное движение",
     "движение без атак по возможности",
     "атаки по вам с помехой",
-    "преимущество союзнику",
-    "спрятаться",
-    "осмотреть местность",
+    "преимущество союзнику под курсором",
+    "проверка Скрытности против КС 15",
+    "Восприятие: заметить скрытных",
     "вспомнить сведения",
-    "применить предмет"};
+    "применить предмет",
+    "отложить действие за реакцию"};
 inline constexpr std::string_view kMovementLeft = "Осталось хода";
 inline constexpr std::string_view kMovementOf = "из";
 inline constexpr std::string_view kMovementFree =
     "Вне боя запас движения не тратится";
 inline constexpr std::string_view kSheetDamage = "Урон";
 inline constexpr std::string_view kSheetNotes = "Заметки";
+inline constexpr std::string_view kSheetSkill = "Проверки";
+inline constexpr std::string_view kSheetProficiencies = "Владения навыками";
+inline constexpr std::string_view kStateHidden = "Скрыт";
+inline constexpr std::string_view kStateReadied = "Готовность";
+inline constexpr std::string_view kStateHelped = "Помощь";
 inline constexpr std::string_view kSheetRangeHint =
     "Дальность 0 — ближний бой, досягаемость 1 клетка";
 inline constexpr std::string_view kSheetHint =
@@ -470,6 +478,10 @@ inline constexpr std::string_view kSheetBadDamage =
     "Некорректное выражение урона";
 inline constexpr std::string_view kSheetBadDamageType =
     "Неизвестный тип урона: дробящий, колющий, рубящий, огонь, холод, яд…";
+inline constexpr std::string_view kSheetBadSkill =
+    "Модификатор проверок: целое от -100 до 100";
+inline constexpr std::string_view kSheetBadProficiency =
+    "Владения: навыки через запятую, например «Восприятие, Скрытность»";
 inline constexpr std::string_view kSheetNoAccess =
     "Лист этого токена показывает только DM";
 inline constexpr std::string_view kBestiaryTitle = "Бестиарий";
@@ -544,6 +556,10 @@ inline constexpr std::string_view kFallUsage =
 inline constexpr std::string_view kFallDmOnly = "Падение объявляет только DM";
 inline constexpr std::string_view kLightUsage =
     "Использование: /light 6 (яркий, тусклый вдвое), /light 6 12, /light off";
+inline constexpr std::string_view kCheckUsage =
+    "Использование: /check восприятие [КС] (бросок за выбранный токен)";
+inline constexpr std::string_view kCheckDmOnly =
+    "Проверки способностей бросает только DM";
 
 // Текст одного действия нижней подсказки. Какие действия показывать и в каком
 // порядке, решает core/ui_hint, поэтому строки остаются здесь.

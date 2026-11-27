@@ -11,6 +11,7 @@
 #include "core/hit_points.h"
 #include "core/levels.h"
 #include "core/player_name.h"
+#include "core/skills.h"
 #include "core/units.h"
 
 namespace dnd {
@@ -581,7 +582,8 @@ auto GameState::UpdateTokenSheet(
     int hit_die, int con_modifier, int attack_range, std::uint32_t resist,
     std::uint32_t vulnerable, std::uint32_t immune, int swim_speed,
     int climb_speed, int darkvision_cells, int max_hp, bool auto_hp,
-    int hit_dice_count) -> std::optional<Token> {
+    int hit_dice_count, int skill_bonus, std::uint32_t skill_proficiency)
+    -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
@@ -613,6 +615,8 @@ auto GameState::UpdateTokenSheet(
   token->swim_speed = swim_speed;
   token->climb_speed = climb_speed;
   token->darkvision_cells = std::max(0, darkvision_cells);
+  token->skill_bonus = skill_bonus;
+  token->skill_proficiency = skill_proficiency & kAllSkills;
   return *token;
 }
 
@@ -707,10 +711,12 @@ auto GameState::SpendReaction(TokenId id) -> std::optional<Token> {
     return std::nullopt;
   }
   token->reaction_used = true;
+  // Отложенное действие (Ready) исполняется реакцией: запас исчерпан.
+  token->readied = false;
   return *token;
 }
 
-auto GameState::UseTurnAction(TokenId id, TurnActionKind kind)
+auto GameState::UseTurnAction(TokenId id, TurnActionKind kind, TokenId target)
     -> std::optional<Token> {
   if (!IsValidTurnAction(kind)) {
     return std::nullopt;
@@ -732,15 +738,46 @@ auto GameState::UseTurnAction(TokenId id, TurnActionKind kind)
     case TurnActionKind::kDodge:
       token->dodging = true;
       break;
-    case TurnActionKind::kHelp:
+    case TurnActionKind::kHelp: {
+      // Помощь даёт союзнику преимущество на следующую атаку или проверку.
+      Token* ally = FindToken(target);
+      if (ally != nullptr && ally->id != token->id) {
+        ally->helped = true;
+      }
+      break;
+    }
+    case TurnActionKind::kReady:
+      // Действие отложено: реакция остаётся свободной до срабатывания.
+      token->readied = true;
+      break;
     case TurnActionKind::kHide:
     case TurnActionKind::kSearch:
     case TurnActionKind::kStudy:
     case TurnActionKind::kUseObject:
-      // Подсказки для стола: отдельных автоматических эффектов у этих
-      // действий в первой версии нет.
+      // Броски этих приёмов делает сервер: скрытность, поиск и изучение
+      // зависят от костей и мира.
       break;
   }
+  return *token;
+}
+
+auto GameState::SetTokenHidden(TokenId id, int stealth_total)
+    -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->hidden = stealth_total > 0;
+  token->stealth_total = stealth_total > 0 ? stealth_total : 0;
+  return *token;
+}
+
+auto GameState::ClearTokenHelped(TokenId id) -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr) {
+    return std::nullopt;
+  }
+  token->helped = false;
   return *token;
 }
 
@@ -753,6 +790,8 @@ auto GameState::ResetTurnEconomy(Token& token) -> void {
   token.movement_bonus = 0;
   token.disengaged = false;
   token.dodging = false;
+  // Отложенное действие живёт до начала следующего хода токена.
+  token.readied = false;
   token.hazards_done.clear();
 }
 

@@ -120,7 +120,8 @@ class GameState {
       std::uint32_t resist = 0, std::uint32_t vulnerable = 0,
       std::uint32_t immune = 0, int swim_speed = 0, int climb_speed = 0,
       int darkvision_cells = 0, int max_hp = 10, bool auto_hp = false,
-      int hit_dice_count = 0) -> std::optional<Token>;
+      int hit_dice_count = 0, int skill_bonus = 0,
+      std::uint32_t skill_proficiency = 0) -> std::optional<Token>;
   // Свет, который носит токен: радиусы в клетках, 0 — выключить.
   [[nodiscard]] auto SetTokenLight(TokenId id, int bright_cells, int dim_cells)
       -> std::optional<Token>;
@@ -146,8 +147,15 @@ class GameState {
   [[nodiscard]] auto SpendAction(TokenId id) -> std::optional<Token>;
   [[nodiscard]] auto SpendReaction(TokenId id) -> std::optional<Token>;
   // Действие хода: отмечает действие потраченным и включает эффект приёма.
-  [[nodiscard]] auto UseTurnAction(TokenId id, TurnActionKind kind)
+  // target — союзник для «Помощи» (преимущество на его следующую атаку или
+  // проверку); «Подготовиться» ставит отложенное действие.
+  [[nodiscard]] auto UseTurnAction(TokenId id, TurnActionKind kind,
+                                   TokenId target = 0) -> std::optional<Token>;
+  // Скрытность: stealth_total > 0 прячет токен, 0 — снимает скрытность.
+  [[nodiscard]] auto SetTokenHidden(TokenId id, int stealth_total)
       -> std::optional<Token>;
+  // «Помощь» израсходована: снимает преимущество следующей атаки/проверки.
+  [[nodiscard]] auto ClearTokenHelped(TokenId id) -> std::optional<Token>;
 
   // Боевой порядок.
   [[nodiscard]] auto EncounterState() const -> const Encounter& {
@@ -199,7 +207,7 @@ class GameState {
   [[nodiscard]] auto FindToken(TokenId id) const -> const Token*;
   auto RebuildOrder(TokenId keep) -> void;
   // Начало хода: полный запас движения, доступные действие, бонусное действие
-  // и реакция, снятые эффекты рывка, отхода и уклонения.
+  // и реакция, снятые эффекты рывка, отхода, уклонения и отложенного действия.
   static auto ResetTurnEconomy(Token& token) -> void;
 
   GridMap map_;

@@ -10,6 +10,7 @@
 #include "core/levels.h"
 #include "core/map_background.h"
 #include "core/movement.h"
+#include "core/skills.h"
 
 namespace dnd {
 namespace {
@@ -69,6 +70,7 @@ constexpr std::uint8_t kCommandSetEncounterComposition = 36;
 constexpr std::uint8_t kCommandFallToken = 37;
 constexpr std::uint8_t kCommandSetTokenLight = 38;
 constexpr std::uint8_t kCommandStabilize = 39;
+constexpr std::uint8_t kCommandSkillCheck = 40;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -150,6 +152,15 @@ auto WriteToken(ByteWriter& writer, const Token& token,
     writer.U8(token.auto_hp ? 1 : 0);
     writer.I32(token.hit_dice_count);
   }
+  // Проверки способностей, скрытность и «Помощь» появились в сохранении 34.
+  if (format.has_skills) {
+    writer.I32(token.skill_bonus);
+    writer.U32(token.skill_proficiency);
+    writer.U8(token.helped ? 1 : 0);
+    writer.U8(token.readied ? 1 : 0);
+    writer.U8(token.hidden ? 1 : 0);
+    writer.I32(token.stealth_total);
+  }
 }
 
 auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
@@ -202,6 +213,12 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
   std::int32_t light_dim_cells = 0;
   std::uint8_t auto_hp = 0;
   std::int32_t hit_dice_count = 0;
+  std::int32_t skill_bonus = 0;
+  std::uint32_t skill_proficiency = 0;
+  std::uint8_t helped = 0;
+  std::uint8_t readied = 0;
+  std::uint8_t hidden = 0;
+  std::int32_t stealth_total = 0;
   if (!reader.U32(id) || !reader.String(name, kMaxNameLength) ||
       !reader.String(owner, kMaxNameLength) || !reader.I32(hp) ||
       !reader.I32(max_hp) || !reader.I32(temp_hp) || !reader.I32(initiative) ||
@@ -268,6 +285,12 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       (!reader.U8(auto_hp) || !reader.I32(hit_dice_count))) {
     return false;
   }
+  if (format.has_skills &&
+      (!reader.I32(skill_bonus) || !reader.U32(skill_proficiency) ||
+       !reader.U8(helped) || !reader.U8(readied) || !reader.U8(hidden) ||
+       !reader.I32(stealth_total))) {
+    return false;
+  }
   if (max_hp < 0 || max_hp > 1000000 || temp_hp < 0 || temp_hp > 1000 ||
       initiative < -1000000 || initiative > 1000000 || ac <= 0 || ac > 1000 ||
       speed < 0 || speed > 1000 || attack_bonus < -100 || attack_bonus > 100 ||
@@ -289,7 +312,9 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       light_bright_cells > kMaxLightCells || light_dim_cells < 0 ||
       light_dim_cells > kMaxLightCells ||
       light_dim_cells < light_bright_cells || auto_hp > 1 ||
-      hit_dice_count < 0 || hit_dice_count > 1000) {
+      hit_dice_count < 0 || hit_dice_count > 1000 || skill_bonus < -100 ||
+      skill_bonus > 100 || !IsValidSkillMask(skill_proficiency) || helped > 1 ||
+      readied > 1 || hidden > 1 || stealth_total < 0 || stealth_total > 1000) {
     return false;
   }
   if (!std::ranges::is_sorted(hazards_done) ||
@@ -320,6 +345,8 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       .attack_bonus = attack_bonus,
       .save_bonus = save_bonus,
       .initiative_bonus = initiative_bonus,
+      .skill_bonus = skill_bonus,
+      .skill_proficiency = skill_proficiency,
       .damage = std::move(damage),
       .resist = resist,
       .vulnerable = vulnerable,
@@ -341,6 +368,10 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
       .movement_bonus = movement_bonus,
       .disengaged = disengaged != 0,
       .dodging = dodging != 0,
+      .helped = helped != 0,
+      .readied = readied != 0,
+      .hidden = hidden != 0,
+      .stealth_total = stealth_total,
       .hazards_done = std::move(hazards_done),
   };
   return true;
@@ -589,12 +620,29 @@ auto DecodeAttackCommand(ByteReader& reader) -> std::optional<Command> {
 auto DecodeUseTurnActionCommand(ByteReader& reader) -> std::optional<Command> {
   std::uint32_t id = 0;
   std::uint8_t kind = 0;
-  if (!reader.U32(id) || !reader.U8(kind) ||
-      kind >= static_cast<std::uint8_t>(kTurnActionCount) || !reader.Done()) {
+  std::uint32_t target = 0;
+  std::int32_t dc = 0;
+  if (!reader.U32(id) || !reader.U8(kind) || !reader.U32(target) ||
+      !reader.I32(dc) || kind >= static_cast<std::uint8_t>(kTurnActionCount) ||
+      !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{UseTurnAction{.id = id,
+                               .kind = static_cast<TurnActionKind>(kind),
+                               .target = target,
+                               .dc = dc}};
+}
+
+auto DecodeSkillCheckCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  std::uint8_t skill = 0;
+  std::int32_t dc = 0;
+  if (!reader.U32(id) || !reader.U8(skill) || !reader.I32(dc) ||
+      skill >= static_cast<std::uint8_t>(kSkillCount) || !reader.Done()) {
     return std::nullopt;
   }
   return Command{
-      UseTurnAction{.id = id, .kind = static_cast<TurnActionKind>(kind)}};
+      SkillCheck{.id = id, .skill = static_cast<Skill>(skill), .dc = dc}};
 }
 
 auto DecodePingCommand(ByteReader& reader) -> std::optional<Command> {
@@ -898,6 +946,8 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
   std::int32_t max_hp = 10;
   std::uint8_t auto_hp = 0;
   std::int32_t hit_dice_count = 0;
+  std::int32_t skill_bonus = 0;
+  std::uint32_t skill_proficiency = 0;
   if (!reader.U32(id) || !reader.I32(ac) || !reader.I32(speed) ||
       !reader.String(notes, kMaxNotes) || !reader.I32(attack_bonus) ||
       !reader.I32(save_bonus) || !reader.I32(initiative_bonus) ||
@@ -907,15 +957,17 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
       !reader.U32(vulnerable) || !reader.U32(immune) ||
       !reader.I32(swim_speed) || !reader.I32(climb_speed) ||
       !reader.I32(darkvision_cells) || !reader.I32(max_hp) ||
-      !reader.U8(auto_hp) || !reader.I32(hit_dice_count) || !reader.Done() ||
-      !IsValidHitDie(hit_die) || con_modifier < -kMaxConModifier ||
-      con_modifier > kMaxConModifier || attack_range < 0 ||
-      attack_range > 1000 || swim_speed < 0 || swim_speed > 1000 ||
-      climb_speed < 0 || climb_speed > 1000 || darkvision_cells < 0 ||
-      darkvision_cells > kMaxLightCells || max_hp <= 0 || max_hp > 1000000 ||
-      auto_hp > 1 || hit_dice_count < 0 || hit_dice_count > 1000 ||
-      !IsValidDamageTypeBit(resist) || !IsValidDamageTypeBit(vulnerable) ||
-      !IsValidDamageTypeBit(immune)) {
+      !reader.U8(auto_hp) || !reader.I32(hit_dice_count) ||
+      !reader.I32(skill_bonus) || !reader.U32(skill_proficiency) ||
+      !reader.Done() || !IsValidHitDie(hit_die) ||
+      con_modifier < -kMaxConModifier || con_modifier > kMaxConModifier ||
+      attack_range < 0 || attack_range > 1000 || swim_speed < 0 ||
+      swim_speed > 1000 || climb_speed < 0 || climb_speed > 1000 ||
+      darkvision_cells < 0 || darkvision_cells > kMaxLightCells ||
+      max_hp <= 0 || max_hp > 1000000 || auto_hp > 1 || hit_dice_count < 0 ||
+      hit_dice_count > 1000 || skill_bonus < -100 || skill_bonus > 100 ||
+      !IsValidSkillMask(skill_proficiency) || !IsValidDamageTypeBit(resist) ||
+      !IsValidDamageTypeBit(vulnerable) || !IsValidDamageTypeBit(immune)) {
     return std::nullopt;
   }
   return Command{UpdateTokenSheet{.id = id,
@@ -938,7 +990,9 @@ auto DecodeUpdateTokenSheetCommand(ByteReader& reader)
                                   .immune = immune,
                                   .swim_speed = swim_speed,
                                   .climb_speed = climb_speed,
-                                  .darkvision_cells = darkvision_cells}};
+                                  .darkvision_cells = darkvision_cells,
+                                  .skill_bonus = skill_bonus,
+                                  .skill_proficiency = skill_proficiency}};
 }
 
 auto DecodeSetTokenLightCommand(ByteReader& reader) -> std::optional<Command> {
@@ -1607,6 +1661,8 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.I32(cmd.max_hp);
           writer.U8(cmd.auto_hp ? 1 : 0);
           writer.I32(cmd.hit_dice_count);
+          writer.I32(cmd.skill_bonus);
+          writer.U32(cmd.skill_proficiency);
         } else if constexpr (std::is_same_v<T, SetTokenLight>) {
           writer.U8(kCommandSetTokenLight);
           writer.U32(cmd.id);
@@ -1684,6 +1740,13 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
           writer.U8(kCommandUseTurnAction);
           writer.U32(cmd.id);
           writer.U8(static_cast<std::uint8_t>(cmd.kind));
+          writer.U32(cmd.target);
+          writer.I32(cmd.dc);
+        } else if constexpr (std::is_same_v<T, SkillCheck>) {
+          writer.U8(kCommandSkillCheck);
+          writer.U32(cmd.id);
+          writer.U8(static_cast<std::uint8_t>(cmd.skill));
+          writer.I32(cmd.dc);
         } else if constexpr (std::is_same_v<T, PingAt>) {
           writer.U8(kCommandPing);
           writer.I32(cmd.cell.x);
@@ -1804,6 +1867,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeAwardXpCommand(reader);
     case kCommandUseTurnAction:
       return DecodeUseTurnActionCommand(reader);
+    case kCommandSkillCheck:
+      return DecodeSkillCheckCommand(reader);
     default:
       return std::nullopt;
   }

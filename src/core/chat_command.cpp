@@ -11,6 +11,7 @@
 #include "core/light.h"
 #include "core/map_background.h"
 #include "core/movement.h"
+#include "core/skills.h"
 
 namespace dnd {
 namespace {
@@ -366,6 +367,38 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
     }
     command.light_bright_meters = bright;
     command.light_dim_meters = dim;
+    return command;
+  }
+
+  if (MatchesCommand(text, "/check")) {
+    command.kind = ChatCommandKind::kCheck;
+    const std::string_view args = CommandArgs(text, "/check");
+    // «/check восприятие», «/check скрытность 18»: КС необязательна, а имя
+    // навыка может состоять из двух слов, поэтому число ищем в конце.
+    std::string_view skill_text = args;
+    std::string_view dc_text;
+    const std::size_t space = args.rfind(' ');
+    if (space != std::string_view::npos) {
+      const std::string_view tail = args.substr(space + 1);
+      int dc = 0;
+      if (ParsePositiveNumber(tail, dc)) {
+        skill_text = args.substr(0, space);
+        dc_text = tail;
+      }
+    }
+    const std::optional<Skill> skill = ParseSkill(skill_text);
+    if (!skill.has_value()) {
+      return reject(ChatCommandError::kBadCheck);
+    }
+    command.skill = *skill;
+    command.save_dc = static_cast<int>(kDefaultSkillDc);
+    if (!dc_text.empty()) {
+      int dc = 0;
+      if (!ParsePositiveNumber(dc_text, dc) || dc > kMaxSaveDc) {
+        return reject(ChatCommandError::kBadCheck);
+      }
+      command.save_dc = dc;
+    }
     return command;
   }
 

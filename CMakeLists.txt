@@ -156,6 +156,7 @@ add_library(dnd_core STATIC
   src/core/session_crypto.cpp
   src/core/session_log.cpp
   src/core/sha256.cpp
+  src/core/skills.cpp
   src/core/status_message.cpp
   src/core/ui_hint.cpp
   src/core/update.cpp

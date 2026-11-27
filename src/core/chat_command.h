@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "core/damage.h"
+#include "core/skills.h"
 
 namespace dnd {
 
@@ -41,6 +42,7 @@ enum class ChatCommandKind : std::uint8_t {
   kRevealOff,
   kXp,
   kLight,
+  kCheck,
 };
 
 // Причина отказа в разборе. Русские подсказки живут в src/app/strings.h:
@@ -61,6 +63,7 @@ enum class ChatCommandError : std::uint8_t {
   kBadRest,
   kBadFall,
   kBadLight,
+  kBadCheck,
 };
 
 // Разобранная строка чата. При error != kNone команду отправлять нельзя,
@@ -84,6 +87,8 @@ struct ChatCommand {
   // /light: радиусы яркого и тусклого света в метрах; 0 — свет выключен.
   int light_bright_meters = 0;
   int light_dim_meters = 0;
+  // /check НАВЫК [КС]: навык проверки; КС лежит в save_dc.
+  Skill skill = Skill::kPerception;
 };
 
 // Разбирает строку чата, не обращаясь к миру: роль (DM или игрок), выбранный

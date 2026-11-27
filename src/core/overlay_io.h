@@ -11,10 +11,10 @@
 namespace dnd {
 
 // Файл партии — версионированный little-endian дамп Overlay. Снимки внутри
-// кодируются форматом сохранения той эпохи: версия 3 — текущий, версия 2 —
-// сохранение 31, версия 1 — 30. Поэтому смена формата снимка поднимает и
-// kOverlayVersion.
-inline constexpr auto kOverlayVersion = 4U;
+// кодируются форматом сохранения той эпохи: версия 4 — сохранение 33,
+// версия 3 — 32, версия 2 — 31, версия 1 — 30. Поэтому смена формата снимка
+// поднимает и kOverlayVersion.
+inline constexpr auto kOverlayVersion = 5U;
 inline constexpr auto kMinOverlayVersion = 1U;
 // Предел payload: снимков до kMaxOverlayScenes сцен.
 inline constexpr std::size_t kMaxOverlayBytes =

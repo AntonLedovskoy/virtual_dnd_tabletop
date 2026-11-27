@@ -9,6 +9,7 @@
 #include "core/encounter.h"
 #include "core/grid_map.h"
 #include "core/map_background.h"
+#include "core/skills.h"
 #include "core/token.h"
 
 namespace dnd {
@@ -159,6 +160,9 @@ struct UpdateTokenSheet {
   int climb_speed = 0;
   // Тёмное зрение в клетках; 0 — его нет.
   int darkvision_cells = 0;
+  // Проверки способностей: общий модификатор и маска владений навыками.
+  int skill_bonus = 0;
+  std::uint32_t skill_proficiency = 0;
 };
 
 // Владелец или DM: свет, который носит токен. Радиусы в клетках, 0 — свет
@@ -193,9 +197,10 @@ enum class TurnActionKind : std::uint8_t {
   kSearch = 5,
   kStudy = 6,
   kUseObject = 7,
+  kReady = 8,
 };
 
-inline constexpr int kTurnActionCount = 8;
+inline constexpr int kTurnActionCount = 9;
 
 [[nodiscard]] constexpr auto IsValidTurnAction(TurnActionKind kind) -> bool {
   return static_cast<std::uint8_t>(kind) <
@@ -203,9 +208,22 @@ inline constexpr int kTurnActionCount = 8;
 }
 
 // Владелец или DM: потратить действие на один из стандартных приёмов.
+// target — союзник для «Помощи»; dc — КС для «Поиска» и «Изучения»
+// (0 — КС 15 по умолчанию). Остальные приёмы target и dc игнорируют.
 struct UseTurnAction {
   TokenId id = 0;
   TurnActionKind kind = TurnActionKind::kDash;
+  TokenId target = 0;
+  int dc = 0;
+};
+
+// Только DM: проверка способности (навыка) выбранного токена против КС.
+// d20 + модификатор проверок + бонус мастерства за владение − истощение;
+// «Помощь» союзнику даёт преимущество и тратится.
+struct SkillCheck {
+  TokenId id = 0;
+  Skill skill = Skill::kPerception;
+  int dc = kDefaultSkillDc;
 };
 
 // Владелец или DM: нанести урон. Временные HP принимают удар первыми, при
@@ -327,6 +345,7 @@ using Command = std::variant<
     StartEncounter, EndEncounter, NextTurn, SetEncounterComposition, SetAoe,
     AttackToken, DamageToken, HealToken, RestParty, FallToken, AdvanceTime,
     AoeDamage, DeathSave, Stabilize, PingAt, SetMapBackground, SetTokenPortrait,
-    RevealArea, HideArea, ClearRevealed, AwardXp, UseTurnAction, SetTokenLight>;
+    RevealArea, HideArea, ClearRevealed, AwardXp, UseTurnAction, SetTokenLight,
+    SkillCheck>;
 
 }  // namespace dnd

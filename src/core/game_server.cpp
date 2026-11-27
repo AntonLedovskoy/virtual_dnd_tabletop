@@ -19,6 +19,7 @@
 #include "core/ownership.h"
 #include "core/player_name.h"
 #include "core/scene_light.h"
+#include "core/skills.h"
 #include "core/units.h"
 
 namespace dnd {
@@ -123,8 +124,31 @@ auto TurnActionName(TurnActionKind kind) -> const char* {
       return "Изучение";
     case TurnActionKind::kUseObject:
       return "Использовать предмет";
+    case TurnActionKind::kReady:
+      return "Подготовиться";
   }
   return "Действие";
+}
+
+// Бросок d20 с модификатором в тексте лога: «d20 + 3 = 15».
+auto FormatD20Roll(int bonus, const DiceRollResult& roll) -> std::string {
+  std::ostringstream text;
+  text << "d20";
+  if (bonus > 0) {
+    text << " + " << bonus;
+  } else if (bonus < 0) {
+    text << " - " << -bonus;
+  }
+  text << " = " << roll.breakdown;
+  if (roll.breakdown != std::to_string(roll.total)) {
+    text << " = " << roll.total;
+  }
+  return text.str();
+}
+
+// Исход проверки словом: «успех» или «провал».
+auto CheckOutcomeWord(int total, int dc) -> std::string_view {
+  return total >= dc ? "успех" : "провал";
 }
 
 auto TurnActionEffect(TurnActionKind kind, const Token& token) -> std::string {
@@ -145,6 +169,8 @@ auto TurnActionEffect(TurnActionKind kind, const Token& token) -> std::string {
       return " — вспоминает сведения";
     case TurnActionKind::kUseObject:
       return " — использует предмет";
+    case TurnActionKind::kReady:
+      return " — готовит отложенное действие";
   }
   return {};
 }
@@ -258,6 +284,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleAwardXp(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, UseTurnAction>) {
           return HandleUseTurnAction(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, SkillCheck>) {
+          return HandleSkillCheck(cmd, can_control_all);
         } else {
           return HandleNextTurn(can_control_all);
         }
@@ -790,30 +818,38 @@ auto GameServer::DamageAndLog(TokenId id, int amount, bool critical,
   const int save_bonus = token->save_bonus - ExhaustionPenalty(*token);
   const bool was_dead = HasCondition(*token, kDead);
   const bool concentrating = HasCondition(*token, kConcentration);
-  std::optional<Token> updated = state_.DamageToken(id, dealt, critical);
-  if (!updated.has_value()) {
+  std::optional<Token> damaged = state_.DamageToken(id, dealt, critical);
+  if (!damaged.has_value()) {
     return;
+  }
+  Token current = std::move(*damaged);
+  // Любой прошедший урон выдаёт скрытного: скрытность снимается.
+  if (current.hidden) {
+    if (const std::optional<Token> unhidden = state_.SetTokenHidden(id, 0);
+        unhidden.has_value()) {
+      current = *unhidden;
+    }
   }
   // Смерть, 0 HP и недееспособность рвут концентрацию без спасброска.
   bool concentration_broken = false;
-  if (concentrating && IsIncapacitated(*updated)) {
+  if (concentrating && IsIncapacitated(current)) {
     if (std::optional<Token> without =
             state_.RemoveTokenCondition(id, kConcentration)) {
-      updated = std::move(*without);
+      current = std::move(*without);
       concentration_broken = true;
     }
   }
-  const bool died = !was_dead && HasCondition(*updated, kDead);
+  const bool died = !was_dead && HasCondition(current, kDead);
   const int absorbed = std::min(temp_before, dealt);
   if (absorbed > 0) {
     text << " (" << absorbed << " из временных HP)";
   }
   if (died) {
     text << "; " << name << " погиб";
-  } else if (hp_before > 0 && updated->hp == 0) {
+  } else if (hp_before > 0 && current.hp == 0) {
     text << "; " << name << " без сознания";
   }
-  events.emplace_back(TokenUpdated{.token = *updated});
+  events.emplace_back(TokenUpdated{.token = current});
   events.emplace_back(LogLineAdded{
       .line = LogLine{.author = AuthorName(actor),
                       .text = text.str(),
@@ -1022,6 +1058,10 @@ auto GameServer::HandleAttack(const AttackToken& command,
       !IsVisibleTo(actor, target->cell)) {
     return CommandOutcome{.reject_reason = "цель не видна"};
   }
+  // Скрытную цель игрок не выбирает, пока её не выдало пассивное Восприятие.
+  if (!can_control_all && target->hidden && !NoticesHidden(actor, *target)) {
+    return CommandOutcome{.reject_reason = "цель не видна"};
+  }
   if (command.advantage && command.disadvantage) {
     return CommandOutcome{.reject_reason =
                               "нельзя одновременно преимущество и помеху"};
@@ -1050,14 +1090,18 @@ auto GameServer::HandleAttack(const AttackToken& command,
   }
   // Преимущество и помеха от состояний 2024 складываются с ручными и взаимно
   // гасятся (SRD 5.2.1). Взгляд через дым и тьму считается по свету сцены.
+  // Скрытный атакующий невидим для цели, скрытную цель не видно атакующему;
+  // «Помощь» союзнику даёт преимущество на эту атаку.
   const bool sees_target =
-      CanSeeForAttack(state_.Map(), light_, *attacker, target->cell);
+      CanSeeForAttack(state_.Map(), light_, *attacker, target->cell) &&
+      !target->hidden;
   const bool target_sees_attacker =
-      CanSeeForAttack(state_.Map(), light_, *target, attacker->cell);
+      CanSeeForAttack(state_.Map(), light_, *target, attacker->cell) &&
+      !attacker->hidden;
   const AttackRollModes modes =
       AttackRollModesFor(*attacker, *target, distance_cells, attack_range,
                          threatened, sees_target, target_sees_attacker);
-  bool advantage = command.advantage || modes.advantage;
+  bool advantage = command.advantage || modes.advantage || attacker->helped;
   bool disadvantage = command.disadvantage || modes.disadvantage;
   // Под водой дальнобойная атака идёт с помехой в обычной дистанции и
   // автоматически промахивается за ней (SRD 5.2.1). Погружением считаем
@@ -1160,12 +1204,27 @@ auto GameServer::HandleAttack(const AttackToken& command,
                       .text = text.str(),
                       .timestamp = CurrentTimeSeconds()},
   });
+  // «Помощь» и скрытность тратятся в любом случае: бросок уже состоялся.
+  const bool was_helped = attacker->helped;
+  const bool was_hidden = attacker->hidden;
+  if (was_helped) {
+    (void)state_.ClearTokenHelped(attacker->id);
+  }
+  if (was_hidden) {
+    (void)state_.SetTokenHidden(attacker->id, 0);
+  }
   if (player_rules && encounter_active) {
+    // Атака исполняет отложенное действие и расходует действие или реакцию.
     const std::optional<Token> spent = is_reaction
                                            ? state_.SpendReaction(attacker->id)
                                            : state_.SpendAction(attacker->id);
     if (spent.has_value()) {
       outcome.events.emplace_back(TokenUpdated{.token = *spent});
+    }
+  } else if (was_helped || was_hidden) {
+    if (const std::optional<Token> current = state_.TokenCopy(attacker->id);
+        current.has_value()) {
+      outcome.events.emplace_back(TokenUpdated{.token = *current});
     }
   }
   if (applied_damage > 0) {
@@ -1195,20 +1254,179 @@ auto GameServer::HandleUseTurnAction(const UseTurnAction& command,
     return CommandOutcome{.reject_reason = "действие уже потрачено"};
   }
 
-  const std::optional<Token> updated =
-      state_.UseTurnAction(command.id, command.kind);
-  if (!updated.has_value()) {
+  // Цель «Помощи» проверяется до траты действия: промах по клетке не должен
+  // стоить хода.
+  TokenId help_target = 0;
+  std::string help_name;
+  if (command.kind == TurnActionKind::kHelp) {
+    const Token* ally = FindToken(command.target);
+    if (ally == nullptr || ally->id == token->id) {
+      return CommandOutcome{.reject_reason = "выберите союзника под курсором"};
+    }
+    if (!AreAdjacent(token->cell, ally->cell)) {
+      return CommandOutcome{.reject_reason =
+                                "помощь — только соседнему союзнику"};
+    }
+    help_target = ally->id;
+    help_name = ally->name;
+  }
+  const int dc =
+      command.dc > 0 ? command.dc : static_cast<int>(kDefaultSkillDc);
+  if ((command.kind == TurnActionKind::kSearch ||
+       command.kind == TurnActionKind::kStudy) &&
+      dc > kMaxSaveDc) {
+    return CommandOutcome{.reject_reason = "некорректная КС проверки"};
+  }
+
+  const std::string name = token->name;
+  const bool helped_before = token->helped;
+  const std::optional<Token> acted =
+      state_.UseTurnAction(command.id, command.kind, help_target);
+  if (!acted.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось выполнить действие"};
   }
+
   CommandOutcome outcome;
   outcome.accepted = true;
-  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  std::vector<TokenId> changed{command.id};
+  std::vector<std::string> extra_lines;
+  std::string effect = TurnActionEffect(command.kind, *acted);
+
+  switch (command.kind) {
+    case TurnActionKind::kHelp:
+      effect = " — помогает " + help_name +
+               ": преимущество на следующую атаку или проверку";
+      changed.push_back(help_target);
+      break;
+    case TurnActionKind::kHide: {
+      // Скрытность против КС 15; преимущество от «Помощи» тратится.
+      const int bonus = SkillCheckBonus(*acted, Skill::kStealth);
+      const DiceExpression check{.count = 1,
+                                 .sides = 20,
+                                 .modifier = bonus,
+                                 .advantage = helped_before};
+      const DiceRollResult roll = RollDiceExpression(check, rng_);
+      (void)state_.ClearTokenHelped(command.id);
+      const bool success = roll.total >= dc;
+      (void)state_.SetTokenHidden(command.id, success ? roll.total : 0);
+      effect = " — Скрытность " + FormatD20Roll(bonus, roll) + " против КС " +
+               std::to_string(dc) + ": " +
+               std::string(CheckOutcomeWord(roll.total, dc));
+      break;
+    }
+    case TurnActionKind::kSearch: {
+      // Восприятие ищет скрытных существ в 30 футах: результат выше их
+      // Скрытности снимает скрытность.
+      const int bonus = SkillCheckBonus(*acted, Skill::kPerception);
+      const DiceExpression check{.count = 1,
+                                 .sides = 20,
+                                 .modifier = bonus,
+                                 .advantage = helped_before};
+      const DiceRollResult roll = RollDiceExpression(check, rng_);
+      (void)state_.ClearTokenHelped(command.id);
+      std::ostringstream line;
+      line << " — Восприятие " << FormatD20Roll(bonus, roll) << " против КС "
+           << dc << ": " << CheckOutcomeWord(roll.total, dc);
+      for (const Token& other : state_.Tokens()) {
+        if (other.id == command.id || !other.hidden) {
+          continue;
+        }
+        const int distance = std::max(std::abs(other.cell.x - acted->cell.x),
+                                      std::abs(other.cell.y - acted->cell.y));
+        if (distance > kSearchRadiusCells || other.stealth_total > roll.total) {
+          continue;
+        }
+        (void)state_.SetTokenHidden(other.id, 0);
+        changed.push_back(other.id);
+        extra_lines.push_back(name + " замечает: " + other.name);
+      }
+      effect = line.str();
+      break;
+    }
+    case TurnActionKind::kStudy: {
+      const int bonus = SkillCheckBonus(*acted, Skill::kInvestigation);
+      const DiceExpression check{.count = 1,
+                                 .sides = 20,
+                                 .modifier = bonus,
+                                 .advantage = helped_before};
+      const DiceRollResult roll = RollDiceExpression(check, rng_);
+      (void)state_.ClearTokenHelped(command.id);
+      effect = " — Расследование " + FormatD20Roll(bonus, roll) +
+               " против КС " + std::to_string(dc) + ": " +
+               std::string(CheckOutcomeWord(roll.total, dc));
+      break;
+    }
+    case TurnActionKind::kDash:
+    case TurnActionKind::kDisengage:
+    case TurnActionKind::kDodge:
+    case TurnActionKind::kUseObject:
+    case TurnActionKind::kReady:
+      break;
+  }
+  // Скрытность и помощь могли измениться: стол получает итоговые токены.
+  for (const TokenId id : changed) {
+    if (const std::optional<Token> current = state_.TokenCopy(id);
+        current.has_value()) {
+      outcome.events.emplace_back(TokenUpdated{.token = *current});
+    }
+  }
   outcome.events.emplace_back(LogLineAdded{
       .line =
           LogLine{.author = AuthorName(actor),
-                  .text = token->name + ": " + TurnActionName(command.kind) +
-                          TurnActionEffect(command.kind, *token),
+                  .text = name + ": " + TurnActionName(command.kind) + effect,
                   .timestamp = CurrentTimeSeconds()},
+  });
+  for (std::string& line : extra_lines) {
+    outcome.events.emplace_back(LogLineAdded{
+        .line = LogLine{.author = AuthorName(actor),
+                        .text = std::move(line),
+                        .timestamp = CurrentTimeSeconds()},
+    });
+  }
+  return outcome;
+}
+
+auto GameServer::HandleSkillCheck(const SkillCheck& command,
+                                  bool can_control_all) -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "проверки бросает только DM"};
+  }
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (!IsValidSkill(command.skill)) {
+    return CommandOutcome{.reject_reason = "неизвестный навык"};
+  }
+  if (command.dc <= 0 || command.dc > kMaxSaveDc) {
+    return CommandOutcome{.reject_reason = "некорректная КС проверки"};
+  }
+  const bool helped = token->helped;
+  const int bonus = SkillCheckBonus(*token, command.skill);
+  const DiceExpression expression{
+      .count = 1, .sides = 20, .modifier = bonus, .advantage = helped};
+  const DiceRollResult roll = RollDiceExpression(expression, rng_);
+
+  CommandOutcome outcome;
+  outcome.accepted = true;
+  if (helped) {
+    if (const std::optional<Token> cleared =
+            state_.ClearTokenHelped(command.id);
+        cleared.has_value()) {
+      outcome.events.emplace_back(TokenUpdated{.token = *cleared});
+    }
+  }
+  std::ostringstream text;
+  text << "Проверка (" << SkillName(command.skill) << "): " << token->name;
+  if (helped) {
+    text << " с преимуществом";
+  }
+  text << ", " << FormatD20Roll(bonus, roll) << " против КС " << command.dc
+       << " — " << CheckOutcomeWord(roll.total, command.dc);
+  outcome.events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = "DM",
+                      .text = text.str(),
+                      .timestamp = CurrentTimeSeconds()},
   });
   return outcome;
 }
@@ -1914,8 +2132,12 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
   if (command.attack_bonus < -kMaxBonus || command.attack_bonus > kMaxBonus ||
       command.save_bonus < -kMaxBonus || command.save_bonus > kMaxBonus ||
       command.initiative_bonus < -kMaxBonus ||
-      command.initiative_bonus > kMaxBonus) {
+      command.initiative_bonus > kMaxBonus ||
+      command.skill_bonus < -kMaxBonus || command.skill_bonus > kMaxBonus) {
     return CommandOutcome{.reject_reason = "некорректный бонус"};
+  }
+  if (!IsValidSkillMask(command.skill_proficiency)) {
+    return CommandOutcome{.reject_reason = "неизвестный навык во владениях"};
   }
   if (command.damage.size() > kMaxDamageExpression) {
     return CommandOutcome{.reject_reason = "слишком длинное выражение урона"};
@@ -1968,7 +2190,8 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
       command.damage, command.temp_hp, command.hit_die, command.con_modifier,
       command.attack_range, command.resist, command.vulnerable, command.immune,
       command.swim_speed, command.climb_speed, command.darkvision_cells,
-      command.max_hp, command.auto_hp, command.hit_dice_count);
+      command.max_hp, command.auto_hp, command.hit_dice_count,
+      command.skill_bonus, command.skill_proficiency);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось обновить лист"};
   }
@@ -1995,6 +2218,12 @@ auto GameServer::HandleUpdateTokenSheet(const UpdateTokenSheet& command,
                   command.save_bonus);
   AppendIntChange(changes, "бонус инициативы", before.initiative_bonus,
                   command.initiative_bonus);
+  AppendIntChange(changes, "бонус проверок", before.skill_bonus,
+                  command.skill_bonus);
+  if (before.skill_proficiency != command.skill_proficiency) {
+    changes.emplace_back("владения навыками: " +
+                         FormatSkillMask(command.skill_proficiency));
+  }
   AppendIntChange(changes, "временные HP", before.temp_hp, updated->temp_hp);
   AppendIntChange(changes, "макс. HP", before.max_hp, updated->max_hp);
   AppendIntChange(changes, "костей хитов", before.hit_dice_count,
@@ -2725,8 +2954,46 @@ auto GameServer::IsTokenVisibleTo(std::string_view actor,
                                   const Token& token) const -> bool {
   // Сильное затемнение (тьма, дым) прячет существо, даже если клетку видно:
   // позиция неизвестна, пока оно само не выдаст себя.
-  return IsVisibleTo(actor, token.cell) &&
-         state_.Map().ObscurementAt(token.cell) != Obscurement::kHeavy;
+  if (IsVisibleTo(actor, token.cell) &&
+      state_.Map().ObscurementAt(token.cell) != Obscurement::kHeavy) {
+    // Скрытного замечает пассивное Восприятие персонажей игрока.
+    return !token.hidden || NoticesHidden(actor, token);
+  }
+  return false;
+}
+
+auto GameServer::NoticesHidden(std::string_view actor, const Token& token) const
+    -> bool {
+  // Свой токен игрок видит всегда, а DM — весь стол.
+  if (SamePlayerName(actor, token.owner)) {
+    return true;
+  }
+  int best = 0;
+  bool has_character = false;
+  // Сначала персонажи самого игрока; без них он смотрит общим обзором партии,
+  // поэтому скрытного замечает любой персонаж партии.
+  for (const Token& observer : state_.Tokens()) {
+    if (observer.kind != TokenKind::kPlayer ||
+        !SamePlayerName(observer.owner, actor)) {
+      continue;
+    }
+    has_character = true;
+    best = std::max(best, PassivePerception(observer));
+  }
+  if (!has_character) {
+    for (const Token& observer : state_.Tokens()) {
+      if (observer.kind == TokenKind::kPlayer) {
+        best = std::max(best, PassivePerception(observer));
+      }
+    }
+  }
+  return best >= token.stealth_total;
+}
+
+auto GameServer::PassivePerception(const Token& observer) const -> int {
+  // Тусклый свет даёт помеху на зрительное Восприятие: пассивное значение −5.
+  const bool dim = light_.At(observer.cell) == LightLevel::kDim;
+  return PassiveSkillScore(observer, Skill::kPerception, dim);
 }
 
 auto GameServer::EventVisibleTo(const Event& event,

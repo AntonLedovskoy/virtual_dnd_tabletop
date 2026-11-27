@@ -75,6 +75,10 @@ struct Token {
   int attack_bonus = 0;
   int save_bonus = 0;
   int initiative_bonus = 0;
+  // Общий модификатор проверок способностей без бонуса мастерства; владения
+  // навыками (маска core/skills.h) добавляют бонус мастерства по уровню.
+  int skill_bonus = 0;
+  std::uint32_t skill_proficiency = 0;
   // «1d8+2 огонь»: выражение урона и необязательный тип в конце (core/damage).
   std::string damage;
   // Защита от урона по типам: битовые маски core/damage.h.
@@ -112,6 +116,14 @@ struct Token {
   int movement_bonus = 0;
   bool disengaged = false;
   bool dodging = false;
+  // «Помощь» союзнику: преимущество на его следующую атаку или проверку.
+  bool helped = false;
+  // «Подготовиться»: действие отложено до срабатывания, реакция ещё свободна.
+  bool readied = false;
+  // Скрытность: успешная проверка Ловкости (Скрытность) прячет токен; пока
+  // его пассивное Восприятие не перебьёт stealth_total, игроки токен не видят.
+  bool hidden = false;
+  int stealth_total = 0;
   // Сработавшие за этот ход профили урона карты (индексы в палитре): вход в
   // лаву не бьёт повторно. Очищается в начале хода токена и в конце боя.
   std::vector<std::uint8_t> hazards_done;
