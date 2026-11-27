@@ -472,6 +472,9 @@ auto DrawTokenPanel(SDL_Renderer* renderer, TextRenderer* text,
   if (token->temp_hp > 0) {
     hp_line += " (+" + std::to_string(token->temp_hp) + ")";
   }
+  if (IsBloodied(*token)) {
+    hp_line += "  " + std::string(strings::kStateBloodied);
+  }
   hp_line += "   " + std::string(strings::kInitiativeShort) + " " +
              std::to_string(token->initiative) + "   " +
              std::string(strings::kLevelShort) + " " + std::to_string(level);

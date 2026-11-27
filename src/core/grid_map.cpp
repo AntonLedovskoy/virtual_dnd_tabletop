@@ -386,23 +386,28 @@ auto GridMap::MovementCost(Cell cell, const MovementProfile& profile) const
     return -1;
   }
   const CellProps& props = PropsAt(cell);
-  if (props.water == WaterDepth::kDeep || terrain == Terrain::kWater) {
-    // Со скоростью плавания глубокую воду проходим за обычную цену.
-    return profile.swim_speed > 0 ? 1 : 2;
-  }
   if (terrain == Terrain::kLadder) {
     return 1;
   }
-  if ((props.flags & kCellClimbable) != 0) {
-    return profile.climb_speed > 0 ? 1 : 2;
+  // 2024: плавание и лазание добавляют 1 клетку, трудная местность — ещё 1;
+  // дорога снимает только трудную местность. Скорость плавания или лазания
+  // убирает свою надбавку.
+  const bool deep_water =
+      props.water == WaterDepth::kDeep || terrain == Terrain::kWater;
+  const bool climbing = (props.flags & kCellClimbable) != 0;
+  int cost = 1;
+  if (deep_water && profile.swim_speed == 0) {
+    ++cost;
   }
-  if ((props.flags & kCellRoad) != 0) {
-    return 1;
+  if (climbing && profile.climb_speed == 0) {
+    ++cost;
   }
-  if (props.water == WaterDepth::kShallow) {
-    return 2;
+  const bool road = (props.flags & kCellRoad) != 0;
+  if (!road &&
+      (IsDifficultTerrain(cell) || props.water == WaterDepth::kShallow)) {
+    ++cost;
   }
-  return IsDifficultTerrain(cell) ? 2 : 1;
+  return cost;
 }
 
 auto GridMap::SetTerrain(Cell cell, Terrain terrain) -> void {

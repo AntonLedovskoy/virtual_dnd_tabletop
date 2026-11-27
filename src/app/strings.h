@@ -454,6 +454,7 @@ inline constexpr std::string_view kSheetProficiencies = "Владения нав
 inline constexpr std::string_view kStateHidden = "Скрыт";
 inline constexpr std::string_view kStateReadied = "Готовность";
 inline constexpr std::string_view kStateHelped = "Помощь";
+inline constexpr std::string_view kStateBloodied = "Окровавлен";
 inline constexpr std::string_view kSheetRangeHint =
     "Дальность 0 — ближний бой, досягаемость 1 клетка";
 inline constexpr std::string_view kSheetHint =

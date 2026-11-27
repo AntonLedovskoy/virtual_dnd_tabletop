@@ -10,6 +10,7 @@
 #include "core/conditions.h"
 #include "core/hit_points.h"
 #include "core/levels.h"
+#include "core/movement.h"
 #include "core/player_name.h"
 #include "core/skills.h"
 #include "core/units.h"
@@ -68,6 +69,14 @@ auto RemoveCondition(Token& token, std::string_view name) -> bool {
                        [name](const Condition& condition) -> bool {
                          return condition.name == name;
                        }) > 0;
+}
+
+// 2024: «без сознания» включает «сбит с ног». Оба состояния живут отдельно:
+// лечение снимает только «без сознания», и персонаж встаёт из «сбит с ног»
+// обычным движением.
+auto AddUnconscious(Token& token) -> void {
+  AddConditionIfMissing(token, Condition{std::string(kUnconscious)});
+  AddConditionIfMissing(token, Condition{std::string(kProne)});
 }
 
 // Гибель: «без сознания» заменяется на «мёртв»; стабильность больше не
@@ -193,6 +202,10 @@ GameState::GameState(GameSnapshot snapshot)
     // Инвариант авто-режима: после загрузки, отмены и смены сцены максимум
     // HP совпадает с костями.
     RecomputeAutoHp(token);
+    // Старые файлы могли сохранить только «без сознания» без «сбит с ног».
+    if (HasCondition(token, kUnconscious)) {
+      AddConditionIfMissing(token, Condition{std::string(kProne)});
+    }
   }
 }
 
@@ -329,7 +342,7 @@ auto GameState::DamageToken(TokenId id, int amount, bool critical)
   if (token->hp == 0 && !was_down && !dead) {
     token->death_save_successes = 0;
     token->death_save_failures = 0;
-    AddConditionIfMissing(*token, Condition{std::string(kUnconscious)});
+    AddUnconscious(*token);
   }
   if (was_down && amount > 0) {
     // Урон снимает стабильность: лежачий снова бросает спасброски. Удар по
@@ -638,6 +651,11 @@ auto GameState::UpdateTokenCombat(TokenId id, std::vector<Condition> conditions)
     return std::nullopt;
   }
   token->conditions = std::move(conditions);
+  // «Без сознания» включает «сбит с ног» (2024): панель K не может оставить
+  // бессознательного персонажа стоящим.
+  if (HasCondition(*token, kUnconscious)) {
+    AddConditionIfMissing(*token, Condition{std::string(kProne)});
+  }
   // Шестой уровень истощения убивает (SRD 5.2.1).
   if (ExhaustionLevel(*token) >= kMaxExhaustionLevel &&
       !HasCondition(*token, kDead)) {
@@ -654,6 +672,9 @@ auto GameState::AddTokenCondition(TokenId id, Condition condition)
     return std::nullopt;
   }
   AddConditionIfMissing(*token, std::move(condition));
+  if (HasCondition(*token, kUnconscious)) {
+    AddConditionIfMissing(*token, Condition{std::string(kProne)});
+  }
   if (ExhaustionLevel(*token) >= kMaxExhaustionLevel &&
       !HasCondition(*token, kDead)) {
     token->hp = 0;

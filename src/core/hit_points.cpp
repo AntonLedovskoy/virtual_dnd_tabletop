@@ -44,4 +44,8 @@ auto RecomputeAutoHp(Token& token) -> void {
   ApplyMaxHpChange(token, AutoMaxHp(token));
 }
 
+auto IsBloodied(const Token& token) -> bool {
+  return token.hp > 0 && token.max_hp > 0 && token.hp * 2 <= token.max_hp;
+}
+
 }  // namespace dnd

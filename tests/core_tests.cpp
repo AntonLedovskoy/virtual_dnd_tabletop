@@ -239,6 +239,15 @@ auto TestCellPropsMovement() -> void {
   Expect(stairs.MovementCost(CellAt(1, 0),
                              dnd::MovementProfile{.climb_speed = 4}) == 1,
          "a climb speed makes the wall cost normal movement");
+  stairs.SetTerrain(CellAt(1, 0), dnd::Terrain::kSwamp);
+  dnd::CellProps steep = stairs.PropsAt(CellAt(1, 0));
+  steep.flags |= dnd::kCellClimbable;
+  stairs.SetProps(CellAt(1, 0), steep);
+  Expect(stairs.MovementCost(CellAt(1, 0), dnd::MovementProfile{}) == 3,
+         "climbing in difficult terrain costs three cells");
+  Expect(stairs.MovementCost(CellAt(1, 0),
+                             dnd::MovementProfile{.climb_speed = 4}) == 2,
+         "a climb speed leaves only the difficult terrain surcharge");
 
   dnd::GridMap pool(3, 3);
   pool.SetTerrain(CellAt(1, 1), dnd::Terrain::kWater);
@@ -247,6 +256,16 @@ auto TestCellPropsMovement() -> void {
   Expect(pool.MovementCost(CellAt(1, 1),
                            dnd::MovementProfile{.swim_speed = 4}) == 1,
          "a swim speed makes deep water cost normal movement");
+  dnd::GridMap deep_marsh(2, 2);
+  deep_marsh.SetTerrain(CellAt(1, 1), dnd::Terrain::kSwamp);
+  dnd::CellProps deep = deep_marsh.PropsAt(CellAt(1, 1));
+  deep.water = dnd::WaterDepth::kDeep;
+  deep_marsh.SetProps(CellAt(1, 1), deep);
+  Expect(deep_marsh.MovementCost(CellAt(1, 1), dnd::MovementProfile{}) == 3,
+         "swimming in difficult terrain costs three cells");
+  Expect(deep_marsh.MovementCost(CellAt(1, 1),
+                                 dnd::MovementProfile{.swim_speed = 4}) == 2,
+         "a swim speed leaves only the difficult terrain surcharge");
   dnd::GridMap marsh(2, 2);
   marsh.SetTerrain(CellAt(1, 1), dnd::Terrain::kSwamp);
   const auto first_diagonal =
@@ -1946,6 +1965,64 @@ auto TestAutoDeathSave() -> void {
          "the DM stabilization command is accepted");
 }
 
+auto TestUnconsciousProne() -> void {
+  const dnd::GridMap map(5, 5);
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 5,
+                         .max_hp = 10,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+          },
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 6, 3);
+  (void)server.HandleCommand(dnd::DamageToken{.id = 1, .amount = 5}, "alice",
+                             false);
+  const dnd::Token down = TokenOf(server.State(), 1);
+  Expect(down.hp == 0 && HasCondition(down, dnd::kUnconscious) &&
+             HasCondition(down, dnd::kProne),
+         "zero hp adds both unconscious and prone");
+
+  (void)server.HandleCommand(dnd::HealToken{.id = 1, .amount = 5}, "alice",
+                             false);
+  const dnd::Token woken = TokenOf(server.State(), 1);
+  Expect(!HasCondition(woken, dnd::kUnconscious) &&
+             HasCondition(woken, dnd::kProne),
+         "healing removes unconsciousness but keeps the character prone");
+
+  // Панель K не может оставить бессознательного персонажа стоящим.
+  (void)server.HandleCommand(
+      dnd::UpdateTokenCombat{.id = 1,
+                             .conditions = {dnd::Condition{"без сознания"}}},
+      "", true);
+  const dnd::Token panel = TokenOf(server.State(), 1);
+  Expect(HasCondition(panel, dnd::kUnconscious) &&
+             HasCondition(panel, dnd::kProne),
+         "the condition panel adds prone with unconsciousness");
+
+  // Старый файл мог сохранить только «без сознания»: загрузка добавляет
+  // «сбит с ног».
+  dnd::GameSnapshot old = snapshot;
+  old.tokens = {dnd::Token{.id = 1,
+                           .name = "old",
+                           .owner = "alice",
+                           .hp = 0,
+                           .max_hp = 10,
+                           .conditions = {dnd::Condition{"без сознания"}},
+                           .kind = dnd::TokenKind::kPlayer,
+                           .cell = CellAt(1, 1)}};
+  const dnd::GameState loaded(old);
+  const std::optional<dnd::Token> old_token = loaded.TokenCopy(1);
+  Expect(old_token.has_value() && HasCondition(*old_token, dnd::kProne),
+         "loading an old save adds prone to an unconscious character");
+}
+
 auto TestAoeDamage() -> void {
   const dnd::GridMap map(8, 8);
   const dnd::GameSnapshot snapshot{
@@ -2146,18 +2223,23 @@ auto TestConditionDurationAndInitiative() -> void {
                          dnd::Condition{"без сознания"}}},
       "", true);
   Expect(timed.accepted, "the DM sets a timed condition");
-  Expect(TokenOf(server.State(), 1).conditions.size() == 2,
-         "timed and permanent conditions coexist");
+  const dnd::Token timed_token = TokenOf(server.State(), 1);
+  Expect(timed_token.conditions.size() == 3 &&
+             HasCondition(timed_token, "отравлен") &&
+             HasCondition(timed_token, dnd::kUnconscious) &&
+             HasCondition(timed_token, dnd::kProne),
+         "timed and permanent conditions coexist, unconscious adds prone");
 
   // Полный круг: ход гоблина, затем снова ход героя — у состояния кончается
-  // срок, а бессрочное «без сознания» остаётся.
+  // срок, а бессрочные «без сознания» и «сбит с ног» остаются.
   Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
          "the DM advances the turn");
   Expect(server.HandleCommand(dnd::NextTurn{}, "", true).accepted,
          "the DM advances the turn again");
   const dnd::Token ticked = TokenOf(server.State(), 1);
-  Expect(ticked.conditions.size() == 1 &&
-             ticked.conditions.front().name == "без сознания",
+  Expect(ticked.conditions.size() == 2 &&
+             HasCondition(ticked, dnd::kUnconscious) &&
+             HasCondition(ticked, dnd::kProne),
          "timed condition expires at the start of the token turn");
 
   // Вне боя время двигает только DM, и только когда бой не идёт.
@@ -2182,9 +2264,11 @@ auto TestConditionDurationAndInitiative() -> void {
       server.HandleCommand(dnd::AdvanceTime{.seconds = 60}, "", true);
   Expect(step.accepted, "the DM advances time out of combat");
   const dnd::Token walked = TokenOf(server.State(), 1);
-  Expect(
-      walked.conditions.size() == 2 && walked.conditions.front().seconds == 60,
-      "time advances timed conditions outside combat");
+  Expect(walked.conditions.size() == 3 && HasCondition(walked, "отравлен") &&
+             HasCondition(walked, dnd::kUnconscious) &&
+             HasCondition(walked, dnd::kProne) &&
+             walked.conditions.front().seconds == 60,
+         "time advances timed conditions outside combat");
   Expect(std::ranges::any_of(step.events,
                              [](const dnd::Event& event) -> bool {
                                return std::holds_alternative<dnd::LogLineAdded>(
@@ -2198,8 +2282,9 @@ auto TestConditionDurationAndInitiative() -> void {
       server.HandleCommand(dnd::AdvanceTime{.seconds = 60}, "", true).accepted,
       "the DM advances time again");
   const dnd::Token expired = TokenOf(server.State(), 1);
-  Expect(expired.conditions.size() == 1 &&
-             expired.conditions.front().name == "без сознания",
+  Expect(expired.conditions.size() == 2 &&
+             HasCondition(expired, dnd::kUnconscious) &&
+             HasCondition(expired, dnd::kProne),
          "expired conditions are removed after enough time");
 
   Expect(dnd::FormatConditionDuration(0) == "до снятия",
@@ -2477,6 +2562,19 @@ auto TestConditionAttackModifiers() -> void {
   target.conditions = {dnd::Condition{"сбит с ног"}};
   Expect(modes(1).Net() == 1, "a prone target is easier to hit within 5 ft");
   Expect(modes(3).Net() == -1, "a prone target is harder to hit at range");
+
+  const dnd::Token plain_attacker;
+  dnd::Token unconscious_target;
+  unconscious_target.conditions = {dnd::Condition{"без сознания"},
+                                   dnd::Condition{"сбит с ног"}};
+  Expect(dnd::AttackRollModesFor(plain_attacker, unconscious_target, 1, 0,
+                                 false, true, true)
+                 .Net() == 1,
+         "an unconscious prone target is easier to hit within 5 ft");
+  Expect(dnd::AttackRollModesFor(plain_attacker, unconscious_target, 3, 0,
+                                 false, true, true)
+                 .Net() == 0,
+         "at range the prone disadvantage cancels unconscious advantage");
 
   target.conditions = {dnd::Condition{"невидим"}};
   Expect(modes(1).Net() == -1, "an invisible target is harder to hit");
@@ -3869,6 +3967,17 @@ auto TestAutoHitPoints() -> void {
          "monster hit points average the dice downwards");
   Expect(dnd::MonsterMaxHp(2, 6, -1) == 5 && dnd::MonsterMaxHp(0, 8, 0) >= 1,
          "Constitution applies per die and at least one die is used");
+
+  // «Окровавлен» — половина максимума и меньше, но только в сознании.
+  dnd::Token bloodied;
+  bloodied.hp = 5;
+  bloodied.max_hp = 10;
+  Expect(dnd::IsBloodied(bloodied), "half hit points is bloodied");
+  bloodied.hp = 6;
+  Expect(!dnd::IsBloodied(bloodied), "above half is not bloodied");
+  bloodied.hp = 0;
+  Expect(!dnd::IsBloodied(bloodied),
+         "a character at zero hit points is unconscious, not bloodied");
 
   // Новый персонаж создаётся в авто-режиме: d8 без Телосложения — 8 HP.
   const dnd::GridMap map(8, 1);
@@ -9418,6 +9527,7 @@ auto main() -> int {
     TestDeathSaves();
     TestStableRecovery();
     TestAutoDeathSave();
+    TestUnconsciousProne();
     TestConditionDurationAndInitiative();
     TestConditionSaves();
     TestConditionPaletteAndExhaustion();

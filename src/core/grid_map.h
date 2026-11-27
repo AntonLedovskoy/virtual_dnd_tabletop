@@ -175,8 +175,9 @@ class GridMap {
   auto SetAmbientLight(LightLevel level) -> void { ambient_light_ = level; }
   // Клетка стоит двойного движения (2024: difficult terrain).
   [[nodiscard]] auto IsDifficultTerrain(Cell cell) const -> bool;
-  // Стоимость входа в клетку в 5-футовых шагах (1 или 2); -1 — непроходима.
-  // Дорога отменяет трудную местность, но не лазание. Глубокая вода — 2.
+  // Стоимость входа в клетку в 5-футовых шагах (1–3); -1 — непроходима.
+  // Дорога отменяет трудную местность, но не лазание и не плавание:
+  // плавание/лазание — +1, трудная местность — ещё +1 (в сумме до 3).
   [[nodiscard]] auto MovementCost(Cell cell,
                                   const MovementProfile& profile) const -> int;
 
