@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/damage.h"
+#include "core/light.h"
 #include "core/token.h"
 
 namespace dnd {
@@ -56,10 +57,11 @@ inline constexpr std::size_t kMaxConditionNameBytes = 32;
 // выше 30 (SRD 5.2.1).
 [[nodiscard]] auto ConcentrationDc(int damage) -> int;
 
-// Недееспособность: «без сознания», «выведен из строя», «парализован»,
-// «оглушён», «окаменел» и смерть. При таких состояниях концентрация
-// снимается без спасброска.
+// Недееспособность токена: 0 HP, «без сознания», «выведен из строя»,
+// «парализован», «оглушён», «окаменел» и смерть.
 [[nodiscard]] auto IsIncapacitatingCondition(std::string_view name) -> bool;
+
+[[nodiscard]] auto IsIncapacitated(const Token& token) -> bool;
 
 // Палитра состояний 2024 для панели K (истощение — одна запись, уровень
 // считается по числу записей).
@@ -93,10 +95,25 @@ struct AttackRollModes {
 // distance_cells — расстояние между клетками в 5-футовых клетках.
 // attack_range_cells > 0 — дальнобойная атака с такой обычной дистанцией:
 // за дистанцией помеха, а в 5 футах от другого противника (threatened) —
-// тоже помеха.
+// тоже помеха. can_see_target / target_can_see_attacker — взгляд через
+// сильное затемнение и тьму (CanSeeForAttack): не видно цель — помеха, цель
+// не видит атакующего — преимущество; вместе они гасятся.
 [[nodiscard]] auto AttackRollModesFor(const Token& attacker,
                                       const Token& target, int distance_cells,
-                                      int attack_range_cells, bool threatened)
+                                      int attack_range_cells, bool threatened,
+                                      bool can_see_target,
+                                      bool target_can_see_attacker)
+    -> AttackRollModes;
+
+// Видит ли наблюдатель клетку для атаки: слепота, сильное затемнение и тьма
+// без тёмного зрения закрывают взгляд (SRD 5.2.1). Слабое затемнение и
+// тусклый свет взгляду не мешают.
+[[nodiscard]] auto CanSeeForAttack(const GridMap& map, const LightField& light,
+                                   const Token& observer, Cell cell) -> bool;
+
+// Инициатива 2024: невидимый бросает с преимуществом, недееспособный и
+// застигнутый врасплох — с помехой; преимущество и помеха гасятся.
+[[nodiscard]] auto InitiativeRollModesFor(const Token& token)
     -> AttackRollModes;
 
 // Парализованный и лежащий без сознания получают критические попадания от

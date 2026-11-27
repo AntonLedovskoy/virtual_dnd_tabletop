@@ -1,7 +1,9 @@
 #include "core/conditions.h"
 
 #include <algorithm>
+#include <cstdlib>
 
+#include "core/light.h"
 #include "core/movement.h"
 #include "core/units.h"
 
@@ -55,6 +57,16 @@ auto ConcentrationDc(int damage) -> int {
 auto IsIncapacitatingCondition(std::string_view name) -> bool {
   return name == kUnconscious || name == kIncapacitated || name == kDead ||
          name == "парализован" || name == "оглушён" || name == "окаменел";
+}
+
+auto IsIncapacitated(const Token& token) -> bool {
+  if (token.hp == 0) {
+    return true;
+  }
+  return std::ranges::any_of(token.conditions,
+                             [](const Condition& condition) -> bool {
+                               return IsIncapacitatingCondition(condition.name);
+                             });
 }
 
 auto DefaultConditions() -> const std::vector<std::string>& {
@@ -128,7 +140,8 @@ auto EffectiveSpeedCells(const Token& token) -> int {
 
 auto AttackRollModesFor(const Token& attacker, const Token& target,
                         int distance_cells, int attack_range_cells,
-                        bool threatened) -> AttackRollModes {
+                        bool threatened, bool can_see_target,
+                        bool target_can_see_attacker) -> AttackRollModes {
   AttackRollModes modes;
   const auto advantage = [&modes]() -> void { modes.advantage = true; };
   const auto disadvantage = [&modes]() -> void { modes.disadvantage = true; };
@@ -162,6 +175,15 @@ auto AttackRollModesFor(const Token& attacker, const Token& target,
   if (target.dodging) {
     disadvantage();
   }
+  // Сильное затемнение и тьма: цель не видна — помеха, атакующего не видно —
+  // преимущество (2024 «эффективно ослеплён»). В одном облаке дыма или в
+  // общей тьме обе поправки гасятся.
+  if (!can_see_target) {
+    disadvantage();
+  }
+  if (!target_can_see_attacker) {
+    advantage();
+  }
   // Дальнобойная атака: на дистанции и в 5 футах от другого противника.
   if (attack_range_cells > 0) {
     if (distance_cells > attack_range_cells || threatened) {
@@ -169,6 +191,25 @@ auto AttackRollModesFor(const Token& attacker, const Token& target,
     }
   }
   return modes;
+}
+
+auto CanSeeForAttack(const GridMap& map, const LightField& light,
+                     const Token& observer, Cell cell) -> bool {
+  if (HasCondition(observer, kBlinded)) {
+    return false;
+  }
+  // Сильное затемнение закрывает взгляд в обе стороны: из облака дыма не
+  // видно наружу, снаружи не видно в облако.
+  if (map.ObscurementAt(observer.cell) == Obscurement::kHeavy ||
+      map.ObscurementAt(cell) == Obscurement::kHeavy) {
+    return false;
+  }
+  if (light.At(cell) != LightLevel::kDark) {
+    return true;
+  }
+  const int distance = std::max(std::abs(observer.cell.x - cell.x),
+                                std::abs(observer.cell.y - cell.y));
+  return distance <= observer.darkvision_cells;
 }
 
 auto IsAutoCriticalOnHit(const Token& target, int distance_cells) -> bool {
@@ -192,6 +233,17 @@ auto EffectiveDamageProfile(const Token& target) -> DamageProfile {
 
 auto IsSurprised(const Token& token) -> bool {
   return HasCondition(token, kSurprised);
+}
+
+auto InitiativeRollModesFor(const Token& token) -> AttackRollModes {
+  AttackRollModes modes;
+  if (HasCondition(token, "невидим")) {
+    modes.advantage = true;
+  }
+  if (IsSurprised(token) || IsIncapacitated(token)) {
+    modes.disadvantage = true;
+  }
+  return modes;
 }
 
 }  // namespace dnd

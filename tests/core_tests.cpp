@@ -2364,27 +2364,26 @@ auto TestConditionPaletteAndExhaustion() -> void {
 auto TestConditionAttackModifiers() -> void {
   dnd::Token attacker;
   dnd::Token target;
-  Expect(dnd::AttackRollModesFor(attacker, target, 1, 0, false).Net() == 0,
-         "plain conditions give a plain attack");
+  const auto modes = [&attacker, &target](
+                         int distance, int range = 0,
+                         bool threatened = false) -> dnd::AttackRollModes {
+    return dnd::AttackRollModesFor(attacker, target, distance, range,
+                                   threatened, true, true);
+  };
+  Expect(modes(1).Net() == 0, "plain conditions give a plain attack");
 
   target.conditions = {dnd::Condition{"сбит с ног"}};
-  Expect(dnd::AttackRollModesFor(attacker, target, 1, 0, false).Net() == 1,
-         "a prone target is easier to hit within five feet");
-  Expect(dnd::AttackRollModesFor(attacker, target, 3, 0, false).Net() == -1,
-         "a prone target is harder to hit at range");
+  Expect(modes(1).Net() == 1, "a prone target is easier to hit within 5 ft");
+  Expect(modes(3).Net() == -1, "a prone target is harder to hit at range");
 
   target.conditions = {dnd::Condition{"невидим"}};
-  Expect(dnd::AttackRollModesFor(attacker, target, 1, 0, false).Net() == -1,
-         "an invisible target is harder to hit");
+  Expect(modes(1).Net() == -1, "an invisible target is harder to hit");
   attacker.conditions = {dnd::Condition{"ослеплён"}};
-  Expect(dnd::AttackRollModesFor(attacker, target, 1, 0, false).Net() == -1,
-         "a blinded attacker has disadvantage");
+  Expect(modes(1).Net() == -1, "a blinded attacker has disadvantage");
 
   attacker.conditions = {dnd::Condition{"невидим"}};
-  Expect(
-      dnd::AttackRollModesFor(attacker, target, 1, 0, false).advantage &&
-          dnd::AttackRollModesFor(attacker, target, 1, 0, false).disadvantage,
-      "an invisible attacker against an invisible target has both");
+  Expect(modes(1).advantage && modes(1).disadvantage,
+         "an invisible attacker against an invisible target has both");
 
   dnd::Token prone_target;
   prone_target.conditions = {dnd::Condition{"парализован"}};
@@ -2396,12 +2395,34 @@ auto TestConditionAttackModifiers() -> void {
   dnd::Token archer;
   archer.attack_range = 2;
   const dnd::Token nearby;
-  Expect(dnd::AttackRollModesFor(archer, nearby, 2, 2, false).Net() == 0,
-         "a ranged attack inside normal range is plain");
-  Expect(dnd::AttackRollModesFor(archer, nearby, 3, 2, false).Net() == -1,
-         "a ranged attack beyond normal range has disadvantage");
-  Expect(dnd::AttackRollModesFor(archer, nearby, 2, 2, true).Net() == -1,
-         "a ranged attack next to another enemy has disadvantage");
+  Expect(
+      dnd::AttackRollModesFor(archer, nearby, 2, 2, false, true, true).Net() ==
+          0,
+      "a ranged attack inside normal range is plain");
+  Expect(
+      dnd::AttackRollModesFor(archer, nearby, 3, 2, false, true, true).Net() ==
+          -1,
+      "a ranged attack beyond normal range has disadvantage");
+  Expect(
+      dnd::AttackRollModesFor(archer, nearby, 2, 2, true, true, true).Net() ==
+          -1,
+      "a ranged attack next to another enemy has disadvantage");
+
+  // Взгляд через затемнение и тьму: не видно цель — помеха, цель не видит
+  // атакующего — преимущество, вместе гасятся.
+  const dnd::Token plain;
+  Expect(
+      dnd::AttackRollModesFor(plain, plain, 1, 0, false, false, true).Net() ==
+          -1,
+      "a target that cannot be seen gives disadvantage");
+  Expect(
+      dnd::AttackRollModesFor(plain, plain, 1, 0, false, true, false).Net() ==
+          1,
+      "an unseen attacker has advantage");
+  Expect(
+      dnd::AttackRollModesFor(plain, plain, 1, 0, false, false, false).Net() ==
+          0,
+      "mutual concealment cancels out");
 
   const dnd::GridMap map(8, 1);
   const dnd::GameSnapshot snapshot{
@@ -2499,6 +2520,161 @@ auto TestConditionAttackModifiers() -> void {
                              "alice", false)
               .accepted,
          "a grappled character cannot move");
+}
+
+auto TestConcealmentAttacks() -> void {
+  dnd::GridMap map(6, 1);
+  map.SetProps(CellAt(1, 0),
+               dnd::CellProps{.obscurement = dnd::Obscurement::kHeavy});
+  map.SetProps(CellAt(3, 0), dnd::CellProps{.light = static_cast<std::uint8_t>(
+                                                dnd::LightLevel::kDark)});
+  map.SetProps(CellAt(4, 0), dnd::CellProps{.light = static_cast<std::uint8_t>(
+                                                dnd::LightLevel::kDark)});
+  const dnd::LightField light = dnd::ComputeLightField(map, {});
+
+  dnd::Token observer;
+  observer.cell = CellAt(0, 0);
+  Expect(dnd::CanSeeForAttack(map, light, observer, CellAt(0, 0)),
+         "a clear cell is seen");
+  Expect(!dnd::CanSeeForAttack(map, light, observer, CellAt(1, 0)),
+         "heavy obscurement blocks sight into the cell");
+  observer.cell = CellAt(1, 0);
+  Expect(!dnd::CanSeeForAttack(map, light, observer, CellAt(2, 0)),
+         "a creature in heavy obscurement sees nothing");
+
+  observer.cell = CellAt(2, 0);
+  Expect(!dnd::CanSeeForAttack(map, light, observer, CellAt(3, 0)),
+         "darkness beyond darkvision is not seen");
+  observer.darkvision_cells = 2;
+  Expect(dnd::CanSeeForAttack(map, light, observer, CellAt(3, 0)),
+         "darkvision reaches into darkness");
+  observer.darkvision_cells = 0;
+  observer.conditions = {dnd::Condition{std::string(dnd::kBlinded)}};
+  Expect(!dnd::CanSeeForAttack(map, light, observer, CellAt(2, 0)),
+         "a blinded observer sees nothing");
+
+  // Тьма: видящий в темноте бьёт невидящего с преимуществом, обратно — с
+  // помехой. Общее затемнение гасится (см. AttackRollModesFor).
+  const dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "drow",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .ac = 10,
+                         .darkvision_cells = 6,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(3, 0)},
+              dnd::Token{.id = 2,
+                         .name = "human",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .ac = 10,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(4, 0)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer server(snapshot, 0, 9);
+  const auto saw_text = [](const dnd::CommandOutcome& outcome,
+                           std::string_view needle) -> bool {
+    return std::ranges::any_of(
+        outcome.events, [needle](const dnd::Event& event) -> bool {
+          if (!std::holds_alternative<dnd::LogLineAdded>(event)) {
+            return false;
+          }
+          return std::get<dnd::LogLineAdded>(event).line.text.find(needle) !=
+                 std::string::npos;
+        });
+  };
+  const dnd::CommandOutcome dark_advantage = server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 2}, "", true);
+  Expect(dark_advantage.accepted, "an attack in the dark is accepted");
+  Expect(saw_text(dark_advantage, "с преимуществом"),
+         "darkvision gives advantage against a blind target");
+  const dnd::CommandOutcome dark_disadvantage = server.HandleCommand(
+      dnd::AttackToken{.attacker = 2, .target = 1}, "", true);
+  Expect(dark_disadvantage.accepted, "the blind target answers");
+  Expect(saw_text(dark_disadvantage, "с помехой"),
+         "a target it cannot see gives disadvantage");
+
+  // Оба в одном облаке дыма: взаимная слепота гасится — обычный бросок.
+  dnd::GridMap smoke(4, 1);
+  smoke.SetProps(CellAt(0, 0),
+                 dnd::CellProps{.obscurement = dnd::Obscurement::kHeavy});
+  smoke.SetProps(CellAt(1, 0),
+                 dnd::CellProps{.obscurement = dnd::Obscurement::kHeavy});
+  const dnd::GameSnapshot smoke_snapshot{
+      .map = smoke,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "a",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .ac = 10,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "b",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .ac = 10,
+                         .attack_bonus = 100,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(1, 0)},
+          },
+      .next_token_id = 3,
+  };
+  dnd::GameServer smoke_server(smoke_snapshot, 0, 11);
+  const dnd::CommandOutcome smoke_attack = smoke_server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 2}, "", true);
+  Expect(smoke_attack.accepted, "an attack inside the smoke is accepted");
+  Expect(!saw_text(smoke_attack, "с преимуществом") &&
+             !saw_text(smoke_attack, "с помехой"),
+         "mutual blindness in the smoke cancels out");
+}
+
+auto TestInitiativeConditions() -> void {
+  dnd::Token token;
+  Expect(dnd::InitiativeRollModesFor(token).Net() == 0,
+         "a plain token rolls initiative normally");
+
+  token.conditions = {dnd::Condition{"невидим"}};
+  Expect(dnd::InitiativeRollModesFor(token).Net() == 1,
+         "an invisible token rolls initiative with advantage");
+
+  token.conditions = {dnd::Condition{std::string(dnd::kIncapacitated)}};
+  Expect(dnd::InitiativeRollModesFor(token).Net() == -1,
+         "an incapacitated token rolls initiative with disadvantage");
+
+  token.conditions = {dnd::Condition{std::string(dnd::kSurprised)}};
+  Expect(dnd::InitiativeRollModesFor(token).Net() == -1,
+         "a surprised token rolls initiative with disadvantage");
+
+  token.conditions = {dnd::Condition{"невидим"},
+                      dnd::Condition{std::string(dnd::kSurprised)}};
+  Expect(dnd::InitiativeRollModesFor(token).Net() == 0,
+         "advantage and disadvantage cancel on initiative");
+
+  dnd::Token downed;
+  downed.hp = 0;
+  Expect(dnd::IsIncapacitated(downed), "a token at zero hp is incapacitated");
+  Expect(dnd::InitiativeRollModesFor(downed).Net() == -1,
+         "a downed token rolls initiative with disadvantage");
 }
 
 auto TestDamageTypesAndDefenses() -> void {
@@ -8829,6 +9005,8 @@ auto main() -> int {
     TestConditionSaves();
     TestConditionPaletteAndExhaustion();
     TestConditionAttackModifiers();
+    TestConcealmentAttacks();
+    TestInitiativeConditions();
     TestDamageTypesAndDefenses();
     TestRangedAttackAndSurprise();
     TestDiceExpression();

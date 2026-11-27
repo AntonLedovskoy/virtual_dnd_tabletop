@@ -85,16 +85,6 @@ auto IsValidKind(TokenKind kind) -> bool {
          kind == TokenKind::kMonster;
 }
 
-auto IsIncapacitated(const Token& token) -> bool {
-  if (token.hp == 0) {
-    return true;
-  }
-  return std::ranges::any_of(token.conditions,
-                             [](const Condition& condition) -> bool {
-                               return IsIncapacitatingCondition(condition.name);
-                             });
-}
-
 auto ControlRejectReason(const Token& token) -> const char* {
   if (token.kind == TokenKind::kPlayer && token.owner.empty()) {
     return "сначала заберите персонажа";
@@ -1057,9 +1047,14 @@ auto GameServer::HandleAttack(const AttackToken& command,
     }
   }
   // Преимущество и помеха от состояний 2024 складываются с ручными и взаимно
-  // гасятся (SRD 5.2.1).
-  const AttackRollModes modes = AttackRollModesFor(
-      *attacker, *target, distance_cells, attack_range, threatened);
+  // гасятся (SRD 5.2.1). Взгляд через дым и тьму считается по свету сцены.
+  const bool sees_target =
+      CanSeeForAttack(state_.Map(), light_, *attacker, target->cell);
+  const bool target_sees_attacker =
+      CanSeeForAttack(state_.Map(), light_, *target, attacker->cell);
+  const AttackRollModes modes =
+      AttackRollModesFor(*attacker, *target, distance_cells, attack_range,
+                         threatened, sees_target, target_sees_attacker);
   bool advantage = command.advantage || modes.advantage;
   bool disadvantage = command.disadvantage || modes.disadvantage;
   // Под водой дальнобойная атака идёт с помехой в обычной дистанции и
@@ -2178,10 +2173,17 @@ auto GameServer::RollInitiative(TokenId id) -> int {
     std::uniform_int_distribution<int> d20(1, 20);
     const int bonus = token->initiative_bonus - ExhaustionPenalty(*token);
     value = d20(rng_) + bonus;
-    // Застигнутый врасплох бросает с помехой и теряет состояние: отдельного
-    // раунда неожиданности в 2024 нет.
-    if (IsSurprised(*token)) {
+    // 2024: невидимый бросает с преимуществом, недееспособный и застигнутый
+    // врасплох — с помехой. Преимущество и помеха гасятся, поэтому второй
+    // бросок нужен только при одной поправке. Внезапность тратится сразу:
+    // отдельного раунда неожиданности в 2024 нет.
+    const AttackRollModes modes = InitiativeRollModesFor(*token);
+    if (modes.Net() > 0) {
+      value = std::max(value, d20(rng_) + bonus);
+    } else if (modes.Net() < 0) {
       value = std::min(value, d20(rng_) + bonus);
+    }
+    if (IsSurprised(*token)) {
       (void)state_.RemoveTokenCondition(id, kSurprised);
     }
   }
@@ -2798,8 +2800,8 @@ auto GameServer::FogRecords() const -> std::vector<FogRecord> {
 
 auto GameServer::RecomputeFog() -> void {
   // Свет сцены считается один раз: свойства клеток плюс свет всех токенов.
-  const LightField light =
-      ComputeLightField(state_.Map(), TokenLightSources(state_.Tokens()));
+  // Он же нужен атакам: дым и тьма закрывают взгляд (core/conditions).
+  light_ = ComputeLightField(state_.Map(), TokenLightSources(state_.Tokens()));
   auto observer = [](const Token& token) -> Observer {
     return Observer{.cell = token.cell,
                     .darkvision_cells = token.darkvision_cells,
@@ -2837,14 +2839,14 @@ auto GameServer::RecomputeFog() -> void {
   }
 
   const std::vector<Cell>& revealed = state_.Revealed();
-  party_fog_.Recompute(state_.Map(), party_observers, light, sight_radius_);
+  party_fog_.Recompute(state_.Map(), party_observers, light_, sight_radius_);
   party_fog_.Reveal(revealed);
   // Игрок без персонажа больше не видит клетку, но помнит исследованное.
   for (auto& [owner, fog] : fogs_) {
     const auto it = observers.find(owner);
     fog.Recompute(state_.Map(),
                   it == observers.end() ? std::vector<Observer>{} : it->second,
-                  light, sight_radius_);
+                  light_, sight_radius_);
     fog.Reveal(revealed);
   }
   for (const std::string& owner : character_owners_) {
@@ -2855,7 +2857,7 @@ auto GameServer::RecomputeFog() -> void {
     const auto it = observers.find(owner);
     fog.Recompute(state_.Map(),
                   it == observers.end() ? std::vector<Observer>{} : it->second,
-                  light, sight_radius_);
+                  light_, sight_radius_);
     fog.Reveal(revealed);
     fogs_.emplace(owner, std::move(fog));
   }

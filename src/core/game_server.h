@@ -253,6 +253,9 @@ class GameServer {
   std::set<std::string, std::less<>> character_owners_;
   // Обзор партии: его получает игрок, пока не выбрал персонажа.
   FogOfWar party_fog_;
+  // Освещённость сцены из последнего RecomputeFog: по ней атака решает,
+  // виден ли дым и тьма между атакующим и целью.
+  LightField light_;
   int sight_radius_;
   std::mt19937 rng_;
 };
