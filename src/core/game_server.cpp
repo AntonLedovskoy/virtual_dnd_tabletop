@@ -1125,8 +1125,18 @@ auto GameServer::HandleAttack(const AttackToken& command,
   }
   // Укрытие по стороне клетки: половина +2 к КД, три четверти +5, полное
   // укрытие не даёт выбрать цель напрямую (область при этом действует).
+  // Существо на линии даёт только половину укрытия; лежащие без сознания не
+  // считаются, цель и атакующий — тоже. Размеров в модели нет, поэтому любое
+  // живое существо считается достаточным (упрощение 2024).
+  std::vector<Cell> creatures;
+  for (const Token& other : state_.Tokens()) {
+    if (other.id != attacker->id && other.id != target->id &&
+        !IsIncapacitated(other)) {
+      creatures.push_back(other.cell);
+    }
+  }
   const CoverLevel cover =
-      CoverBetween(state_.Map(), attacker->cell, target->cell);
+      CoverBetween(state_.Map(), attacker->cell, target->cell, creatures);
   if (cover == CoverLevel::kFull) {
     return CommandOutcome{.reject_reason = "цель за полным укрытием"};
   }

@@ -349,6 +349,22 @@ auto TestCover() -> void {
          "a wall between attacker and target is full cover");
 }
 
+auto TestCreatureCover() -> void {
+  // 2024: существо на линии даёт половину укрытия, стена — полное.
+  const dnd::GridMap map(6, 1);
+  const std::vector<dnd::Cell> creature = {CellAt(2, 0)};
+  Expect(dnd::CoverBetween(map, CellAt(0, 0), CellAt(5, 0), creature) ==
+             dnd::CoverLevel::kHalf,
+         "a creature on the line gives half cover");
+  Expect(dnd::CoverBetween(map, CellAt(0, 0), CellAt(5, 0)) ==
+             dnd::CoverLevel::kNone,
+         "without creatures the line has no cover");
+  const std::vector<dnd::Cell> behind = {CellAt(5, 0)};
+  Expect(dnd::CoverBetween(map, CellAt(0, 0), CellAt(5, 0), behind) ==
+             dnd::CoverLevel::kNone,
+         "a creature in the target cell gives no cover");
+}
+
 auto TestHazardsAndCurrent() -> void {
   dnd::GridMap map(4, 1);
   map.SetTerrain(CellAt(1, 0), dnd::Terrain::kLava);
@@ -9548,6 +9564,7 @@ auto main() -> int {
     TestCellPropsMovement();
     TestWalkThroughIncapacitated();
     TestCover();
+    TestCreatureCover();
     TestHazardsAndCurrent();
     TestCurrentShift();
     TestMoveRules();

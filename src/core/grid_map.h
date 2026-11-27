@@ -228,9 +228,10 @@ struct PathCost {
     -> std::optional<PathCost>;
 
 // Лучшее укрытие на линии взгляда от attacker к target: учитываются стороны
-// всех пересечённых клеток, стена даёт полное укрытие. Укрытие от существ не
-// моделируется — его решает DM.
-[[nodiscard]] auto CoverBetween(const GridMap& map, Cell attacker, Cell target)
+// всех пересечённых клеток, стена даёт полное укрытие. Существо на линии даёт
+// половину укрытия (2024); список клеток существ передаёт вызывающий.
+[[nodiscard]] auto CoverBetween(const GridMap& map, Cell attacker, Cell target,
+                                std::span<const Cell> creatures = {})
     -> CoverLevel;
 
 }  // namespace dnd

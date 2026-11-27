@@ -215,8 +215,8 @@ auto CoverBonus(CoverLevel level) -> int {
   return 0;
 }
 
-auto CoverBetween(const GridMap& map, Cell attacker, Cell target)
-    -> CoverLevel {
+auto CoverBetween(const GridMap& map, Cell attacker, Cell target,
+                  std::span<const Cell> creatures) -> CoverLevel {
   if (attacker == target || !map.Contains(attacker) || !map.Contains(target)) {
     return CoverLevel::kNone;
   }
@@ -252,6 +252,11 @@ auto CoverBetween(const GridMap& map, Cell attacker, Cell target)
     // записана на любой из двух клеток.
     const int opposite = (side + 2) % kCoverSides;
     consider(CoverOnSide(map.PropsAt(previous).cover_sides, opposite));
+    // Существо на линии даёт половину укрытия, но не закрывает обзор.
+    if (cell != target &&
+        std::ranges::find(creatures, cell) != creatures.end()) {
+      consider(CoverLevel::kHalf);
+    }
     if (cell != target && map.BlocksSight(cell)) {
       return CoverLevel::kFull;
     }
