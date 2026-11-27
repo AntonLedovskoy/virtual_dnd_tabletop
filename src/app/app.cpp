@@ -5958,19 +5958,17 @@ auto App::Iterate() -> void {
       if (encounter.active && FollowsPlayerRules(*range_token, is_dm)) {
         radius = RemainingMovementCells(*range_token);
       }
-      // Монстры и NPC перекрывают путь, персонажи — нет; встать на занятую
-      // клетку всё равно нельзя, поэтому её не показываем.
-      std::vector<Cell> blockers;
+      // Монстры и NPC перекрывают путь, кроме недееспособных, персонажи —
+      // нет; встать на занятую клетку всё равно нельзя, поэтому её не
+      // показываем.
       std::vector<Cell> occupied;
       for (const Token& token : view_.Tokens()) {
-        if (token.id == range_token->id) {
-          continue;
-        }
-        occupied.push_back(token.cell);
-        if (token.kind != TokenKind::kPlayer) {
-          blockers.push_back(token.cell);
+        if (token.id != range_token->id) {
+          occupied.push_back(token.cell);
         }
       }
+      const std::vector<Cell> blockers =
+          BlockingCells(view_.Tokens(), range_token->id);
       std::vector<Cell> reachable = ReachableCells(
           view_.Map(), range_token->cell, radius, range_token->diagonal_parity,
           blockers, MovementProfileFor(*range_token));

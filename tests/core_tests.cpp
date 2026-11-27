@@ -274,6 +274,50 @@ auto TestCellPropsMovement() -> void {
          "difficult terrain doubles the first diagonal");
 }
 
+auto TestWalkThroughIncapacitated() -> void {
+  // 2024: сквозь недееспособного врага пройти можно, сквозь живого — нет.
+  const dnd::GridMap map(4, 1);
+  const std::string dm = std::string(dnd::kDmOwner);
+  dnd::GameSnapshot snapshot{
+      .map = map,
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = dm,
+                         .hp = 10,
+                         .max_hp = 10,
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 2,
+                         .name = "downed",
+                         .owner = dm,
+                         .hp = 0,
+                         .max_hp = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(1, 0)},
+          },
+      .next_token_id = 3,
+  };
+  Expect(dnd::BlockingCells(snapshot.tokens, 1).empty(),
+         "an incapacitated monster does not block the path");
+
+  dnd::GameServer server(snapshot, 6, 5);
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 0)}, "",
+                            true)
+             .accepted,
+         "a player walks through a downed monster");
+
+  snapshot.tokens[1].hp = 5;
+  dnd::GameServer living(snapshot, 6, 5);
+  Expect(!living
+              .HandleCommand(dnd::MoveToken{.id = 1, .target = CellAt(2, 0)},
+                             "", true)
+              .accepted,
+         "a living monster still blocks the path");
+}
+
 auto TestCover() -> void {
   dnd::GridMap map(6, 1);
   dnd::CellProps middle = map.PropsAt(CellAt(2, 0));
@@ -9502,6 +9546,7 @@ auto main() -> int {
   try {
     TestGridMap();
     TestCellPropsMovement();
+    TestWalkThroughIncapacitated();
     TestCover();
     TestHazardsAndCurrent();
     TestCurrentShift();

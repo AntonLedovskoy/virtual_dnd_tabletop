@@ -15,6 +15,19 @@ auto MovementProfileFor(const Token& token) -> MovementProfile {
                          .climb_speed = token.climb_speed};
 }
 
+auto BlockingCells(const std::vector<Token>& tokens, TokenId mover)
+    -> std::vector<Cell> {
+  std::vector<Cell> cells;
+  for (const Token& token : tokens) {
+    if (token.id == mover || token.kind == TokenKind::kPlayer ||
+        IsIncapacitated(token)) {
+      continue;
+    }
+    cells.push_back(token.cell);
+  }
+  return cells;
+}
+
 auto StandUpCostCells(const Token& token) -> int {
   if (!IsProne(token)) {
     return 0;

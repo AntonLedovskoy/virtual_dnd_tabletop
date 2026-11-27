@@ -27,6 +27,11 @@ inline constexpr int kMaxFallFeet = 2000;
 // Профиль прохождения клеток из листа: скорость, плавание и лазание.
 [[nodiscard]] auto MovementProfileFor(const Token& token) -> MovementProfile;
 
+// Клетки, перекрывающие путь: монстры и NPC, кроме недееспособных — сквозь
+// них 2024 разрешает проходить. Свой токен и персонажи путников не блокируют.
+[[nodiscard]] auto BlockingCells(const std::vector<Token>& tokens,
+                                 TokenId mover) -> std::vector<Cell>;
+
 // Сколько клеток движения стоит встать из «сбит с ног»: половина скорости,
 // но не меньше одной клетки. Вне боя вставание не тратит запас.
 [[nodiscard]] auto StandUpCostCells(const Token& token) -> int;

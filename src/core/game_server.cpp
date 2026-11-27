@@ -355,20 +355,16 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
     return CommandOutcome{.reject_reason = "скорость 0: персонаж обездвижен"};
   }
 
-  // Проверяем путь и для игрока вне боя: сквозь стены и монстров нельзя.
-  // Свои персонажи друг друга не блокируют, но встать на занятую клетку
-  // нельзя. DM по-прежнему двигает токены свободно.
-  std::vector<Cell> blockers;
+  // Проверяем путь и для игрока вне боя: сквозь стены и живых монстров
+  // нельзя, сквозь недееспособных — можно (2024). Свои персонажи друг друга
+  // не блокируют, но встать на занятую клетку нельзя. DM по-прежнему двигает
+  // токены свободно.
+  const std::vector<Cell> blockers = BlockingCells(state_.Tokens(), command.id);
   bool target_occupied = false;
   for (const Token& other : state_.Tokens()) {
-    if (other.id == command.id) {
-      continue;
-    }
-    if (other.cell == command.target) {
+    if (other.id != command.id && other.cell == command.target) {
       target_occupied = true;
-    }
-    if (other.kind != TokenKind::kPlayer) {
-      blockers.push_back(other.cell);
+      break;
     }
   }
   if (player_rules && target_occupied) {
