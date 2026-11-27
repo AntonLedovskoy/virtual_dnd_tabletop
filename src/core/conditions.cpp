@@ -155,6 +155,12 @@ auto AttackRollModesFor(const Token& attacker, const Token& target,
   if (HasCondition(attacker, "невидим")) {
     advantage();
   }
+  // Захваченный бьёт с помехой по всем, кроме захватившего. Ссылки на
+  // захватившего в токене нет: он должен быть в 5 футах, поэтому соседняя
+  // цель считается им, а дальняя — любой другой (упрощение).
+  if (HasCondition(attacker, "захвачен") && distance_cells > 1) {
+    disadvantage();
+  }
   // Цель: ослеплена, невидима, сбита с ног, опутана, обездвижена.
   if (HasCondition(target, "ослеплён") || HasCondition(target, "опутан") ||
       HasCondition(target, "парализован") || HasCondition(target, "оглушён") ||

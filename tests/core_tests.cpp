@@ -2641,6 +2641,13 @@ auto TestConditionAttackModifiers() -> void {
   attacker.conditions = {dnd::Condition{"ослеплён"}};
   Expect(modes(1).Net() == -1, "a blinded attacker has disadvantage");
 
+  target.conditions = {};
+  attacker.conditions = {dnd::Condition{"захвачен"}};
+  Expect(modes(1).Net() == 0, "a grappled attacker can hit the grappler");
+  Expect(modes(2).Net() == -1,
+         "a grappled attacker has disadvantage on other targets");
+
+  target.conditions = {dnd::Condition{"невидим"}};
   attacker.conditions = {dnd::Condition{"невидим"}};
   Expect(modes(1).advantage && modes(1).disadvantage,
          "an invisible attacker against an invisible target has both");
