@@ -149,6 +149,15 @@ class GameServer {
   [[nodiscard]] auto HandleDeathSave(const DeathSave& command,
                                      const std::string& actor,
                                      bool can_control_all) -> CommandOutcome;
+  [[nodiscard]] auto HandleStabilize(const Stabilize& command,
+                                     bool can_control_all) -> CommandOutcome;
+  // Бросает спасбросок от смерти за умирающего и пишет строку в лог.
+  // Возвращает обновлённый токен, если бросок состоялся; automatic добавляет
+  // пометку «начало хода».
+  auto RollDeathSave(TokenId id, std::string_view author, bool automatic,
+                     std::vector<Event>& events) -> std::optional<Token>;
+  // Срок стабильности: 1d4 часа.
+  [[nodiscard]] auto RollStableSeconds() -> int;
   [[nodiscard]] auto HandleSetInitiative(const SetInitiative& command,
                                          const std::string& actor,
                                          bool can_control_all)

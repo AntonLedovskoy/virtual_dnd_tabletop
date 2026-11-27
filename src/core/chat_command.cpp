@@ -278,6 +278,11 @@ auto ParseChatCommand(std::string_view text) -> ChatCommand {
     return command;
   }
 
+  if (text == "/stabilize") {
+    command.kind = ChatCommandKind::kStabilize;
+    return command;
+  }
+
   if (MatchesCommand(text, "/rest") || MatchesCommand(text, "/longrest")) {
     const bool long_rest = MatchesCommand(text, "/longrest");
     command.kind = ChatCommandKind::kRest;

@@ -242,6 +242,8 @@ auto GameServer::HandleCommand(const Command& command, const std::string& actor,
           return HandleAoeDamage(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, DeathSave>) {
           return HandleDeathSave(cmd, actor, can_control_all);
+        } else if constexpr (std::is_same_v<T, Stabilize>) {
+          return HandleStabilize(cmd, can_control_all);
         } else if constexpr (std::is_same_v<T, PingAt>) {
           return HandlePing(cmd, actor);
         } else if constexpr (std::is_same_v<T, SetMapBackground>) {
@@ -1509,28 +1511,47 @@ auto GameServer::HandleDeathSave(const DeathSave& command,
   if (token->hp > 0) {
     return CommandOutcome{.reject_reason = "спасбросок нужен при 0 HP"};
   }
-  const bool dead = std::ranges::any_of(token->conditions,
-                                        [](const Condition& condition) -> bool {
-                                          return condition.name == kDead;
-                                        });
-  if (dead) {
+  if (HasCondition(*token, kDead)) {
     return CommandOutcome{.reject_reason = "персонаж уже мёртв"};
   }
-  if (token->death_save_successes >= 3) {
+  if (HasCondition(*token, kStable) || token->death_save_successes >= 3) {
     return CommandOutcome{.reject_reason =
                               "персонаж стабилен, спасброски не нужны"};
   }
-  const std::string name = token->name;
-  std::uniform_int_distribution<int> d20(1, 20);
-  const int roll = d20(rng_);
-  const int penalty = ExhaustionPenalty(*token);
+  CommandOutcome outcome;
+  outcome.accepted = true;
   const std::optional<Token> updated =
-      state_.DeathSave(command.id, roll, penalty);
+      RollDeathSave(command.id, AuthorName(actor), false, outcome.events);
   if (!updated.has_value()) {
     return CommandOutcome{.reject_reason = "не удалось бросить спасбросок"};
   }
+  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  return outcome;
+}
+
+auto GameServer::RollDeathSave(TokenId id, std::string_view author,
+                               bool automatic, std::vector<Event>& events)
+    -> std::optional<Token> {
+  const std::optional<Token> token = state_.TokenCopy(id);
+  if (!token.has_value() || token->hp > 0 || HasCondition(*token, kDead) ||
+      HasCondition(*token, kStable) || token->death_save_successes >= 3) {
+    return std::nullopt;
+  }
+  std::uniform_int_distribution<int> d20(1, 20);
+  const int roll = d20(rng_);
+  const int penalty = ExhaustionPenalty(*token);
+  const int stable_seconds = RollStableSeconds();
+  std::optional<Token> updated =
+      state_.DeathSave(id, roll, penalty, stable_seconds);
+  if (!updated.has_value()) {
+    return std::nullopt;
+  }
   std::ostringstream text;
-  text << name << ": спасбросок от смерти " << roll;
+  text << token->name << ": спасбросок от смерти";
+  if (automatic) {
+    text << " (начало хода)";
+  }
+  text << " " << roll;
   const int effective = roll - penalty;
   if (penalty > 0 && roll != 1 && roll != 20) {
     text << " − " << penalty << " (истощение) = " << effective;
@@ -1546,7 +1567,7 @@ auto GameServer::HandleDeathSave(const DeathSave& command,
   } else if (effective >= 10) {
     text << " — успех (" << updated->death_save_successes << "/3)";
     if (updated->death_save_successes >= 3) {
-      text << ", стабилен";
+      text << ", стабилен на " << stable_seconds / kSecondsPerHour << " ч";
     }
   } else {
     text << " — провал (" << updated->death_save_failures << "/3)";
@@ -1554,11 +1575,59 @@ auto GameServer::HandleDeathSave(const DeathSave& command,
       text << ", персонаж погиб";
     }
   }
+  events.emplace_back(LogLineAdded{
+      .line = LogLine{.author = std::string(author),
+                      .text = text.str(),
+                      .timestamp = CurrentTimeSeconds()},
+  });
+  return updated;
+}
+
+auto GameServer::RollStableSeconds() -> int {
+  std::uniform_int_distribution<int> d4(1, 4);
+  return d4(rng_) * kSecondsPerHour;
+}
+
+auto GameServer::HandleStabilize(const Stabilize& command, bool can_control_all)
+    -> CommandOutcome {
+  if (!can_control_all) {
+    return CommandOutcome{.reject_reason = "стабилизирует только DM"};
+  }
+  const Token* token = FindToken(command.id);
+  if (token == nullptr) {
+    return CommandOutcome{.reject_reason = "токен не найден"};
+  }
+  if (token->hp > 0) {
+    return CommandOutcome{.reject_reason = "стабилизировать можно при 0 HP"};
+  }
+  if (HasCondition(*token, kDead)) {
+    return CommandOutcome{.reject_reason = "персонаж уже мёртв"};
+  }
+  if (HasCondition(*token, kStable) || token->death_save_successes >= 3) {
+    return CommandOutcome{.reject_reason = "персонаж уже стабилен"};
+  }
+  // Навыки появятся отдельным шагом: пока Медицина — это d20 без бонуса.
+  std::uniform_int_distribution<int> d20(1, 20);
+  const int roll = d20(rng_);
+  const int stable_seconds = RollStableSeconds();
+  std::ostringstream text;
+  text << token->name << ": Медицина (КС 10) " << roll;
   CommandOutcome outcome;
   outcome.accepted = true;
-  outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  if (roll >= 10) {
+    const std::optional<Token> updated =
+        state_.StabilizeToken(command.id, stable_seconds);
+    if (!updated.has_value()) {
+      return CommandOutcome{.reject_reason = "не удалось стабилизировать"};
+    }
+    text << " — успех, стабилен на " << stable_seconds / kSecondsPerHour
+         << " ч";
+    outcome.events.emplace_back(TokenUpdated{.token = *updated});
+  } else {
+    text << " — провал";
+  }
   outcome.events.emplace_back(LogLineAdded{
-      .line = LogLine{.author = AuthorName(actor),
+      .line = LogLine{.author = "DM",
                       .text = text.str(),
                       .timestamp = CurrentTimeSeconds()},
   });
@@ -2282,6 +2351,8 @@ auto GameServer::HandleStartEncounter(bool can_control_all) -> CommandOutcome {
                       .text = initiative.str(),
                       .timestamp = CurrentTimeSeconds()},
   });
+  // Умирающий персонаж бросает спасбросок в начале своего хода.
+  (void)RollDeathSave(state_.ActiveTokenId(), "DM", true, outcome.events);
   for (const TokenId id : changed) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});
@@ -2426,6 +2497,8 @@ auto GameServer::HandleNextTurn(bool can_control_all) -> CommandOutcome {
                     .timestamp = CurrentTimeSeconds()},
     });
   }
+  // Начало хода умирающего: спасбросок от смерти бросает сервер.
+  (void)RollDeathSave(state_.ActiveTokenId(), "DM", true, outcome.events);
   for (const TokenId id : changed) {
     if (std::optional<Token> token = state_.TokenCopy(id)) {
       outcome.events.emplace_back(TokenUpdated{.token = std::move(*token)});

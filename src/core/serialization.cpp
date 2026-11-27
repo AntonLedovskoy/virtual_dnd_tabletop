@@ -68,6 +68,7 @@ constexpr std::uint8_t kCommandUseTurnAction = 35;
 constexpr std::uint8_t kCommandSetEncounterComposition = 36;
 constexpr std::uint8_t kCommandFallToken = 37;
 constexpr std::uint8_t kCommandSetTokenLight = 38;
+constexpr std::uint8_t kCommandStabilize = 39;
 
 constexpr std::uint8_t kEventTokenMoved = 1;
 constexpr std::uint8_t kEventViewUpdated = 2;
@@ -560,6 +561,14 @@ auto DecodeDeathSaveCommand(ByteReader& reader) -> std::optional<Command> {
     return std::nullopt;
   }
   return Command{DeathSave{.id = id}};
+}
+
+auto DecodeStabilizeCommand(ByteReader& reader) -> std::optional<Command> {
+  std::uint32_t id = 0;
+  if (!reader.U32(id) || !reader.Done()) {
+    return std::nullopt;
+  }
+  return Command{Stabilize{.id = id}};
 }
 
 auto DecodeAttackCommand(ByteReader& reader) -> std::optional<Command> {
@@ -1653,6 +1662,9 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
         } else if constexpr (std::is_same_v<T, DeathSave>) {
           writer.U8(kCommandDeathSave);
           writer.U32(cmd.id);
+        } else if constexpr (std::is_same_v<T, Stabilize>) {
+          writer.U8(kCommandStabilize);
+          writer.U32(cmd.id);
         } else if constexpr (std::is_same_v<T, AttackToken>) {
           writer.U8(kCommandAttackToken);
           writer.U32(cmd.attacker);
@@ -1772,6 +1784,8 @@ auto DecodeCommand(const std::uint8_t* data, std::size_t size)
       return DecodeAoeDamageCommand(reader);
     case kCommandDeathSave:
       return DecodeDeathSaveCommand(reader);
+    case kCommandStabilize:
+      return DecodeStabilizeCommand(reader);
     case kCommandAttackToken:
       return DecodeAttackCommand(reader);
     case kCommandPing:

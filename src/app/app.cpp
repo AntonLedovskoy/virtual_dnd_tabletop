@@ -4600,6 +4600,21 @@ auto App::SubmitChat() -> void {
       }
       SendCommand(DeathSave{.id = token->id});
       return;
+    case ChatCommandKind::kStabilize:
+      if (options_.mode != AppMode::kHost) {
+        view_.AddLocalLine("Стабилизирует только DM");
+        return;
+      }
+      if (token == nullptr) {
+        view_.AddLocalLine(std::string(strings::kSelectTokenForCommand));
+        return;
+      }
+      if (token->hp > 0) {
+        view_.AddLocalLine("Стабилизировать можно только при 0 HP");
+        return;
+      }
+      SendCommand(Stabilize{.id = token->id});
+      return;
     case ChatCommandKind::kRest:
       if (options_.mode != AppMode::kHost) {
         view_.AddLocalLine("Отдых объявляет только DM");

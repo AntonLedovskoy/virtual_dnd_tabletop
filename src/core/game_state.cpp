@@ -69,9 +69,11 @@ auto RemoveCondition(Token& token, std::string_view name) -> bool {
                        }) > 0;
 }
 
-// Гибель: «без сознания» заменяется на «мёртв».
+// Гибель: «без сознания» заменяется на «мёртв»; стабильность больше не
+// действует.
 auto KillToken(Token& token) -> void {
   RemoveCondition(token, kUnconscious);
+  RemoveCondition(token, kStable);
   AddConditionIfMissing(token, Condition{std::string(kDead)});
 }
 
@@ -89,6 +91,15 @@ auto RemoveExhaustionLevel(Token& token) -> bool {
   return true;
 }
 
+// Стабильный персонаж приходит в себя с 1 HP, когда истекает срок
+// «стабилен» (1d4 часа по 2024).
+auto RecoverStable(Token& token) -> void {
+  token.hp = 1;
+  token.death_save_successes = 0;
+  token.death_save_failures = 0;
+  RemoveCondition(token, kUnconscious);
+}
+
 // Прокручивает игровое время для состояний одного токена: срочные
 // уменьшаются на seconds, нулевые держатся до ручного снятия. Возвращает
 // true, если набор состояний изменился.
@@ -97,13 +108,24 @@ auto TickConditions(Token& token, int seconds) -> bool {
     return false;
   }
   const std::size_t before = token.conditions.size();
+  bool stable_expired = false;
   for (auto it = token.conditions.begin(); it != token.conditions.end();) {
     if (it->seconds <= 0) {
       ++it;
       continue;
     }
     it->seconds -= seconds;
-    it = it->seconds <= 0 ? token.conditions.erase(it) : it + 1;
+    if (it->seconds > 0) {
+      ++it;
+      continue;
+    }
+    if (it->name == kStable) {
+      stable_expired = true;
+    }
+    it = token.conditions.erase(it);
+  }
+  if (stable_expired && token.hp == 0 && !HasCondition(token, kDead)) {
+    RecoverStable(token);
   }
   return token.conditions.size() != before;
 }
@@ -309,7 +331,9 @@ auto GameState::DamageToken(TokenId id, int amount, bool critical)
     AddConditionIfMissing(*token, Condition{std::string(kUnconscious)});
   }
   if (was_down && amount > 0) {
-    // Удар по лежачему — провал спасброска от смерти, критический — два.
+    // Урон снимает стабильность: лежачий снова бросает спасброски. Удар по
+    // лежачему — провал спасброска от смерти, критический — два.
+    RemoveCondition(*token, kStable);
     const int failures = critical ? 2 : 1;
     token->death_save_failures =
         std::min(3, token->death_save_failures + failures);
@@ -330,18 +354,20 @@ auto GameState::HealToken(TokenId id, int amount) -> std::optional<Token> {
   token->death_save_failures = 0;
   if (token->hp > 0) {
     RemoveCondition(*token, kUnconscious);
+    RemoveCondition(*token, kStable);
   }
   return *token;
 }
 
-auto GameState::DeathSave(TokenId id, int roll, int penalty)
+auto GameState::DeathSave(TokenId id, int roll, int penalty, int stable_seconds)
     -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr || token->hp > 0) {
     return std::nullopt;
   }
   // Мёртвый и стабильный спасброски не бросают.
-  if (HasCondition(*token, kDead) || token->death_save_successes >= 3) {
+  if (HasCondition(*token, kDead) || HasCondition(*token, kStable) ||
+      token->death_save_successes >= 3) {
     return std::nullopt;
   }
   if (roll == 20) {
@@ -355,7 +381,12 @@ auto GameState::DeathSave(TokenId id, int roll, int penalty)
   if (effective >= 10) {
     token->death_save_successes = std::min(3, token->death_save_successes + 1);
     // Три успеха: персонаж стабилен, но всё ещё без сознания на нуле HP.
-    // «Без сознания» снимает только лечение или возврат HP.
+    // «Без сознания» снимает только лечение, возврат HP или истёкший срок
+    // стабильности (1d4 часа).
+    if (token->death_save_successes >= 3 && stable_seconds > 0) {
+      AddConditionIfMissing(*token,
+                            Condition{std::string(kStable), stable_seconds});
+    }
     return *token;
   }
   // Натуральная 1 — два провала, остальные числа ниже 10 — один.
@@ -364,6 +395,19 @@ auto GameState::DeathSave(TokenId id, int roll, int penalty)
   if (token->death_save_failures >= 3) {
     KillToken(*token);
   }
+  return *token;
+}
+
+auto GameState::StabilizeToken(TokenId id, int seconds)
+    -> std::optional<Token> {
+  Token* token = FindToken(id);
+  if (token == nullptr || token->hp > 0 || HasCondition(*token, kDead) ||
+      HasCondition(*token, kStable)) {
+    return std::nullopt;
+  }
+  token->death_save_successes = 3;
+  AddConditionIfMissing(*token,
+                        Condition{std::string(kStable), std::max(0, seconds)});
   return *token;
 }
 

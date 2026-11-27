@@ -46,7 +46,8 @@ inline constexpr std::string_view kDmSpawnHint =
     "P — персонаж, B — бестиарий, Del дважды — удалить";
 inline constexpr std::string_view kDmCommandHint =
     "/rename | /owner | /maxhp | /damage | /heal | /rest | /fall | /aoe | "
-    "/map | /portrait | /reveal | /unreveal | /xp | /time | /kick";
+    "/map | /portrait | /reveal | /unreveal | /xp | /time | /stabilize | "
+    "/kick";
 inline constexpr std::string_view kColorHint = "V — цвет";
 // Нижняя подсказка собирается из этих кусков по контексту (core/ui_hint):
 // общие клавиши, клавиши выбранного токена и добавки роли.
@@ -143,14 +144,14 @@ inline constexpr std::array<std::string_view, 19> kHelpCommon = {
     "K — состояния, L — лист (правит DM)",
     "X — действия хода (рывок, отход, уклонение и другие)",
     "M — дальность хода (5–10–5), V — цвет",
-    "Команды: /damage N, /heal N, /deathsave при 0 HP",
+    "Команды: /damage N, /heal N, /deathsave, /stabilize (DM)",
 };
 inline constexpr std::array<std::string_view, 3> kHelpPlayer = {
     "C — забрать персонажа под курсором",
     "R — освободить своего персонажа",
     "/portrait файл.png — портрет своего персонажа",
 };
-inline constexpr std::array<std::string_view, 19> kHelpDm = {
+inline constexpr std::array<std::string_view, 20> kHelpDm = {
     "P — персонаж под курсором",
     "Del дважды — удалить выбранный токен",
     "+ / - — HP, [ / ] — инициатива",
@@ -170,6 +171,7 @@ inline constexpr std::array<std::string_view, 19> kHelpDm = {
     "/reveal и /unreveal — область под курсором, /reveal off — всё",
     "/xp 300 — опыт выбранному, /xp 300 all — всей партии",
     "/time 10 — прокрутить 10 минут вне боя (s/m/h)",
+    "/deathsave вручную, /stabilize — Медицина КС 10 (DM)",
 };
 
 inline constexpr std::string_view kWindowTitle = "Виртуальный стол для D&D";

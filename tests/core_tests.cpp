@@ -1844,6 +1844,107 @@ auto TestMeleeReach() -> void {
       "the server rejects a ranged attack beyond twice the range");
 }
 
+auto TestStableRecovery() -> void {
+  const auto downed = [](dnd::TokenId id, const char* name, int x,
+                         int y) -> dnd::Token {
+    return dnd::Token{.id = id,
+                      .name = name,
+                      .owner = "party",
+                      .hp = 0,
+                      .max_hp = 12,
+                      .conditions = {dnd::Condition{"без сознания"}},
+                      .kind = dnd::TokenKind::kPlayer,
+                      .cell = CellAt(x, y)};
+  };
+  const dnd::GameSnapshot snapshot{
+      .map = dnd::GridMap(6, 6),
+      .tokens =
+          {
+              downed(1, "timed", 1, 1),
+              downed(2, "medic", 2, 2),
+              downed(3, "hurt", 3, 3),
+          },
+      .next_token_id = 4,
+  };
+  dnd::GameState state(snapshot);
+  const int two_hours = 2 * dnd::kSecondsPerHour;
+  (void)state.DeathSave(1, 10, 0, two_hours);
+  (void)state.DeathSave(1, 11, 0, two_hours);
+  const std::optional<dnd::Token> stable = state.DeathSave(1, 12, 0, two_hours);
+  Expect(stable.has_value() && HasCondition(*stable, dnd::kStable) &&
+             HasCondition(*stable, dnd::kUnconscious) && stable->hp == 0,
+         "three successes give the stable condition at zero hp");
+  Expect(!state.DeathSave(1, 10, 0, two_hours).has_value(),
+         "a stable character makes no death saves");
+  (void)state.AdvanceTime(two_hours - 1);
+  const std::optional<dnd::Token> waiting = state.TokenCopy(1);
+  Expect(waiting.has_value() && waiting->hp == 0 &&
+             HasCondition(*waiting, dnd::kStable),
+         "stability lasts 1d4 hours");
+  (void)state.AdvanceTime(1);
+  const std::optional<dnd::Token> awake = state.TokenCopy(1);
+  Expect(awake.has_value() && awake->hp == 1 &&
+             !HasCondition(*awake, dnd::kStable) &&
+             !HasCondition(*awake, dnd::kUnconscious),
+         "an expired stable condition wakes the character with 1 hp");
+
+  // Медицина ставит стабильность сразу; лечение снимает её.
+  const std::optional<dnd::Token> medicated =
+      state.StabilizeToken(2, dnd::kSecondsPerHour);
+  Expect(medicated.has_value() && HasCondition(*medicated, dnd::kStable) &&
+             medicated->death_save_successes == 3,
+         "medicine stabilizes a dying character");
+  const std::optional<dnd::Token> healed = state.HealToken(2, 4);
+  Expect(healed.has_value() && healed->hp == 4 &&
+             !HasCondition(*healed, dnd::kStable) &&
+             !HasCondition(*healed, dnd::kUnconscious),
+         "healing clears stability and wakes the character");
+
+  // Урон по стабильному снимает стабильность и даёт провал.
+  Expect(state.StabilizeToken(3, dnd::kSecondsPerHour).has_value(),
+         "the third character is stabilized");
+  const std::optional<dnd::Token> hit = state.DamageToken(3, 1);
+  Expect(hit.has_value() && !HasCondition(*hit, dnd::kStable) &&
+             hit->death_save_failures == 1,
+         "damage ends stability and adds a death save failure");
+}
+
+auto TestAutoDeathSave() -> void {
+  const dnd::GameSnapshot snapshot{
+      .map = dnd::GridMap(6, 6),
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "dying",
+                         .owner = "alice",
+                         .hp = 0,
+                         .max_hp = 10,
+                         .conditions = {dnd::Condition{"без сознания"}},
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(1, 1)},
+          },
+      .next_token_id = 2,
+  };
+  dnd::GameServer server(snapshot, 6, 9);
+  const dnd::CommandOutcome start =
+      server.HandleCommand(dnd::StartEncounter{}, "", true);
+  Expect(start.accepted, "an encounter with a dying character starts");
+  const dnd::Token after_start = TokenOf(server.State(), 1);
+  const bool rolled = after_start.hp == 1 ||
+                      after_start.death_save_successes > 0 ||
+                      after_start.death_save_failures > 0 ||
+                      HasCondition(after_start, dnd::kDead);
+  Expect(rolled, "a dying character rolls a death save at turn start");
+
+  // Игрок стабилизировать не может, DM — может (проверка Медицины КС 10).
+  dnd::GameServer stabilizer(snapshot, 6, 4);
+  Expect(!stabilizer.HandleCommand(dnd::Stabilize{.id = 1}, "alice", false)
+              .accepted,
+         "only the DM stabilizes by command");
+  Expect(stabilizer.HandleCommand(dnd::Stabilize{.id = 1}, "", true).accepted,
+         "the DM stabilization command is accepted");
+}
+
 auto TestAoeDamage() -> void {
   const dnd::GridMap map(8, 8);
   const dnd::GameSnapshot snapshot{
@@ -6984,6 +7085,8 @@ auto TestChatCommandParsing() -> void {
   Expect(parse("/ping").kind == ChatCommandKind::kPing, "/ping is a command");
   Expect(parse("/deathsave").kind == ChatCommandKind::kDeathSave,
          "/deathsave is a command");
+  Expect(parse("/stabilize").kind == ChatCommandKind::kStabilize,
+         "/stabilize is a command");
   const dnd::ChatCommand rest = parse("/rest");
   Expect(
       rest.kind == ChatCommandKind::kRest && !rest.long_rest && rest.value == 0,
@@ -7819,6 +7922,16 @@ auto TestCommandEventSerialization() -> void {
              std::holds_alternative<dnd::DeathSave>(*death_save_decoded) &&
              std::get<dnd::DeathSave>(*death_save_decoded).id == 6,
          "death save command survives serialization");
+
+  const dnd::Command stabilize{dnd::Stabilize{.id = 7}};
+  const std::vector<std::uint8_t> stabilize_bytes =
+      dnd::EncodeCommand(stabilize);
+  const std::optional<dnd::Command> stabilize_decoded =
+      dnd::DecodeCommand(stabilize_bytes.data(), stabilize_bytes.size());
+  Expect(stabilize_decoded.has_value() &&
+             std::holds_alternative<dnd::Stabilize>(*stabilize_decoded) &&
+             std::get<dnd::Stabilize>(*stabilize_decoded).id == 7,
+         "stabilize command survives serialization");
 
   const dnd::Command rest{dnd::RestParty{.long_rest = true}};
   const std::vector<std::uint8_t> rest_bytes = dnd::EncodeCommand(rest);
@@ -9001,6 +9114,8 @@ auto main() -> int {
     TestMeleeReach();
     TestAoeDamage();
     TestDeathSaves();
+    TestStableRecovery();
+    TestAutoDeathSave();
     TestConditionDurationAndInitiative();
     TestConditionSaves();
     TestConditionPaletteAndExhaustion();

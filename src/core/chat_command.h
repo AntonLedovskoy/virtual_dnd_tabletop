@@ -32,6 +32,7 @@ enum class ChatCommandKind : std::uint8_t {
   kDamage,
   kHeal,
   kDeathSave,
+  kStabilize,
   kRest,
   kTime,
   kFall,

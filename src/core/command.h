@@ -260,6 +260,11 @@ struct DeathSave {
   TokenId id = 0;
 };
 
+// Только DM: проверка Медицины КС 10 стабилизирует лежачего на 0 HP.
+struct Stabilize {
+  TokenId id = 0;
+};
+
 // Только DM: начислить опыт одному персонажу (id) или всей партии (party).
 inline constexpr int kMaxXpAward = 100000;
 struct AwardXp {
@@ -321,7 +326,7 @@ using Command = std::variant<
     SetTokenMaxHp, SetTokenColor, UpdateTokenSheet, UpdateTokenCombat,
     StartEncounter, EndEncounter, NextTurn, SetEncounterComposition, SetAoe,
     AttackToken, DamageToken, HealToken, RestParty, FallToken, AdvanceTime,
-    AoeDamage, DeathSave, PingAt, SetMapBackground, SetTokenPortrait,
+    AoeDamage, DeathSave, Stabilize, PingAt, SetMapBackground, SetTokenPortrait,
     RevealArea, HideArea, ClearRevealed, AwardXp, UseTurnAction, SetTokenLight>;
 
 }  // namespace dnd

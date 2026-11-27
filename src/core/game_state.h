@@ -69,9 +69,15 @@ class GameState {
   [[nodiscard]] auto HealToken(TokenId id, int amount) -> std::optional<Token>;
   // Бросок спасброска от смерти при hp == 0; roll — уже выпавший d20.
   // Натуральная 1 даёт два провала, 20 возвращает 1 HP. Три успеха оставляют
-  // персонажа стабильным, но всё ещё без сознания на нуле HP. penalty —
+  // персонажа стабильным, но всё ещё без сознания на нуле HP; stable_seconds
+  // больше нуля вешает «стабилен» на этот срок (1d4 часа). penalty —
   // истощение: оно вычитается из результата, но не из натурального значения.
-  [[nodiscard]] auto DeathSave(TokenId id, int roll, int penalty = 0)
+  [[nodiscard]] auto DeathSave(TokenId id, int roll, int penalty = 0,
+                               int stable_seconds = 0) -> std::optional<Token>;
+  // Стабилизация: третий успех спасброска (или помощь) даёт «стабилен» на
+  // seconds игровых секунд (1d4 часа). По истечении персонаж приходит в себя
+  // с 1 HP.
+  [[nodiscard]] auto StabilizeToken(TokenId id, int seconds)
       -> std::optional<Token>;
   // Отдых по правилам 2024. Короткий (1 час) тратит кости хитов на HP:
   // каждая даёт бросок d{hit_die} плюс модификатор Телосложения (не меньше

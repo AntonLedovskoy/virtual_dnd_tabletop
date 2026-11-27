@@ -17,6 +17,9 @@ inline constexpr std::string_view kConcentration = "концентрация";
 inline constexpr std::string_view kDead = "мёртв";
 // «Выведен из строя» и родственные состояния рвут концентрацию.
 inline constexpr std::string_view kIncapacitated = "выведен из строя";
+// Стабильный персонаж на 0 HP не бросает спасброски от смерти и приходит в
+// себя через 1d4 часа; срок держит само состояние (2024).
+inline constexpr std::string_view kStable = "стабилен";
 // Каждая запись «истощения» — один уровень, всего их до шести.
 inline constexpr std::string_view kExhaustion = "истощение";
 // Застигнутый врасплох бросает инициативу с помехой и теряет состояние
