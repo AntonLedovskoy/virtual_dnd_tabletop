@@ -1,0 +1,106 @@
+# Бестиарий игры. Формат: format = 1, секции [monster id], поля ключ = значение.
+# Файл читается хостом, клиентом и редактором при запуске; правьте копию в
+# assets/content/local/monsters.dndcontent, чтобы обновление её не заменило.
+format = 1
+
+[monster goblin]
+name = Гоблин
+ac = 15
+hit_die = d6
+con = 0
+hit_dice = 2
+speed = 9
+attack = 4
+damage = 1d6+2 рубящий
+notes = Скимитар: +4, 1d6+2; короткий лук: +4, 1d6+2
+
+[monster wolf]
+name = Волк
+ac = 13
+hit_die = d8
+con = 1
+hit_dice = 2
+speed = 12
+attack = 4
+damage = 2d4+2 колющий
+notes = Укус: +4, 2d4+2; тактика стаи
+
+[monster bandit]
+name = Бандит
+ac = 12
+hit_die = d8
+con = 1
+hit_dice = 2
+speed = 9
+attack = 3
+damage = 1d6+1 рубящий
+notes = Скимитар: +3, 1d6+1; лёгкий арбалет: +3, 1d8+1
+
+[monster skeleton]
+name = Скелет
+ac = 13
+hit_die = d8
+con = 2
+hit_dice = 2
+speed = 9
+attack = 4
+damage = 1d6+2 рубящий
+notes = Короткий меч: +4, 1d6+2; уязвим к дробящему
+vulnerable = дробящий
+immune = яд
+
+[monster ogre]
+name = Огр
+ac = 11
+hit_die = d10
+con = 3
+hit_dice = 7
+speed = 12
+attack = 6
+damage = 2d8+4 дробящий
+notes = Дубина: +6, 2d8+4; большой размер
+
+[monster zombie]
+name = Зомби
+ac = 8
+hit_die = d8
+con = 3
+hit_dice = 3
+speed = 6
+attack = 3
+damage = 1d6+1 дробящий
+notes = Удар: +3, 1d6+1; стойкость нежити
+immune = яд
+
+[monster orc]
+name = Орк
+ac = 13
+hit_die = d8
+con = 3
+hit_dice = 2
+speed = 9
+attack = 5
+damage = 1d12+3 рубящий
+notes = Секира: +5, 1d12+3; ярость при виде крови
+
+[monster kobold]
+name = Кобольд
+ac = 12
+hit_die = d6
+con = -1
+hit_dice = 2
+speed = 9
+attack = 4
+damage = 1d4+2 колющий
+notes = Кинжал: +4, 1d4+2; тактика стаи, ловушки
+
+[monster giant-spider]
+name = Гигантский паук
+ac = 14
+hit_die = d10
+con = 1
+hit_dice = 4
+speed = 12
+attack = 5
+damage = 1d8+3 яд
+notes = Укус: +5, 1d8+3 и яд; паутина, лазание

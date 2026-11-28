@@ -30,6 +30,8 @@
 #include "core/chat_input.h"
 #include "core/client_view.h"
 #include "core/conditions.h"
+#include "core/content_library.h"
+#include "core/content_parser.h"
 #include "core/delete_confirm.h"
 #include "core/dice.h"
 #include "core/editor_paint.h"
@@ -44,6 +46,7 @@
 #include "core/log_history.h"
 #include "core/log_scroll.h"
 #include "core/menu_model.h"
+#include "core/monster_catalog.h"
 #include "core/movement.h"
 #include "core/navigation.h"
 #include "core/overlay.h"
@@ -3418,8 +3421,15 @@ auto TestDiceExpression() -> void {
 
 auto TestBestiary() -> void {
   const auto& bestiary = dnd::DefaultBestiary();
-  Expect(bestiary.size() == 9, "bestiary has nine templates");
+  Expect(bestiary.size() >= 9, "bestiary has at least nine templates");
   Expect(!bestiary.empty(), "bestiary is not empty");
+  std::vector<std::string> ids;
+  for (const dnd::MonsterTemplate& monster : bestiary) {
+    Expect(!monster.id.empty(), "bestiary entries have ids");
+    Expect(std::ranges::find(ids, monster.id) == ids.end(),
+           "bestiary ids are unique");
+    ids.push_back(monster.id);
+  }
   if (!bestiary.empty()) {
     Expect(!bestiary.front().name.empty(), "bestiary entries have names");
     Expect(bestiary.front().ac > 0, "у записей бестиария есть КД");
@@ -3484,6 +3494,281 @@ auto TestBestiary() -> void {
   Expect(squeezed.size() == 1, "a tiny map fits only the cursor cell");
   Expect(dnd::MonsterGroupCells(map, CellAt(9, 9), 3, {}).empty(),
          "an off-map origin places nothing");
+}
+
+// Контент лежит рядом с exe: post-build CMake копирует его в каталог сборки,
+// поэтому ctest находит файл по относительному пути; запасные пути нужны,
+// если тест запускают из корня репозитория.
+auto ReadContentAsset() -> std::string {
+  const std::array<std::filesystem::path, 3> paths{
+      std::filesystem::path("assets/content/monsters.dndcontent"),
+      std::filesystem::path("../assets/content/monsters.dndcontent"),
+      std::filesystem::path("../../assets/content/monsters.dndcontent"),
+  };
+  for (const std::filesystem::path& path : paths) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+      continue;
+    }
+    return {std::istreambuf_iterator<char>(file),
+            std::istreambuf_iterator<char>()};
+  }
+  return {};
+}
+
+auto MinimalMonsterContent() -> std::string {
+  return "format = 1\n"
+         "[monster x]\n"
+         "name = X\n"
+         "ac = 10\n"
+         "hit_die = d8\n"
+         "con = 0\n"
+         "hit_dice = 1\n"
+         "speed = 9\n"
+         "attack = 0\n"
+         "damage = 1d6\n";
+}
+
+auto TestContentParser() -> void {
+  const std::string shipped = ReadContentAsset();
+  Expect(!shipped.empty(), "the shipped content file is readable");
+
+  dnd::ContentFile file;
+  std::string error;
+  Expect(dnd::ParseContent(shipped, dnd::MonsterContentSchemas(), file, error),
+         "the shipped content parses");
+  Expect(file.format == 1 && file.sections.size() == 9,
+         "the shipped content has format 1 and nine monsters");
+  Expect(file.sections.front().id == "goblin" &&
+             file.sections.front().Find("name") != nullptr &&
+             file.sections.front().Find("name")->value == "Гоблин",
+         "a section carries its id and values");
+
+  const std::string with_bom =
+      "\xEF\xBB\xBF"
+      "format = 1\r\n"
+      "# комментарий\r\n"
+      "[monster test]\r\n"
+      "name = Тест\r\n";
+  dnd::ContentFile bom_file;
+  Expect(dnd::ParseContent(with_bom, dnd::MonsterContentSchemas(), bom_file,
+                           error),
+         "BOM and CRLF are accepted");
+  Expect(
+      bom_file.sections.size() == 1 && bom_file.sections.front().id == "test",
+      "BOM does not leak into the first key");
+
+  dnd::ContentFile bad_file;
+  error.clear();
+  Expect(!dnd::ParseContent("format = 1\n[monster test]\narmor = 15\n",
+                            dnd::MonsterContentSchemas(), bad_file, error) &&
+             error.find("строка 3") != std::string::npos &&
+             error.find("armor") != std::string::npos,
+         "an unknown key is an error with a line number");
+
+  error.clear();
+  Expect(!dnd::ParseContent("[monster test]\nname = x\n",
+                            dnd::MonsterContentSchemas(), bad_file, error) &&
+             !error.empty(),
+         "format is required");
+
+  error.clear();
+  Expect(!dnd::ParseContent("format = 1\n[spell fireball]\nname = x\n",
+                            dnd::MonsterContentSchemas(), bad_file, error),
+         "an unknown section type is rejected");
+
+  error.clear();
+  Expect(!dnd::ParseContent("format = 1\n[monster test]\nname = x\nname = y\n",
+                            dnd::MonsterContentSchemas(), bad_file, error),
+         "a repeated key is rejected");
+}
+
+auto TestMonsterCatalog() -> void {
+  const std::string shipped = ReadContentAsset();
+  std::string error;
+  const auto monsters = dnd::ParseMonsterContent(shipped, error);
+  Expect(monsters.has_value() && monsters->size() == 9,
+         "the shipped file gives nine monsters");
+  if (monsters.has_value()) {
+    std::vector<std::string> ids;
+    for (const dnd::MonsterTemplate& monster : *monsters) {
+      Expect(!monster.id.empty() && !monster.name.empty() && monster.ac > 0 &&
+                 monster.hit_dice_count > 0 && !monster.damage.empty(),
+             "every shipped monster is complete");
+      Expect(std::ranges::find(ids, monster.id) == ids.end(),
+             "shipped monster ids are unique");
+      ids.push_back(monster.id);
+    }
+    const auto skeleton = std::ranges::find_if(
+        *monsters, [](const dnd::MonsterTemplate& monster) -> bool {
+          return monster.id == "skeleton";
+        });
+    Expect(skeleton != monsters->end() &&
+               skeleton->vulnerable ==
+                   dnd::DamageTypeBit(dnd::DamageType::kBludgeoning) &&
+               skeleton->immune == dnd::DamageTypeBit(dnd::DamageType::kPoison),
+           "shipped defences are parsed");
+  }
+
+  const std::string minimal = MinimalMonsterContent();
+  const auto parsed = dnd::ParseMonsterContent(minimal, error);
+  Expect(parsed.has_value() && parsed->size() == 1 &&
+             parsed->front().id == "x" && parsed->front().hit_die == 8,
+         "a minimal monster parses");
+
+  const auto fails = [](const std::string& text) -> bool {
+    std::string parse_error;
+    return !dnd::ParseMonsterContent(text, parse_error).has_value() &&
+           !parse_error.empty();
+  };
+  std::string broken_die = minimal;
+  broken_die.replace(broken_die.find("d8"), 2, "d7");
+  Expect(fails(broken_die), "unknown hit dice are rejected");
+  std::string broken_damage = minimal;
+  broken_damage.replace(broken_damage.find("1d6"), 3, "2x6");
+  Expect(fails(broken_damage), "broken damage expressions are rejected");
+  Expect(fails(minimal + "resist = пух\n"),
+         "unknown damage types are rejected");
+  const std::string duplicate =
+      minimal + minimal.substr(minimal.find("[monster x]"));
+  Expect(fails(duplicate), "duplicate monster ids are rejected");
+  std::string empty_name = minimal;
+  empty_name.replace(empty_name.find("name = X"), 8, "name = ");
+  Expect(fails(empty_name), "empty monster names are rejected");
+}
+
+auto TestBuiltinMatchesShipped() -> void {
+  const std::string shipped = ReadContentAsset();
+  std::string error;
+  const auto monsters = dnd::ParseMonsterContent(shipped, error);
+  Expect(monsters.has_value(), "the shipped file parses for the comparison");
+  if (!monsters.has_value()) {
+    return;
+  }
+  const auto& builtin = dnd::DefaultBestiary();
+  Expect(monsters->size() == builtin.size(),
+         "the shipped file lists every built-in monster");
+  for (std::size_t i = 0; i < builtin.size() && i < monsters->size(); ++i) {
+    const dnd::MonsterTemplate& a = builtin[i];
+    const dnd::MonsterTemplate& b = (*monsters)[i];
+    Expect(a.id == b.id && a.name == b.name && a.ac == b.ac &&
+               a.hit_die == b.hit_die && a.con_modifier == b.con_modifier &&
+               a.hit_dice_count == b.hit_dice_count && a.speed == b.speed &&
+               a.attack_bonus == b.attack_bonus &&
+               a.save_bonus == b.save_bonus && a.damage == b.damage &&
+               a.notes == b.notes && a.attack_range == b.attack_range &&
+               a.resist == b.resist && a.vulnerable == b.vulnerable &&
+               a.immune == b.immune,
+           "the built-in bestiary matches the shipped content");
+  }
+}
+
+auto TestContentLibrary() -> void {
+  const std::filesystem::path directory =
+      std::filesystem::temp_directory_path() / "dnd_core_tests_content";
+  std::error_code remove_code;
+  std::filesystem::remove_all(directory, remove_code);
+  std::filesystem::create_directories(directory / "assets/content/local");
+  const auto write = [&directory](std::string_view name,
+                                  std::string_view text) -> void {
+    std::ofstream file(directory / std::string(name),
+                       std::ios::binary | std::ios::trunc);
+    file << text;
+  };
+
+  const std::string local =
+      "format = 1\n"
+      "[monster goblin]\n"
+      "name = Гоблин-вожак\n"
+      "ac = 16\n"
+      "hit_die = d6\n"
+      "con = 1\n"
+      "hit_dice = 3\n"
+      "speed = 9\n"
+      "attack = 5\n"
+      "damage = 1d6+3 рубящий\n"
+      "notes = Вожак\n"
+      "[monster newt]\n"
+      "name = Тритон\n"
+      "ac = 11\n"
+      "hit_die = d6\n"
+      "con = 0\n"
+      "hit_dice = 1\n"
+      "speed = 6\n"
+      "attack = 1\n"
+      "damage = 1d4 колющий\n";
+  write("assets/content/local/monsters.dndcontent", local);
+
+  // Поставки нет: остаётся встроенный набор, local всё равно добавляет запись.
+  const dnd::ContentLibrary missing = dnd::LoadContentLibrary(directory);
+  Expect(!missing.warning.empty(), "a missing content file reports a warning");
+  Expect(missing.monsters.size() == dnd::DefaultBestiary().size() + 1,
+         "local content still merges over the built-in bestiary");
+  const auto goblin = std::ranges::find_if(
+      missing.monsters, [](const dnd::MonsterTemplate& monster) -> bool {
+        return monster.id == "goblin";
+      });
+  Expect(goblin != missing.monsters.end() && goblin->name == "Гоблин-вожак",
+         "local content overrides a built-in monster by id");
+
+  // Поставка читается: предупреждения нет.
+  write("assets/content/monsters.dndcontent", ReadContentAsset());
+  const dnd::ContentLibrary shipped = dnd::LoadContentLibrary(directory);
+  Expect(shipped.warning.empty(), "a valid shipped file has no warning");
+  Expect(shipped.monsters.size() == dnd::DefaultBestiary().size() + 1,
+         "the shipped file and the local override merge");
+
+  // Битый файл поставки: предупреждение, встроенный набор и local целы.
+  write("assets/content/monsters.dndcontent",
+        "format = 1\n[monster goblin]\narmor = 1\n");
+  const dnd::ContentLibrary broken = dnd::LoadContentLibrary(directory);
+  Expect(!broken.warning.empty() &&
+             broken.warning.find("armor") != std::string::npos,
+         "a broken content file reports the line error");
+  Expect(broken.monsters.size() == dnd::DefaultBestiary().size() + 1,
+         "a broken file keeps the built-in bestiary and local content");
+
+  // Лишний файл в каталоге не читается: список имён фиксирован.
+  write("assets/content/extra.dndcontent", "не контент");
+  const dnd::ContentLibrary extra = dnd::LoadContentLibrary(directory);
+  Expect(extra.monsters.size() == broken.monsters.size(),
+         "an extra content file is ignored");
+
+  std::filesystem::remove_all(directory, remove_code);
+}
+
+auto TestTokenFromTemplate() -> void {
+  const auto& bestiary = dnd::DefaultBestiary();
+  const auto skeleton = std::ranges::find_if(
+      bestiary, [](const dnd::MonsterTemplate& monster) -> bool {
+        return monster.id == "skeleton";
+      });
+  Expect(skeleton != bestiary.end(), "the skeleton template exists");
+  if (skeleton == bestiary.end()) {
+    return;
+  }
+  const dnd::Token token = dnd::TokenFromTemplate(*skeleton, 42, CellAt(3, 4));
+  Expect(token.id == 42 && token.cell == CellAt(3, 4) &&
+             token.name == skeleton->name,
+         "the token takes the template name, id and cell");
+  Expect(token.owner == dnd::kDmOwner && token.kind == dnd::TokenKind::kMonster,
+         "a spawned monster belongs to the DM");
+  Expect(token.auto_hp &&
+             token.max_hp == dnd::MonsterMaxHp(skeleton->hit_dice_count,
+                                               skeleton->hit_die,
+                                               skeleton->con_modifier) &&
+             token.hp == token.max_hp,
+         "the token derives HP from the template dice");
+  Expect(token.ac == skeleton->ac && token.speed == skeleton->speed &&
+             token.notes == skeleton->notes &&
+             token.attack_bonus == skeleton->attack_bonus &&
+             token.save_bonus == skeleton->save_bonus &&
+             token.damage == skeleton->damage &&
+             token.attack_range == skeleton->attack_range &&
+             token.resist == skeleton->resist &&
+             token.vulnerable == skeleton->vulnerable &&
+             token.immune == skeleton->immune,
+         "the token copies every stat, including range and defences");
 }
 
 auto TestDynamicFogObservers() -> void {
@@ -9743,6 +10028,11 @@ auto main() -> int {
     TestRangedAttackAndSurprise();
     TestDiceExpression();
     TestBestiary();
+    TestContentParser();
+    TestMonsterCatalog();
+    TestBuiltinMatchesShipped();
+    TestContentLibrary();
+    TestTokenFromTemplate();
     TestDynamicFogObservers();
     TestFogSurvivesReset();
     TestSeparateVisibility();

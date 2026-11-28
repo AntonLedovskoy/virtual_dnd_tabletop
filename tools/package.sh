@@ -122,8 +122,8 @@ fi
   exit 1
 }
 
-# Внешние DLL ломают запуск у игрока: в архиве только exe, шрифт и лицензия.
-# Разрешены системные библиотеки Windows (они есть в любой системе) и
+# Внешние DLL ломают запуск у игрока: в архиве только exe, шрифт, лицензия и
+# контент. Разрешены системные библиотеки Windows (они есть в любой системе) и
 # api-ms-win-* из UCRT. Новая строка в списке — повод разобраться, откуда она.
 SYSTEM_DLLS=(
   advapi32 bcrypt cfgmgr32 dwmapi gdi32 hid imm32 kernel32 mswsock ole32
@@ -279,6 +279,15 @@ if [[ -f "$FONT" ]]; then
 else
   echo "warning: $FONT не найден, zip соберётся без шрифта" >&2
 fi
+# Бестиарий — ассет рядом с exe. Без него игра работает на встроенном наборе,
+# но релиз обязан везти файл: иначе правки контента не доедут до игроков.
+CONTENT_FILE="$ROOT_DIR/assets/content/monsters.dndcontent"
+[[ -f "$CONTENT_FILE" ]] || {
+  echo "error: $CONTENT_FILE не найден; без него архив не собрать" >&2
+  exit 1
+}
+mkdir -p "$STAGE/assets/content"
+cp "$CONTENT_FILE" "$STAGE/assets/content/monsters.dndcontent"
 cp "$EXE" "$DIST_DIR/$EXE_NAME"
 
 # zip без внешнего пакета: cmake -E tar есть в тех же UCRT64-инструментах.
@@ -291,6 +300,7 @@ cp "$EXE" "$DIST_DIR/$EXE_NAME"
 ASSET_PATHS=(
   assets/fonts/DejaVuSans.ttf
   assets/fonts/LICENSE-DejaVu.txt
+  assets/content/monsters.dndcontent
 )
 UPLOAD_DIR="$DIST_DIR/upload"
 mkdir -p "$UPLOAD_DIR"

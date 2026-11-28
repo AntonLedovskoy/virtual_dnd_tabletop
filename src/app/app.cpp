@@ -409,6 +409,15 @@ auto App::Initialize() -> bool {
   local_addresses_ = LocalIpv4Addresses();
   OpenSessionLog();
 
+  // Контент читается обеими сторонами и редактором один раз на старте.
+  // Ошибка файла не мешает столу: остаётся встроенный набор и предупреждение.
+  ContentLibrary content = LoadContentLibrary(BaseDirectory());
+  bestiary_ = std::move(content.monsters);
+  bestiary_warning_ = std::move(content.warning);
+  if (!bestiary_warning_.empty()) {
+    SDL_Log("content library: %s", bestiary_warning_.c_str());
+  }
+
   // Проверка обновлений: developer build молчит, DND_UPDATE_MANIFEST — явный
   // отладочный обход, который разрешает весь цикл без нового релиза.
   Version current_version;
@@ -913,8 +922,7 @@ auto App::AddEditorToken(Cell cell, TokenKind kind) -> void {
 }
 
 auto App::SpawnEditorBestiary(int index, bool group) -> void {
-  const auto& bestiary = DefaultBestiary();
-  if (index < 0 || std::cmp_greater_equal(index, bestiary.size())) {
+  if (index < 0 || std::cmp_greater_equal(index, bestiary_.size())) {
     return;
   }
   const Cell origin = CellFromPixel(mouse_x_, mouse_y_);
@@ -922,7 +930,7 @@ auto App::SpawnEditorBestiary(int index, bool group) -> void {
     editor_status_.Set("Нельзя поставить монстра в эту клетку");
     return;
   }
-  const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(index)];
+  const MonsterTemplate& monster = bestiary_[static_cast<std::size_t>(index)];
   const int count = group ? MonsterGroupSize(rng_) : 1;
   const std::vector<Cell> cells =
       MonsterGroupCells(scene_.map, origin, count, scene_.tokens);
@@ -932,26 +940,10 @@ auto App::SpawnEditorBestiary(int index, bool group) -> void {
   }
   const bool numbered = cells.size() > 1;
   for (std::size_t i = 0; i < cells.size(); ++i) {
-    Token token;
-    token.id = scene_.next_token_id++;
-    token.name = monster.name;
+    Token token = TokenFromTemplate(monster, scene_.next_token_id++, cells[i]);
     if (numbered) {
       token.name += " " + std::to_string(i + 1);
     }
-    token.owner = std::string(kDmOwner);
-    token.kind = TokenKind::kMonster;
-    token.hit_die = monster.hit_die;
-    token.con_modifier = monster.con_modifier;
-    token.hit_dice_count = monster.hit_dice_count;
-    token.auto_hp = true;
-    RecomputeAutoHp(token);
-    token.ac = monster.ac;
-    token.speed = monster.speed;
-    token.notes = monster.notes;
-    token.attack_bonus = monster.attack_bonus;
-    token.save_bonus = monster.save_bonus;
-    token.damage = monster.damage;
-    token.cell = cells[i];
     scene_.tokens.push_back(std::move(token));
   }
   scene_.encounter = Encounter{};
@@ -3967,8 +3959,7 @@ auto App::SpawnBestiary(int index, bool group) -> void {
     SpawnEditorBestiary(index, group);
     return;
   }
-  const auto& bestiary = DefaultBestiary();
-  if (index < 0 || std::cmp_greater_equal(index, bestiary.size())) {
+  if (index < 0 || std::cmp_greater_equal(index, bestiary_.size())) {
     return;
   }
   const Cell origin = CellFromPixel(mouse_x_, mouse_y_);
@@ -3976,7 +3967,7 @@ auto App::SpawnBestiary(int index, bool group) -> void {
     view_.AddLocalLine("Нельзя поставить монстра в эту клетку");
     return;
   }
-  const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(index)];
+  const MonsterTemplate& monster = bestiary_[static_cast<std::size_t>(index)];
   const int count = group ? MonsterGroupSize(rng_) : 1;
   const std::vector<Cell> cells =
       MonsterGroupCells(view_.Map(), origin, count, view_.Tokens());
@@ -3986,31 +3977,30 @@ auto App::SpawnBestiary(int index, bool group) -> void {
   }
   const bool numbered = cells.size() > 1;
   for (std::size_t i = 0; i < cells.size(); ++i) {
-    std::string name = monster.name;
+    Token token = TokenFromTemplate(monster, 0, cells[i]);
     if (numbered) {
-      name += " " + std::to_string(i + 1);
+      token.name += " " + std::to_string(i + 1);
     }
     SendCommand(AddToken{
-        .name = std::move(name),
-        .cell = cells[i],
-        .owner = std::string(kDmOwner),
-        .kind = TokenKind::kMonster,
-        .max_hp = MonsterMaxHp(monster.hit_dice_count, monster.hit_die,
-                               monster.con_modifier),
-        .hit_die = monster.hit_die,
-        .con_modifier = monster.con_modifier,
-        .hit_dice_count = monster.hit_dice_count,
-        .auto_hp = true,
-        .ac = monster.ac,
-        .speed = monster.speed,
-        .notes = monster.notes,
-        .attack_bonus = monster.attack_bonus,
-        .save_bonus = monster.save_bonus,
-        .damage = monster.damage,
-        .attack_range = monster.attack_range,
-        .resist = monster.resist,
-        .vulnerable = monster.vulnerable,
-        .immune = monster.immune,
+        .name = std::move(token.name),
+        .cell = token.cell,
+        .owner = token.owner,
+        .kind = token.kind,
+        .max_hp = token.max_hp,
+        .hit_die = token.hit_die,
+        .con_modifier = token.con_modifier,
+        .hit_dice_count = token.hit_dice_count,
+        .auto_hp = token.auto_hp,
+        .ac = token.ac,
+        .speed = token.speed,
+        .notes = std::move(token.notes),
+        .attack_bonus = token.attack_bonus,
+        .save_bonus = token.save_bonus,
+        .damage = std::move(token.damage),
+        .attack_range = token.attack_range,
+        .resist = token.resist,
+        .vulnerable = token.vulnerable,
+        .immune = token.immune,
     });
   }
   bestiary_active_ = false;
@@ -5924,7 +5914,7 @@ auto App::Iterate() -> void {
                               .active = editor_inspector_field_});
     }
     if (bestiary_active_) {
-      DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
+      DrawBestiaryPanel(renderer_, text_.get(), bestiary_, bestiary_warning_);
     }
     DrawActiveSheet();
     SDL_RenderPresent(renderer_);
@@ -6118,7 +6108,7 @@ auto App::Iterate() -> void {
                           log_scroll_.Offset());
   DrawActiveSheet();
   if (bestiary_active_) {
-    DrawBestiaryPanel(renderer_, text_.get(), DefaultBestiary());
+    DrawBestiaryPanel(renderer_, text_.get(), bestiary_, bestiary_warning_);
   }
   if (scenes_active_) {
     DrawScenesPanel(renderer_, text_.get(), campaign_.scenes, campaign_.active,

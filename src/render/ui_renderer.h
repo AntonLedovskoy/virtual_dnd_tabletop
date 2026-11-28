@@ -133,9 +133,11 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
                     const std::string& hit_dice_count, const std::string& skill,
                     const std::string& proficiencies, bool read_only) -> void;
 
-// Модальный список встроенного бестиария.
+// Модальный список бестиария. warning — проблема файла контента: строкой в
+// шапке панели, пустая строка — всё прочитано.
 auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
-                       const std::vector<MonsterTemplate>& bestiary) -> void;
+                       const std::vector<MonsterTemplate>& bestiary,
+                       const std::string& warning) -> void;
 
 // Модальный список состояний выбранного токена. read_only — игрок только
 // смотрит, состояния и КС задаёт DM.

@@ -6,6 +6,8 @@
 
 #include "core/damage.h"
 #include "core/grid_map.h"
+#include "core/hit_points.h"
+#include "core/player_name.h"
 #include "core/token.h"
 
 namespace dnd {
@@ -17,6 +19,9 @@ inline constexpr int kMaxMonsterGroup = 5;
 // Небольшая встроенная библиотека монстров. При спавне шаблон копируется в
 // токен, поэтому редактирование монстра не меняет шаблон.
 struct MonsterTemplate {
+  // Стабильный ключ записи контента: по нему файл перекрывает встроенный
+  // шаблон, в снимок и протокол он не попадает.
+  std::string id;
   std::string name;
   int ac = 10;
   // HP выводятся из костей, как в блоке статов SRD (core/hit_points).
@@ -36,6 +41,11 @@ struct MonsterTemplate {
 };
 
 [[nodiscard]] auto DefaultBestiary() -> const std::vector<MonsterTemplate>&;
+
+// Один путь спавна для игры и редактора: токен-монстр из шаблона. Копирует
+// все статы, включая дальность и защиты, и считает HP по костям.
+[[nodiscard]] auto TokenFromTemplate(const MonsterTemplate& monster, TokenId id,
+                                     Cell cell) -> Token;
 
 // Сколько монстров в группе: kMinMonsterGroup..kMaxMonsterGroup.
 [[nodiscard]] auto MonsterGroupSize(std::mt19937& rng) -> int;

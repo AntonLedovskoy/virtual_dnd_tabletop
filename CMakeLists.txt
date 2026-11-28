@@ -125,6 +125,8 @@ add_library(dnd_core STATIC
   src/core/chat_input.cpp
   src/core/client_view.cpp
   src/core/conditions.cpp
+  src/core/content_library.cpp
+  src/core/content_parser.cpp
   src/core/damage.cpp
   src/core/delete_confirm.cpp
   src/core/dice.cpp
@@ -142,6 +144,7 @@ add_library(dnd_core STATIC
   src/core/log_scroll.cpp
   src/core/map_background.cpp
   src/core/menu_model.cpp
+  src/core/monster_catalog.cpp
   src/core/movement.cpp
   src/core/navigation.cpp
   src/core/overlay.cpp
@@ -275,3 +278,14 @@ target_link_libraries(dnd_net_tests PRIVATE dnd_net)
 target_compile_options(dnd_net_tests PRIVATE ${DND_WARNINGS})
 
 add_test(NAME net_tests COMMAND dnd_net_tests)
+
+# Контент — ассет рядом с .exe: игра и core_tests читают
+# assets/content/monsters.dndcontent. Без post-build копии в dev-сборке файла
+# рядом с бинарником нет.
+set(DND_CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/content")
+foreach(dnd_target ${PROJECT_NAME} dnd_core_tests)
+  add_custom_command(TARGET ${dnd_target} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${DND_CONTENT_DIR}" "$<TARGET_FILE_DIR:${dnd_target}>/assets/content"
+    COMMENT "Копирую assets/content рядом с ${dnd_target}")
+endforeach()

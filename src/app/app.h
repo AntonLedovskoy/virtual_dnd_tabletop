@@ -23,6 +23,7 @@
 #include "core/chat_command.h"
 #include "core/chat_input.h"
 #include "core/client_view.h"
+#include "core/content_library.h"
 #include "core/delete_confirm.h"
 #include "core/editor_paint.h"
 #include "core/game_server.h"
@@ -496,6 +497,10 @@ class App {
   std::string sheet_proficiencies_;
 
   bool bestiary_active_ = false;
+  // Библиотека читается один раз на старте и дальше неизменна: сохранения и
+  // протокол по-прежнему хранят статы токена, а не id шаблона.
+  std::vector<MonsterTemplate> bestiary_;
+  std::string bestiary_warning_;
   bool conditions_active_ = false;
   bool conditions_read_only_ = false;
   TokenId conditions_token_id_ = 0;

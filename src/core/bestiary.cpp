@@ -12,6 +12,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
   // NOLINTNEXTLINE(readability-identifier-naming)
   static const std::vector<MonsterTemplate> kBestiary{
       MonsterTemplate{
+          .id = "goblin",
           .name = "Гоблин",
           .ac = 15,
           .hit_die = 6,
@@ -24,6 +25,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .notes = "Скимитар: +4, 1d6+2; короткий лук: +4, 1d6+2",
       },
       MonsterTemplate{
+          .id = "wolf",
           .name = "Волк",
           .ac = 13,
           .hit_die = 8,
@@ -36,6 +38,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .notes = "Укус: +4, 2d4+2; тактика стаи",
       },
       MonsterTemplate{
+          .id = "bandit",
           .name = "Бандит",
           .ac = 12,
           .hit_die = 8,
@@ -48,6 +51,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .notes = "Скимитар: +3, 1d6+1; лёгкий арбалет: +3, 1d8+1",
       },
       MonsterTemplate{
+          .id = "skeleton",
           .name = "Скелет",
           .ac = 13,
           .hit_die = 8,
@@ -62,6 +66,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .immune = DamageTypeBit(DamageType::kPoison),
       },
       MonsterTemplate{
+          .id = "ogre",
           .name = "Огр",
           .ac = 11,
           .hit_die = 10,
@@ -74,6 +79,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .notes = "Дубина: +6, 2d8+4; большой размер",
       },
       MonsterTemplate{
+          .id = "zombie",
           .name = "Зомби",
           .ac = 8,
           .hit_die = 8,
@@ -87,6 +93,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .immune = DamageTypeBit(DamageType::kPoison),
       },
       MonsterTemplate{
+          .id = "orc",
           .name = "Орк",
           .ac = 13,
           .hit_die = 8,
@@ -99,6 +106,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .notes = "Секира: +5, 1d12+3; ярость при виде крови",
       },
       MonsterTemplate{
+          .id = "kobold",
           .name = "Кобольд",
           .ac = 12,
           .hit_die = 6,
@@ -111,6 +119,7 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
           .notes = "Кинжал: +4, 1d4+2; тактика стаи, ловушки",
       },
       MonsterTemplate{
+          .id = "giant-spider",
           .name = "Гигантский паук",
           .ac = 14,
           .hit_die = 10,
@@ -124,6 +133,32 @@ auto DefaultBestiary() -> const std::vector<MonsterTemplate>& {
       },
   };
   return kBestiary;
+}
+
+auto TokenFromTemplate(const MonsterTemplate& monster, TokenId id, Cell cell)
+    -> Token {
+  Token token;
+  token.id = id;
+  token.name = monster.name;
+  token.owner = std::string(kDmOwner);
+  token.kind = TokenKind::kMonster;
+  token.hit_die = monster.hit_die;
+  token.con_modifier = monster.con_modifier;
+  token.hit_dice_count = monster.hit_dice_count;
+  token.auto_hp = true;
+  RecomputeAutoHp(token);
+  token.ac = monster.ac;
+  token.speed = monster.speed;
+  token.notes = monster.notes;
+  token.attack_bonus = monster.attack_bonus;
+  token.save_bonus = monster.save_bonus;
+  token.damage = monster.damage;
+  token.attack_range = monster.attack_range;
+  token.resist = monster.resist;
+  token.vulnerable = monster.vulnerable;
+  token.immune = monster.immune;
+  token.cell = cell;
+  return token;
 }
 
 auto MonsterGroupSize(std::mt19937& rng) -> int {

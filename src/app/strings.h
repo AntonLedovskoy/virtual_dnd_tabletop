@@ -489,6 +489,7 @@ inline constexpr std::string_view kSheetBadProficiency =
 inline constexpr std::string_view kSheetNoAccess =
     "Лист этого токена показывает только DM";
 inline constexpr std::string_view kBestiaryTitle = "Бестиарий";
+inline constexpr std::string_view kBestiaryContentPrefix = "Контент: ";
 inline constexpr std::string_view kBestiaryHint =
     "1–9 — поставить одного | Shift+1–9 — группа 3–5 | Esc — закрыть";
 inline constexpr std::string_view kBestiaryDmOnly =

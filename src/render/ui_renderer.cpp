@@ -949,7 +949,8 @@ auto DrawSheetPanel(SDL_Renderer* renderer, TextRenderer* text,
 }
 
 auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
-                       const std::vector<MonsterTemplate>& bestiary) -> void {
+                       const std::vector<MonsterTemplate>& bestiary,
+                       const std::string& warning) -> void {
   if (renderer == nullptr || text == nullptr) {
     return;
   }
@@ -959,7 +960,17 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
     return;
   }
   constexpr float width = 560.0F;
-  constexpr float height = 300.0F;
+  constexpr float content_padding = 30.0F;
+  constexpr float base_height = 300.0F;
+  const float content_width = width - 2.0F * content_padding;
+  const std::string warning_line =
+      warning.empty() ? std::string{}
+                      : std::string(strings::kBestiaryContentPrefix) + warning;
+  const float warning_height =
+      warning_line.empty()
+          ? 0.0F
+          : text->Measure(warning_line, content_width).height + 8.0F;
+  const float height = base_height + warning_height;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
   const SDL_FRect panel{x, y, width, height};
@@ -970,12 +981,16 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
   SDL_RenderRect(renderer, &panel);
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-  const auto left = x + 30.0F;
-  const auto content_width = width - 60.0F;
+  const auto left = x + content_padding;
   auto cursor_y = y + 18.0F;
   text->Draw(std::string(strings::kBestiaryTitle), left, cursor_y, kAuthorText,
              content_width);
   cursor_y += text->LineHeight() + 10.0F;
+  if (!warning_line.empty()) {
+    cursor_y = text->DrawWrapped(warning_line, left, cursor_y, kErrorText,
+                                 content_width) +
+               8.0F;
+  }
   const int rows = std::min<int>(9, static_cast<int>(bestiary.size()));
   for (int i = 0; i < rows; ++i) {
     const MonsterTemplate& monster = bestiary[static_cast<std::size_t>(i)];
