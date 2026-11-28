@@ -143,7 +143,7 @@ inline constexpr std::array<std::string_view, 19> kHelpCommon = {
     "S — спасбросок, I — инициатива",
     "K — состояния, L — лист (правит DM)",
     "X — действия хода (рывок, отход, уклонение и другие)",
-    "M — дальность хода (5–10–5), V — цвет",
+    "M — дальность хода, V — цвет",
     "Команды: /damage N, /heal N, /deathsave, /stabilize (DM)",
 };
 inline constexpr std::array<std::string_view, 3> kHelpPlayer = {

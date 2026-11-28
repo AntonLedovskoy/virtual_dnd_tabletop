@@ -124,7 +124,7 @@ auto TestGridMap() -> void {
   Expect(HasCell(reachable, CellAt(2, 0)),
          "movement range includes open cells");
   Expect(HasCell(reachable, CellAt(1, 1)),
-         "first diagonal costs one cell under 5-10-5");
+         "movement range includes diagonals at one cell each");
   Expect(!HasCell(reachable, CellAt(2, 2)), "movement range excludes walls");
   Expect(!HasCell(reachable, CellAt(3, 3)), "movement range respects budget");
 
@@ -141,7 +141,7 @@ auto TestGridMap() -> void {
          "path cost counts straight steps");
   const auto stay =
       dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(0, 0));
-  Expect(stay.has_value() && stay->cost == 0 && stay->diagonal_parity == 0,
+  Expect(stay.has_value() && stay->cost == 0,
          "path cost to the same cell is zero");
   Expect(!dnd::PathCostCells(reachable_map, CellAt(0, 0), CellAt(2, 2)),
          "path cost skips walls");
@@ -151,27 +151,20 @@ auto TestGridMap() -> void {
   const dnd::GridMap open(6, 6);
   const auto two_diagonals =
       dnd::PathCostCells(open, CellAt(0, 0), CellAt(2, 2));
-  Expect(two_diagonals.has_value() && two_diagonals->cost == 3 &&
-             two_diagonals->diagonal_parity == 0,
-         "two diagonals cost 5 then 10 feet under 5-10-5");
+  Expect(two_diagonals.has_value() && two_diagonals->cost == 2,
+         "each diagonal costs one cell (SRD 5.2.1)");
   const auto three_diagonals =
       dnd::PathCostCells(open, CellAt(0, 0), CellAt(3, 3));
-  Expect(three_diagonals.has_value() && three_diagonals->cost == 4 &&
-             three_diagonals->diagonal_parity == 1,
-         "the third diagonal costs 5 feet again");
-  const auto odd_start =
-      dnd::PathCostCells(open, CellAt(0, 0), CellAt(1, 1), 1);
-  Expect(odd_start.has_value() && odd_start->cost == 2 &&
-             odd_start->diagonal_parity == 0,
-         "a spent diagonal makes the next one cost 10 feet");
+  Expect(three_diagonals.has_value() && three_diagonals->cost == 3,
+         "three diagonals cost three cells");
 
-  const std::array<dnd::Cell, 1> blocked{CellAt(1, 0)};
+  const std::array<dnd::Cell, 2> blocked{CellAt(1, 0), CellAt(1, 1)};
   const auto detour =
-      dnd::PathCostCells(open, CellAt(0, 0), CellAt(2, 0), 0, blocked);
+      dnd::PathCostCells(open, CellAt(0, 0), CellAt(2, 0), blocked);
   Expect(detour.has_value() && detour->cost > 2,
          "occupied cells force a detour");
   const auto occupied_target =
-      dnd::PathCostCells(open, CellAt(0, 0), CellAt(1, 0), 0, blocked);
+      dnd::PathCostCells(open, CellAt(0, 0), CellAt(1, 0), blocked);
   Expect(!occupied_target.has_value(), "an occupied target is unreachable");
 
   dnd::GridMap terrain_map(4, 4);
@@ -5783,14 +5776,14 @@ auto TestMovementPathsAndDiagonals() -> void {
   Expect(TokenOf(server.State(), 1).movement_used == 0,
          "outside combat movement is not charged");
 
-  // Правило 5–10–5: диагонали стоят 1, 2, 1, 2 клетки.
+  // Диагональ по SRD 5.2.1 стоит 1 клетку, как и ортогональный шаг.
   const dnd::GridMap open(6, 6);
   const dnd::GameSnapshot diagonal_snapshot{
       .map = open,
       .tokens = {dnd::Token{.id = 1,
                             .name = "hero",
                             .owner = "alice",
-                            .speed = 9,
+                            .speed = 6,
                             .kind = dnd::TokenKind::kPlayer,
                             .cell = CellAt(0, 0)}},
       .next_token_id = 2,
@@ -5804,24 +5797,20 @@ auto TestMovementPathsAndDiagonals() -> void {
         .accepted;
   };
   Expect(step(CellAt(1, 1)), "the first diagonal costs 5 feet");
-  Expect(TokenOf(diagonals.State(), 1).movement_used == 1 &&
-             TokenOf(diagonals.State(), 1).diagonal_parity == 1,
-         "the first diagonal spends one cell and flips parity");
-  Expect(step(CellAt(2, 2)), "the second diagonal costs 10 feet");
-  Expect(TokenOf(diagonals.State(), 1).movement_used == 3 &&
-             TokenOf(diagonals.State(), 1).diagonal_parity == 0,
-         "the second diagonal spends two cells");
+  Expect(TokenOf(diagonals.State(), 1).movement_used == 1,
+         "a diagonal spends one cell");
+  Expect(step(CellAt(2, 2)), "the second diagonal also costs 5 feet");
+  Expect(TokenOf(diagonals.State(), 1).movement_used == 2,
+         "each diagonal spends one cell");
   Expect(step(CellAt(3, 3)) && step(CellAt(4, 4)),
-         "the third and fourth diagonals fit the remaining budget");
-  Expect(TokenOf(diagonals.State(), 1).movement_used == 6,
+         "the remaining diagonals fit the budget");
+  Expect(TokenOf(diagonals.State(), 1).movement_used == 4,
          "the full speed is spent after four diagonals");
   Expect(!step(CellAt(4, 5)), "a spent budget blocks the next step");
   Expect(diagonals.HandleCommand(dnd::NextTurn{}, "", true).accepted,
          "the turn passes to the next token");
   Expect(diagonals.HandleCommand(dnd::EndEncounter{}, "", true).accepted,
          "the encounter ends");
-  Expect(TokenOf(diagonals.State(), 1).diagonal_parity == 0,
-         "ending combat resets the diagonal parity");
 }
 
 auto TestDmOwnsCharacter() -> void {
@@ -6050,7 +6039,11 @@ auto TestCrawlJumpFall() -> void {
 
   // Прыжок: через воду можно, через стену и дальше 10 футов — нет.
   dnd::GridMap water_map(8, 8);
+  // Вода стеной в три клетки: одну клетку воды можно обойти по диагонали,
+  // потому что диагональ тоже стоит 1 клетку (SRD 5.2.1).
+  water_map.SetTerrain(CellAt(2, 0), dnd::Terrain::kWater);
   water_map.SetTerrain(CellAt(2, 1), dnd::Terrain::kWater);
+  water_map.SetTerrain(CellAt(2, 2), dnd::Terrain::kWater);
   const dnd::GameSnapshot jump_snapshot{
       .map = water_map,
       .tokens = {dnd::Token{.id = 1,
@@ -6466,7 +6459,7 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(loaded->tokens.front().hit_dice_spent == 2,
            "spent hit dice survive the roundtrip");
     Expect(loaded->tokens.front().diagonal_parity == 1,
-           "diagonal parity survives the roundtrip");
+           "the legacy diagonal parity field survives the roundtrip");
     Expect(loaded->tokens.front().max_hp == 12, "token max hp survives");
     Expect(loaded->tokens.front().temp_hp == 3, "token temporary hp survives");
     Expect(loaded->tokens.front().initiative == 15,

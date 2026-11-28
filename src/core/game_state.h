@@ -135,9 +135,8 @@ class GameState {
   [[nodiscard]] auto RemoveTokenCondition(TokenId id, std::string_view name)
       -> std::optional<Token>;
 
-  // Добавляет к израсходованному запасу движения токена steps клеток и
-  // запоминает чётность диагоналей после хода.
-  [[nodiscard]] auto SpendMovement(TokenId id, int steps, int diagonal_parity)
+  // Добавляет к израсходованному запасу движения токена steps клеток.
+  [[nodiscard]] auto SpendMovement(TokenId id, int steps)
       -> std::optional<Token>;
   // Отмечает профиль урона клетки сработавшим в этом ходу токена.
   [[nodiscard]] auto MarkHazardDone(TokenId id, std::uint8_t hazard)

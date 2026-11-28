@@ -693,14 +693,12 @@ auto GameState::RemoveTokenCondition(TokenId id, std::string_view name)
   return *token;
 }
 
-auto GameState::SpendMovement(TokenId id, int steps, int diagonal_parity)
-    -> std::optional<Token> {
+auto GameState::SpendMovement(TokenId id, int steps) -> std::optional<Token> {
   Token* token = FindToken(id);
   if (token == nullptr) {
     return std::nullopt;
   }
   token->movement_used += std::max(0, steps);
-  token->diagonal_parity = diagonal_parity & 1;
   return *token;
 }
 
@@ -804,7 +802,6 @@ auto GameState::ClearTokenHelped(TokenId id) -> std::optional<Token> {
 
 auto GameState::ResetTurnEconomy(Token& token) -> void {
   token.movement_used = 0;
-  token.diagonal_parity = 0;
   token.action_used = false;
   token.bonus_action_used = false;
   token.reaction_used = false;

@@ -6013,9 +6013,9 @@ auto App::Iterate() -> void {
       }
       const std::vector<Cell> blockers =
           BlockingCells(view_.Tokens(), range_token->id);
-      std::vector<Cell> reachable = ReachableCells(
-          view_.Map(), range_token->cell, radius, range_token->diagonal_parity,
-          blockers, MovementProfileFor(*range_token));
+      std::vector<Cell> reachable =
+          ReachableCells(view_.Map(), range_token->cell, radius, blockers,
+                         MovementProfileFor(*range_token));
       std::erase_if(reachable, [&occupied](Cell cell) -> bool {
         return std::ranges::find(occupied, cell) != occupied.end();
       });

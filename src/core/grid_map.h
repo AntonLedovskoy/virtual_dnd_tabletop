@@ -200,29 +200,23 @@ class GridMap {
   LightLevel ambient_light_ = LightLevel::kBright;
 };
 
-// Результат прокладки пути по опциональному правилу 5–10–5: первая
-// диагональ стоит 5 футов (1 клетку), вторая — 10 футов (2 клетки), затем
-// снова 5 и так далее. Ортогональный шаг всегда стоит 1 клетку.
+// Результат прокладки пути. По SRD 5.2.1 («Playing on a Grid») вход в клетку
+// по диагонали стоит столько же, сколько ортогональный шаг: 1 клетку плюс
+// свойства клетки. Угол между двумя препятствиями не срезается.
 struct PathCost {
   int cost = 0;
-  // Чётность диагоналей после пути: 0 — следующая диагональ стоит 5 футов,
-  // 1 — 10 футов. Хранится в токене, чтобы счёт не сбрасывался между ходами.
-  int diagonal_parity = 0;
 };
 
 // Клетки, достижимые из origin за budget (в тех же 5-футовых единицах).
 // Стены, blocked и углы между двумя препятствиями непроходимы.
-// diagonal_parity — сколько диагоналей уже пройдено в этом ходу (по модулю 2).
 [[nodiscard]] auto ReachableCells(const GridMap& map, Cell origin, int budget,
-                                  int diagonal_parity = 0,
                                   std::span<const Cell> blocked = {},
                                   const MovementProfile& profile = {})
     -> std::vector<Cell>;
 
-// Минимальная стоимость пути с учётом 5–10–5. Пусто, если клетка недостижима,
-// за стеной, занята или путь срезал бы угол между двумя препятствиями.
+// Минимальная стоимость пути. Пусто, если клетка недостижима, за стеной,
+// занята или путь срезал бы угол между двумя препятствиями.
 [[nodiscard]] auto PathCostCells(const GridMap& map, Cell from, Cell to,
-                                 int diagonal_parity = 0,
                                  std::span<const Cell> blocked = {},
                                  const MovementProfile& profile = {})
     -> std::optional<PathCost>;

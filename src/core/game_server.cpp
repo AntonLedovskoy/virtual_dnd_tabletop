@@ -413,7 +413,7 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
     jump_outcome.events.emplace_back(*jump_event);
     if (budgeted) {
       const std::optional<Token> jumped =
-          state_.SpendMovement(command.id, distance, token->diagonal_parity);
+          state_.SpendMovement(command.id, distance);
       if (jumped.has_value()) {
         jump_outcome.events.emplace_back(TokenUpdated{.token = *jumped});
       }
@@ -437,8 +437,7 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   const bool crawl = prone && command.crawl;
   std::optional<PathCost> path;
   if (player_rules) {
-    path = PathCostCells(state_.Map(), token->cell, command.target,
-                         token->diagonal_parity, blockers,
+    path = PathCostCells(state_.Map(), token->cell, command.target, blockers,
                          MovementProfileFor(*token));
     if (!path.has_value()) {
       return CommandOutcome{.reject_reason = "нет пути к клетке"};
@@ -475,9 +474,7 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
     updated = state_.RemoveTokenCondition(command.id, std::string(kProne));
   }
   if (budgeted) {
-    const int parity =
-        path.has_value() ? path->diagonal_parity : token->diagonal_parity;
-    updated = state_.SpendMovement(command.id, move_cost + stand_cost, parity);
+    updated = state_.SpendMovement(command.id, move_cost + stand_cost);
   }
   if (updated.has_value()) {
     outcome.events.emplace_back(TokenUpdated{.token = std::move(*updated)});
