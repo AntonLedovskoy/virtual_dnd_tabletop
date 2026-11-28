@@ -27,6 +27,12 @@ inline constexpr std::string_view kExhaustion = "истощение";
 inline constexpr std::string_view kSurprised = "застигнут врасплох";
 // Ослеплённый персонаж не даёт обзора и не видит карту (core/visibility).
 inline constexpr std::string_view kBlinded = "ослеплён";
+// «Очарован» и «испуган» помнят источник (Condition::source_id): очарование
+// запрещает атаковать очаровавшего, испуг — приближаться к источнику страха.
+// «Оглох» пока без механики: проверок на слух в проекте нет.
+inline constexpr std::string_view kCharmed = "очарован";
+inline constexpr std::string_view kFrightened = "испуган";
+inline constexpr std::string_view kDeafened = "оглох";
 inline constexpr int kMaxExhaustionLevel = 6;
 
 // Время в D&D: раунд — 6 секунд, минута — 10 раундов. Длительности
@@ -51,6 +57,21 @@ inline constexpr std::size_t kMaxConditionNameBytes = 32;
 
 [[nodiscard]] auto HasCondition(const Token& token, std::string_view name)
     -> bool;
+
+// Источник состояния (например, очаровавшего или источника страха).
+// 0 — источник не записан.
+[[nodiscard]] auto ConditionSource(const Token& token, std::string_view name)
+    -> TokenId;
+
+// Очарованный не атакует очаровавшего (SRD 5.2.1).
+[[nodiscard]] auto IsCharmedAgainst(const Token& attacker, TokenId target)
+    -> bool;
+
+// Источник страха; 0 — состояние не «испуган» или источник не записан.
+[[nodiscard]] auto FrightenedSource(const Token& token) -> TokenId;
+
+// Шаг приближает к источнику (клетки считаются по Чебышёву).
+[[nodiscard]] auto IsApproaching(Cell from, Cell to, Cell source) -> bool;
 
 // Игровая длительность по-русски: «1 минута», «10 ходов», «2 часа».
 // 0 — состояние держится до ручного снятия.
@@ -101,11 +122,14 @@ struct AttackRollModes {
 // тоже помеха. can_see_target / target_can_see_attacker — взгляд через
 // сильное затемнение и тьму (CanSeeForAttack): не видно цель — помеха, цель
 // не видит атакующего — преимущество; вместе они гасятся.
+// frightened_applies — источник страха в поле зрения (или не записан):
+// «испуган» даёт помеху, только пока источник виден (2024).
 [[nodiscard]] auto AttackRollModesFor(const Token& attacker,
                                       const Token& target, int distance_cells,
                                       int attack_range_cells, bool threatened,
                                       bool can_see_target,
-                                      bool target_can_see_attacker)
+                                      bool target_can_see_attacker,
+                                      bool frightened_applies = true)
     -> AttackRollModes;
 
 // Видит ли наблюдатель клетку для атаки: слепота, сильное затемнение и тьма
@@ -113,6 +137,12 @@ struct AttackRollModes {
 // тусклый свет взгляду не мешают.
 [[nodiscard]] auto CanSeeForAttack(const GridMap& map, const LightField& light,
                                    const Token& observer, Cell cell) -> bool;
+
+// Полный взгляд на клетку: стены (core/visibility) плюс свет, затемнение и
+// тёмное зрение. Нужен правилам вроде источника страха, где мало одного
+// покрытия атаки.
+[[nodiscard]] auto CanSeeCell(const GridMap& map, const LightField& light,
+                              const Token& observer, Cell cell) -> bool;
 
 // Инициатива 2024: невидимый бросает с преимуществом, недееспособный и
 // застигнутый врасплох — с помехой; преимущество и помеха гасятся.

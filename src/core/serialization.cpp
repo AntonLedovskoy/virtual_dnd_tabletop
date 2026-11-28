@@ -110,6 +110,9 @@ auto WriteToken(ByteWriter& writer, const Token& token,
     writer.String(condition.name);
     writer.I32(condition.seconds);
     writer.I32(condition.save_dc);
+    if (format.has_condition_source) {
+      writer.U32(condition.source_id);
+    }
   }
   writer.I32(token.movement_used);
   writer.I32(token.diagonal_parity);
@@ -235,12 +238,17 @@ auto ReadToken(ByteReader& reader, Token& token, const SnapshotFormat& format)
     std::string condition_name;
     std::int32_t seconds = 0;
     std::int32_t save_dc = 0;
+    std::uint32_t source_id = 0;
     if (!reader.String(condition_name, kMaxConditionLength) ||
         !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds ||
         !reader.I32(save_dc) || save_dc < 0 || save_dc > kMaxSaveDc) {
       return false;
     }
-    conditions.emplace_back(std::move(condition_name), seconds, save_dc);
+    if (format.has_condition_source && !reader.U32(source_id)) {
+      return false;
+    }
+    conditions.emplace_back(std::move(condition_name), seconds, save_dc,
+                            source_id);
   }
   if (!reader.I32(movement_used) || !reader.I32(diagonal_parity) ||
       !reader.I32(death_successes) || !reader.I32(death_failures) ||
@@ -1021,12 +1029,15 @@ auto DecodeUpdateTokenCombatCommand(ByteReader& reader)
     std::string condition_name;
     std::int32_t seconds = 0;
     std::int32_t save_dc = 0;
+    std::uint32_t source_id = 0;
     if (!reader.String(condition_name, kMaxConditionLength) ||
         !reader.I32(seconds) || seconds < 0 || seconds > kMaxConditionSeconds ||
-        !reader.I32(save_dc) || save_dc < 0 || save_dc > kMaxSaveDc) {
+        !reader.I32(save_dc) || save_dc < 0 || save_dc > kMaxSaveDc ||
+        !reader.U32(source_id)) {
       return std::nullopt;
     }
-    conditions.emplace_back(std::move(condition_name), seconds, save_dc);
+    conditions.emplace_back(std::move(condition_name), seconds, save_dc,
+                            source_id);
   }
   if (!reader.Done()) {
     return std::nullopt;
@@ -1676,6 +1687,7 @@ auto EncodeCommand(const Command& command) -> std::vector<std::uint8_t> {
             writer.String(condition.name);
             writer.I32(condition.seconds);
             writer.I32(condition.save_dc);
+            writer.U32(condition.source_id);
           }
         } else if constexpr (std::is_same_v<T, StartEncounter>) {
           writer.U8(kCommandStartEncounter);

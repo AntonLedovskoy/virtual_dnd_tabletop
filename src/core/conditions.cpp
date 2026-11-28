@@ -6,6 +6,7 @@
 #include "core/light.h"
 #include "core/movement.h"
 #include "core/units.h"
+#include "core/visibility.h"
 
 namespace dnd {
 namespace {
@@ -101,6 +102,31 @@ auto HasCondition(const Token& token, std::string_view name) -> bool {
                              });
 }
 
+auto ConditionSource(const Token& token, std::string_view name) -> TokenId {
+  for (const Condition& condition : token.conditions) {
+    if (condition.name == name) {
+      return condition.source_id;
+    }
+  }
+  return 0;
+}
+
+auto IsCharmedAgainst(const Token& attacker, TokenId target) -> bool {
+  return target != 0 && HasCondition(attacker, kCharmed) &&
+         ConditionSource(attacker, kCharmed) == target;
+}
+
+auto FrightenedSource(const Token& token) -> TokenId {
+  return ConditionSource(token, kFrightened);
+}
+
+auto IsApproaching(Cell from, Cell to, Cell source) -> bool {
+  const auto distance = [](Cell first, Cell second) -> int {
+    return std::max(std::abs(first.x - second.x), std::abs(first.y - second.y));
+  };
+  return distance(to, source) < distance(from, source);
+}
+
 auto ExhaustionLevel(const std::vector<Condition>& conditions) -> int {
   const auto count =
       std::ranges::count_if(conditions, [](const Condition& condition) -> bool {
@@ -141,15 +167,19 @@ auto EffectiveSpeedCells(const Token& token) -> int {
 auto AttackRollModesFor(const Token& attacker, const Token& target,
                         int distance_cells, int attack_range_cells,
                         bool threatened, bool can_see_target,
-                        bool target_can_see_attacker) -> AttackRollModes {
+                        bool target_can_see_attacker, bool frightened_applies)
+    -> AttackRollModes {
   AttackRollModes modes;
   const auto advantage = [&modes]() -> void { modes.advantage = true; };
   const auto disadvantage = [&modes]() -> void { modes.disadvantage = true; };
 
-  // Атакующий: ослеплён, отравлен, испуган, сбит с ног, опутан.
-  if (HasCondition(attacker, "ослеплён") ||
-      HasCondition(attacker, "отравлен") || HasCondition(attacker, "испуган") ||
+  // Атакующий: ослеплён, отравлен, сбит с ног, опутан. Испуг даёт помеху,
+  // только пока источник страха в поле зрения.
+  if (HasCondition(attacker, kBlinded) || HasCondition(attacker, "отравлен") ||
       HasCondition(attacker, kProne) || HasCondition(attacker, "опутан")) {
+    disadvantage();
+  }
+  if (HasCondition(attacker, kFrightened) && frightened_applies) {
     disadvantage();
   }
   if (HasCondition(attacker, "невидим")) {
@@ -216,6 +246,12 @@ auto CanSeeForAttack(const GridMap& map, const LightField& light,
   const int distance = std::max(std::abs(observer.cell.x - cell.x),
                                 std::abs(observer.cell.y - cell.y));
   return distance <= observer.darkvision_cells;
+}
+
+auto CanSeeCell(const GridMap& map, const LightField& light,
+                const Token& observer, Cell cell) -> bool {
+  return HasLineOfSight(map, observer.cell, cell) &&
+         CanSeeForAttack(map, light, observer, cell);
 }
 
 auto IsAutoCriticalOnHit(const Token& target, int distance_cells) -> bool {

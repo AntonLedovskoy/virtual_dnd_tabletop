@@ -291,6 +291,9 @@ class App {
   auto OpenConditions() -> void;
   auto CloseConditions() -> void;
   auto ToggleCondition(int index, bool until_removed) -> void;
+  // Назначает источник выбранному состоянию по токену под курсором, пустая
+  // клетка или сам токен снимают источник.
+  auto SetConditionSourceFromCursor() -> void;
   auto HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void;
   auto HandleConditionsTextInput(const char* text) -> void;
   auto ApplyConditionDc() -> void;

@@ -11,7 +11,7 @@
 namespace dnd {
 
 // Файлы сохранения — версионированный little-endian дамп GameSnapshot.
-inline constexpr auto kSaveVersion = 34U;
+inline constexpr auto kSaveVersion = 35U;
 // Самая старая читаемая версия — сохранения v0.1.0 (26). Раньше в токене не
 // было запаса костей хитов, а формат сохранения 25 и старше не восстановить.
 inline constexpr auto kMinSaveVersion = 26U;

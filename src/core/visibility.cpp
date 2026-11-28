@@ -4,7 +4,6 @@
 #include <cstdlib>
 
 namespace dnd {
-namespace {
 
 // Линия взгляда по Брезенхему. Стены блокируют луч, но сама клетка стены
 // остаётся видимой, чтобы игрок видел границу комнаты. Дерево обзор больше
@@ -12,7 +11,7 @@ namespace {
 // Сильное затемнение обрывает луч, но его собственная клетка видна облаком.
 // Диагональный шаг также проверяет двух ортогональных соседей: две стены,
 // соприкасающиеся углом, не должны пропускать обзор.
-auto LineOfSightClear(const GridMap& map, Cell from, Cell to) -> bool {
+auto HasLineOfSight(const GridMap& map, Cell from, Cell to) -> bool {
   int x = from.x;
   int y = from.y;
   const int delta_x = std::abs(to.x - x);
@@ -54,6 +53,8 @@ auto LineOfSightClear(const GridMap& map, Cell from, Cell to) -> bool {
   return true;
 }
 
+namespace {
+
 // Видна ли клетка одному наблюдателю при известном поле света.
 auto Observes(const GridMap& map, const Observer& observer, Cell cell,
               const LightField& light, int max_sight_cells) -> bool {
@@ -72,7 +73,7 @@ auto Observes(const GridMap& map, const Observer& observer, Cell cell,
       distance_squared > max_sight_cells * max_sight_cells) {
     return false;
   }
-  if (!LineOfSightClear(map, observer.cell, cell)) {
+  if (!HasLineOfSight(map, observer.cell, cell)) {
     return false;
   }
   // Облако дыма видно само по себе, даже если за ним тьма.

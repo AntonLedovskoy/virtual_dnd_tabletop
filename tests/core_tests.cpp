@@ -2789,6 +2789,139 @@ auto TestConditionAttackModifiers() -> void {
          "a grappled character cannot move");
 }
 
+auto TestCharmAndFear() -> void {
+  // 2024: очарованный не атакует очаровавшего, испуганный не приближается к
+  // источнику страха. Источник живёт в Condition::source_id.
+  dnd::Token charmed;
+  charmed.conditions = {dnd::Condition{"очарован", 0, 0, 7}};
+  Expect(
+      dnd::IsCharmedAgainst(charmed, 7) && !dnd::IsCharmedAgainst(charmed, 8),
+      "the charmed creature refuses its charmer only");
+  Expect(dnd::ConditionSource(charmed, dnd::kCharmed) == 7,
+         "the condition keeps its source");
+
+  dnd::Token afraid;
+  afraid.conditions = {dnd::Condition{"испуган", 0, 0, 7}};
+  Expect(dnd::FrightenedSource(afraid) == 7,
+         "the frightened condition keeps its source");
+  Expect(dnd::IsApproaching(CellAt(3, 0), CellAt(2, 0), CellAt(0, 0)),
+         "a step toward the source is an approach");
+  Expect(!dnd::IsApproaching(CellAt(3, 0), CellAt(4, 0), CellAt(0, 0)),
+         "a step away is not an approach");
+
+  // Помеха от испуга действует, только пока источник в поле зрения.
+  const dnd::Token target;
+  Expect(dnd::AttackRollModesFor(afraid, target, 1, 0, false, true, true, false)
+                 .Net() == 0,
+         "an unseen fear source stops the frightened disadvantage");
+  Expect(dnd::AttackRollModesFor(afraid, target, 1, 0, false, true, true, true)
+                 .Net() == -1,
+         "a visible fear source keeps the frightened disadvantage");
+  afraid.conditions = {dnd::Condition{"испуган"}};
+  Expect(dnd::AttackRollModesFor(afraid, target, 1, 0, false, true, true, true)
+                 .Net() == -1,
+         "fear without a recorded source still gives disadvantage");
+
+  // Стена закрывает источник страха, открытая клетка — нет.
+  dnd::GridMap walled(3, 1);
+  walled.SetBlocked(CellAt(1, 0), true);
+  dnd::Token watcher;
+  watcher.cell = CellAt(0, 0);
+  const dnd::LightField walled_light = dnd::ComputeLightField(walled, {});
+  Expect(!dnd::CanSeeCell(walled, walled_light, watcher, CellAt(2, 0)),
+         "a wall hides the fear source");
+  const dnd::GridMap open(3, 1);
+  const dnd::LightField open_light = dnd::ComputeLightField(open, {});
+  Expect(dnd::CanSeeCell(open, open_light, watcher, CellAt(2, 0)),
+         "an open cell keeps the fear source in sight");
+
+  const dnd::GameSnapshot snapshot{
+      .map = dnd::GridMap(8, 3),
+      .tokens =
+          {
+              dnd::Token{.id = 1,
+                         .name = "hero",
+                         .owner = "alice",
+                         .hp = 30,
+                         .max_hp = 30,
+                         .ac = 10,
+                         .attack_bonus = 0,
+                         .damage = "1d4",
+                         .kind = dnd::TokenKind::kPlayer,
+                         .cell = CellAt(3, 2)},
+              dnd::Token{.id = 2,
+                         .name = "mage",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(0, 0)},
+              dnd::Token{.id = 3,
+                         .name = "goblin",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(4, 2)},
+              dnd::Token{.id = 4,
+                         .name = "wolf",
+                         .owner = "dm",
+                         .hp = 100,
+                         .max_hp = 100,
+                         .ac = 10,
+                         .kind = dnd::TokenKind::kMonster,
+                         .cell = CellAt(3, 1)},
+          },
+      .next_token_id = 5,
+  };
+  dnd::GameServer server(snapshot, 12, 11);
+  const dnd::CommandOutcome self_source = server.HandleCommand(
+      dnd::UpdateTokenCombat{
+          .id = 3, .conditions = {dnd::Condition{"испуган", 0, 0, 3}}},
+      "dm", true);
+  Expect(!self_source.accepted && !self_source.reject_reason.empty(),
+         "a condition cannot name its own token as the source");
+  Expect(
+      server
+          .HandleCommand(
+              dnd::UpdateTokenCombat{
+                  .id = 1, .conditions = {dnd::Condition{"очарован", 0, 0, 2}}},
+              "dm", true)
+          .accepted,
+      "the charmed condition is applied to the hero");
+  const dnd::CommandOutcome charmed_attack = server.HandleCommand(
+      dnd::AttackToken{.attacker = 1, .target = 2}, "alice", false);
+  Expect(!charmed_attack.accepted &&
+             charmed_attack.reject_reason.find("очарован") != std::string::npos,
+         "the charmed hero cannot attack the charmer");
+  Expect(server
+             .HandleCommand(dnd::AttackToken{.attacker = 1, .target = 4},
+                            "alice", false)
+             .accepted,
+         "the charmed hero still attacks another creature");
+
+  Expect(
+      server
+          .HandleCommand(
+              dnd::UpdateTokenCombat{
+                  .id = 3, .conditions = {dnd::Condition{"испуган", 0, 0, 2}}},
+              "dm", true)
+          .accepted,
+      "the frightened condition is applied to the goblin");
+  const dnd::CommandOutcome toward = server.HandleCommand(
+      dnd::MoveToken{.id = 3, .target = CellAt(2, 2)}, "dm", true);
+  Expect(!toward.accepted &&
+             toward.reject_reason.find("источнику страха") != std::string::npos,
+         "a frightened creature cannot move closer to the source");
+  Expect(server
+             .HandleCommand(dnd::MoveToken{.id = 3, .target = CellAt(5, 2)},
+                            "dm", true)
+             .accepted,
+         "a frightened creature may move away from the source");
+}
+
 auto TestConcealmentAttacks() -> void {
   dnd::GridMap map(6, 1);
   map.SetProps(CellAt(1, 0),
@@ -6227,7 +6360,8 @@ auto TestSaveLoadRoundtrip() -> void {
                   .vulnerable = dnd::DamageTypeBit(dnd::DamageType::kCold),
                   .immune = dnd::DamageTypeBit(dnd::DamageType::kPoison),
                   .attack_range = 3,
-                  .conditions = {dnd::Condition{"сбит с ног"},
+                  .conditions = {dnd::Condition{"испуган", 0, 0, 6},
+                                 dnd::Condition{"сбит с ног"},
                                  dnd::Condition{"концентрация", 60, 12}},
                   .xp = 900,
                   .movement_used = 4,
@@ -6365,12 +6499,13 @@ auto TestSaveLoadRoundtrip() -> void {
     Expect(
         loaded->tokens.front().hazards_done == std::vector<std::uint8_t>{1, 5},
         "hazards fired this turn survive the roundtrip");
-    Expect(loaded->tokens.front().conditions.size() == 2 &&
+    Expect(loaded->tokens.front().conditions.size() == 3 &&
                loaded->tokens.front().conditions.back().seconds == 60 &&
                loaded->tokens.front().conditions.back().save_dc == 12,
            "condition duration and КС survive the roundtrip");
-    Expect(loaded->tokens.front().conditions.size() == 2,
-           "token conditions survive");
+    Expect(loaded->tokens.front().conditions.size() == 3 &&
+               loaded->tokens.front().conditions.front().source_id == 6,
+           "token conditions and their source survive");
     Expect(loaded->tokens.front().movement_used == 4,
            "token spent movement survives");
     Expect(loaded->tokens.front().kind == dnd::TokenKind::kPlayer,
@@ -6454,7 +6589,7 @@ auto TestReadsPreviousVersions() -> void {
                   .skill_proficiency = dnd::SkillBit(dnd::Skill::kStealth),
                   .resist = dnd::DamageTypeBit(dnd::DamageType::kFire),
                   .attack_range = 3,
-                  .conditions = {dnd::Condition{"оглушён", 60, 12}},
+                  .conditions = {dnd::Condition{"испуган", 60, 12, 2}},
                   .kind = dnd::TokenKind::kPlayer,
                   .cell = CellAt(1, 1),
                   .action_used = true,
@@ -6489,6 +6624,8 @@ auto TestReadsPreviousVersions() -> void {
                token.conditions.front().seconds == 60 &&
                token.conditions.front().save_dc == 12,
            "condition duration and КС survive previous versions");
+    Expect(token.conditions.front().source_id == (version >= 35 ? 2U : 0U),
+           "the condition source appears with its version");
     Expect(token.hit_dice_spent == 1,
            "spent hit dice survive previous versions");
     Expect(token.auto_hp == (version >= 33) &&
@@ -6562,6 +6699,8 @@ auto TestReadsPreviousVersions() -> void {
     Expect(
         token.conditions.size() == 1 && token.conditions.front().save_dc == 12,
         "condition КС survives previous campaign versions");
+    Expect(token.conditions.front().source_id == (version >= 22 ? 2U : 0U),
+           "the campaign condition source appears with its version");
     Expect(token.action_used == (version >= 15),
            "campaign turn economy appears with its version");
     Expect(
@@ -8333,7 +8472,7 @@ auto TestCommandEventSerialization() -> void {
   const dnd::Command combat_command{dnd::UpdateTokenCombat{
       .id = 4,
       .conditions = {dnd::Condition{"сбит с ног"},
-                     dnd::Condition{"отравлен", 60, 15}}}};
+                     dnd::Condition{"испуган", 60, 15, 2}}}};
   const std::vector<std::uint8_t> combat_bytes =
       dnd::EncodeCommand(combat_command);
   const std::optional<dnd::Command> combat_decoded =
@@ -8348,8 +8487,11 @@ auto TestCommandEventSerialization() -> void {
                   .seconds == 60 &&
           std::get<dnd::UpdateTokenCombat>(*combat_decoded)
                   .conditions.back()
-                  .save_dc == 15,
-      "combat command with save DC survives serialization");
+                  .save_dc == 15 &&
+          std::get<dnd::UpdateTokenCombat>(*combat_decoded)
+                  .conditions.back()
+                  .source_id == 2,
+      "combat command with save DC and source survives serialization");
 
   const dnd::Command damage{dnd::DamageToken{
       .id = 4, .amount = 7, .damage_type = dnd::DamageType::kFire}};
@@ -9601,6 +9743,7 @@ auto main() -> int {
     TestConditionSaves();
     TestConditionPaletteAndExhaustion();
     TestConditionAttackModifiers();
+    TestCharmAndFear();
     TestConcealmentAttacks();
     TestInitiativeConditions();
     TestDamageTypesAndDefenses();

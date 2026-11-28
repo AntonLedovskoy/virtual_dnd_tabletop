@@ -354,6 +354,16 @@ auto GameServer::HandleMove(const MoveToken& command, const std::string& actor,
   if (player_rules && IsSpeedZeroed(*token)) {
     return CommandOutcome{.reject_reason = "скорость 0: персонаж обездвижен"};
   }
+  // «Испуган»: нельзя добровольно приближаться к источнику страха (2024).
+  // Правило не зависит от того, виден ли источник сейчас, — запрещает сам шаг.
+  if (const TokenId fear_source = FrightenedSource(*token); fear_source != 0) {
+    const Token* source = FindToken(fear_source);
+    if (source != nullptr &&
+        IsApproaching(token->cell, command.target, source->cell)) {
+      return CommandOutcome{
+          .reject_reason = "испуган: нельзя приближаться к источнику страха"};
+    }
+  }
 
   // Проверяем путь и для игрока вне боя: сквозь стены и живых монстров
   // нельзя, сквозь недееспособных — можно (2024). Свои персонажи друг друга
@@ -1021,6 +1031,11 @@ auto GameServer::HandleAttack(const AttackToken& command,
   if (!CanControl(*attacker, actor, can_control_all)) {
     return CommandOutcome{.reject_reason = ControlRejectReason(*attacker)};
   }
+  // Очарованный не атакует очаровавшего (SRD 5.2.1).
+  if (IsCharmedAgainst(*attacker, target->id)) {
+    return CommandOutcome{.reject_reason =
+                              "очарован: нельзя атаковать очаровавшего"};
+  }
   const bool encounter_active = state_.EncounterState().active;
   const bool own_turn =
       !encounter_active || state_.ActiveTokenId() == attacker->id;
@@ -1094,9 +1109,18 @@ auto GameServer::HandleAttack(const AttackToken& command,
   const bool target_sees_attacker =
       CanSeeForAttack(state_.Map(), light_, *target, attacker->cell) &&
       !attacker->hidden;
-  const AttackRollModes modes =
-      AttackRollModesFor(*attacker, *target, distance_cells, attack_range,
-                         threatened, sees_target, target_sees_attacker);
+  // «Испуган» даёт помеху, только пока источник страха в поле зрения.
+  bool frightened_applies = true;
+  if (const TokenId fear_source = FrightenedSource(*attacker);
+      fear_source != 0) {
+    const Token* source = FindToken(fear_source);
+    frightened_applies =
+        source != nullptr &&
+        CanSeeCell(state_.Map(), light_, *attacker, source->cell);
+  }
+  const AttackRollModes modes = AttackRollModesFor(
+      *attacker, *target, distance_cells, attack_range, threatened, sees_target,
+      target_sees_attacker, frightened_applies);
   bool advantage = command.advantage || modes.advantage || attacker->helped;
   bool disadvantage = command.disadvantage || modes.disadvantage;
   // Под водой дальнобойная атака идёт с помехой в обычной дистанции и
@@ -2297,6 +2321,12 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
         condition.save_dc < 0 || condition.save_dc > kMaxSaveDc) {
       return CommandOutcome{.reject_reason = "некорректное состояние"};
     }
+    // Источник состояния должен быть другим существом на столе.
+    if (condition.source_id != 0 &&
+        (condition.source_id == command.id ||
+         FindToken(condition.source_id) == nullptr)) {
+      return CommandOutcome{.reject_reason = "некорректный источник состояния"};
+    }
   }
   const auto exhaustion_level = std::ranges::count_if(
       command.conditions, [](const Condition& condition) -> bool {
@@ -2347,6 +2377,10 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
       if (condition.save_dc > 0) {
         entry += ", КС " + std::to_string(condition.save_dc);
       }
+      if (const Token* source = FindToken(condition.source_id);
+          condition.source_id != 0 && source != nullptr) {
+        entry += ", источник: " + source->name;
+      }
       entry += ")";
       changes.push_back(std::move(entry));
       continue;
@@ -2355,6 +2389,12 @@ auto GameServer::HandleUpdateTokenCombat(const UpdateTokenCombat& command,
       changes.push_back(condition.name + ": КС " +
                         std::to_string(before_condition->save_dc) + "→" +
                         std::to_string(condition.save_dc));
+    }
+    if (before_condition->source_id != condition.source_id) {
+      const Token* source = FindToken(condition.source_id);
+      changes.push_back(
+          condition.name + ": источник " +
+          (source == nullptr ? std::string("снят") : source->name));
     }
   }
   for (const Condition& condition : before.conditions) {

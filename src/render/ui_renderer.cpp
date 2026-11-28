@@ -992,7 +992,7 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
 }
 
 auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
-                         const Token& token,
+                         const Token& token, const std::vector<Token>& tokens,
                          const std::vector<Condition>& conditions,
                          bool read_only, std::size_t selected, bool edit_dc,
                          const std::string& dc_buffer, bool edit_custom,
@@ -1005,7 +1005,9 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
   if (!RenderSize(renderer, window_width, window_height)) {
     return;
   }
-  constexpr float width = 660.0F;
+  // Ширина считается по правой колонке: строка вида
+  // «• испуган — 1 минута, источник: Гоблин» должна влезать целиком.
+  constexpr float width = 720.0F;
   constexpr float height = 480.0F;
   const float x = (static_cast<float>(window_width) - width) / 2.0F;
   const float y = (static_cast<float>(window_height) - height) / 2.0F;
@@ -1048,7 +1050,7 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
     first = standard.size() - visible_rows;
   }
   const float list_top = y + 70.0F;
-  const float left_width = 290.0F;
+  const float left_width = 260.0F;
   auto row_y = list_top;
   for (std::size_t i = first; i < standard.size() && i < first + visible_rows;
        ++i) {
@@ -1098,6 +1100,15 @@ auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
       line += " — " + FormatConditionDuration(condition.seconds);
       if (condition.save_dc > 0) {
         line += ", КС " + std::to_string(condition.save_dc);
+      }
+      if (condition.source_id != 0) {
+        const auto source = std::ranges::find_if(
+            tokens, [&condition](const Token& other) -> bool {
+              return other.id == condition.source_id;
+            });
+        if (source != tokens.end()) {
+          line += ", источник: " + source->name;
+        }
       }
     } else {
       line += " — уровень " + std::to_string(ExhaustionLevel(token));

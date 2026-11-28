@@ -2640,6 +2640,12 @@ auto App::HandleEvent(SDL_Event event) -> void {
       case SDL_EVENT_KEY_DOWN:
         HandleConditionsKeyDown(event.key);
         break;
+      case SDL_EVENT_MOUSE_MOTION:
+        // Панель открыта, но `S` берёт источник по токену под курсором:
+        // позиция мыши должна обновляться и под панелью.
+        mouse_x_ = event.motion.x;
+        mouse_y_ = event.motion.y;
+        break;
       default:
         break;
     }
@@ -4218,6 +4224,40 @@ auto App::ToggleCondition(int index, bool until_removed) -> void {
                                 .conditions = conditions_draft_});
 }
 
+auto App::SetConditionSourceFromCursor() -> void {
+  if (conditions_read_only_) {
+    return;
+  }
+  const auto& standard = DefaultConditions();
+  if (std::cmp_greater_equal(conditions_selected_, standard.size())) {
+    return;
+  }
+  const std::string& name = standard[conditions_selected_];
+  const auto it = std::ranges::find_if(
+      conditions_draft_,
+      [&name](const Condition& item) -> bool { return item.name == name; });
+  if (it == conditions_draft_.end()) {
+    view_.AddLocalLine(std::string(strings::kConditionDcNeedActive));
+    return;
+  }
+  const TokenId source = TokenAt(CellFromPixel(mouse_x_, mouse_y_));
+  if (source == 0 || source == conditions_token_id_) {
+    it->source_id = 0;
+    view_.AddLocalLine(std::string(strings::kConditionSourceCleared));
+  } else {
+    it->source_id = source;
+    for (const Token& token : view_.Tokens()) {
+      if (token.id == source) {
+        view_.AddLocalLine(std::string(strings::kConditionSourcePrompt) +
+                           token.name);
+        break;
+      }
+    }
+  }
+  SendCommand(UpdateTokenCombat{.id = conditions_token_id_,
+                                .conditions = conditions_draft_});
+}
+
 auto App::RemoveExhaustionLevelFromDraft() -> void {
   if (conditions_read_only_) {
     return;
@@ -4287,6 +4327,10 @@ auto App::HandleConditionsKeyDown(const SDL_KeyboardEvent& key) -> void {
     return;
   }
   if (conditions_read_only_) {
+    return;
+  }
+  if (key.key == SDLK_S) {
+    SetConditionSourceFromCursor();
     return;
   }
   const std::size_t count = DefaultConditions().size();
@@ -6092,10 +6136,10 @@ auto App::Iterate() -> void {
       CloseConditions();
     } else {
       DrawConditionsPanel(renderer_, text_.get(), *condition_token,
-                          conditions_draft_, conditions_read_only_,
-                          conditions_selected_, conditions_dc_edit_,
-                          conditions_dc_buffer_, conditions_custom_edit_,
-                          conditions_custom_buffer_);
+                          view_.Tokens(), conditions_draft_,
+                          conditions_read_only_, conditions_selected_,
+                          conditions_dc_edit_, conditions_dc_buffer_,
+                          conditions_custom_edit_, conditions_custom_buffer_);
     }
   }
   if (actions_active_) {

@@ -15,7 +15,7 @@ namespace dnd {
 // сцены совпадает с отдельным файлом сохранения.
 // 17: у сцен появились стабильные id, у кампании — счётчик next_scene_id.
 // 21: снимок 34 — проверки способностей, скрытность и «Помощь».
-inline constexpr auto kCampaignVersion = 21U;
+inline constexpr auto kCampaignVersion = 22U;
 // Самая старая читаемая версия — кампании v0.1.0 (13); их сцены хранят
 // снимки сохранения 26.
 inline constexpr auto kMinCampaignVersion = 13U;

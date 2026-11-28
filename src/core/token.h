@@ -28,12 +28,23 @@ struct Condition {
   std::string name;
   int seconds = 0;
   int save_dc = 0;
+  // Источник состояния: 0 — его нет. «Очарован» запрещает атаковать
+  // источник, «испуган» — приближаться к нему (2024).
+  TokenId source_id = 0;
 
   Condition() = default;
-  explicit Condition(std::string condition_name, int remaining = 0, int dc = 0)
-      : name(std::move(condition_name)), seconds(remaining), save_dc(dc) {}
-  explicit Condition(const char* condition_name, int remaining = 0, int dc = 0)
-      : name(condition_name), seconds(remaining), save_dc(dc) {}
+  explicit Condition(std::string condition_name, int remaining = 0, int dc = 0,
+                     TokenId source = 0)
+      : name(std::move(condition_name)),
+        seconds(remaining),
+        save_dc(dc),
+        source_id(source) {}
+  explicit Condition(const char* condition_name, int remaining = 0, int dc = 0,
+                     TokenId source = 0)
+      : name(condition_name),
+        seconds(remaining),
+        save_dc(dc),
+        source_id(source) {}
 };
 
 struct Token {

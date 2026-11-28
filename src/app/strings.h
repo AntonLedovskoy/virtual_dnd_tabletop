@@ -401,7 +401,7 @@ inline constexpr std::string_view kConditionsHint =
 inline constexpr std::string_view kConditionsPanelHint =
     "Пробел — вкл/выкл | Shift+Пробел — до снятия | ↑↓ — выбор";
 inline constexpr std::string_view kConditionsPanelHint2 =
-    "T — своё состояние | C — КС спасброска | − — снять уровень истощения";
+    "T — своё | C — КС | S — источник под курсором | − — истощение";
 inline constexpr std::string_view kConditionsPanelHint3 =
     "1–9 — первые девять | 0 — очистить | Esc — закрыть";
 inline constexpr std::string_view kConditionsViewHint =
@@ -410,6 +410,9 @@ inline constexpr std::string_view kConditionDcPrompt = "КС (0–30): ";
 inline constexpr std::string_view kConditionCustomPrompt = "Своё состояние: ";
 inline constexpr std::string_view kConditionDcNeedActive =
     "Сначала включите состояние";
+inline constexpr std::string_view kConditionSourcePrompt = "Источник: ";
+inline constexpr std::string_view kConditionSourceCleared =
+    "Источник состояния снят";
 inline constexpr std::string_view kConditionExhaustionMax =
     "Уровень истощения уже 6: персонаж мёртв";
 // Панель действий хода: список 2024 и подсказки о счётчиках.

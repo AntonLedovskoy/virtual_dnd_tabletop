@@ -140,7 +140,7 @@ auto DrawBestiaryPanel(SDL_Renderer* renderer, TextRenderer* text,
 // Модальный список состояний выбранного токена. read_only — игрок только
 // смотрит, состояния и КС задаёт DM.
 auto DrawConditionsPanel(SDL_Renderer* renderer, TextRenderer* text,
-                         const Token& token,
+                         const Token& token, const std::vector<Token>& tokens,
                          const std::vector<Condition>& conditions,
                          bool read_only, std::size_t selected, bool edit_dc,
                          const std::string& dc_buffer, bool edit_custom,

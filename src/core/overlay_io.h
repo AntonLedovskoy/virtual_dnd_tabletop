@@ -14,7 +14,7 @@ namespace dnd {
 // кодируются форматом сохранения той эпохи: версия 4 — сохранение 33,
 // версия 3 — 32, версия 2 — 31, версия 1 — 30. Поэтому смена формата снимка
 // поднимает и kOverlayVersion.
-inline constexpr auto kOverlayVersion = 5U;
+inline constexpr auto kOverlayVersion = 6U;
 inline constexpr auto kMinOverlayVersion = 1U;
 // Предел payload: снимков до kMaxOverlayScenes сцен.
 inline constexpr std::size_t kMaxOverlayBytes =
